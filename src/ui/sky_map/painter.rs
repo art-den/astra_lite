@@ -404,33 +404,26 @@ impl SkyMapPainter {
         let maj_axis = maj_axis.max(min_axis_value);
         let min_axis = min_axis.max(min_axis_value);
 
+        // +PI/2 lands the ellipse major axis on the catalog position angle
         let angle = dso_object.angle.unwrap_or_default() as f64 + PI * 0.5;
-        let obj_dec = dso_object.crd.dec();
-        let obj_ra = dso_object.crd.ra();
-        let dec_rot = RotMatrix::new(0.5 * PI - obj_dec);
-        let ra_rot = RotMatrix::new(PI / 2.0 -obj_ra);
-        const ELLIPSE_PTS_COUNT: usize = 66;
-        let a = 0.5 * maj_axis;
-        let b = 0.5 * min_axis;
-        self.dso_ellipse.points.clear();
-        for i in 0..ELLIPSE_PTS_COUNT {
-            let az = 2.0 * PI * i as f64 / ELLIPSE_PTS_COUNT as f64;
-            let sin_az = f64::sin(az);
-            let cos_az = f64::cos(az);
-            let alt = a * b / f64::sqrt(a * a * sin_az * sin_az + b * b * cos_az * cos_az);
-            let crd = EqCoord { dec: 0.5 * PI - alt, ra: az - angle };
-            let mut pt = crd.to_sphere_pt();
-            pt.rotate_over_x_mat(&dec_rot);
-            pt.rotate_over_z_mat(&ra_rot);
-            let crd = EqCoord::from_sphere_pt(&pt);
-            self.dso_ellipse.points.push(crd);
-        }
-        let mut line_width = 0.01 * f64::max(maj_axis, min_axis) * ctx.pxls_per_rad;
-        line_width = line_width.max(1.0);
-        line_width = line_width.min(5.0 * ctx.screen.dpmm_x());
 
-        self.dso_ellipse.line_width = line_width;
+        let frame = EqLocalFrame::new(
+            dso_object.crd.ra(),
+            dso_object.crd.dec(),
+            ctx.epoch_cvt,
+            ctx.eq_sphere_cvt,
+        );
+
         self.dso_ellipse.dso_type = dso_object.obj_type;
+        self.dso_ellipse.set_shape(
+            &frame,
+            maj_axis,
+            min_axis,
+            angle,
+            ctx.pxls_per_rad,
+            5.0 * ctx.screen.dpmm_x(),
+        );
+
         self.item_painter.paint(&self.dso_ellipse, ctx, false)?;
 
         Ok(())
@@ -821,6 +814,9 @@ enum PainterMode {
 enum PainterCrd {
     Horiz(HorizCoord),
     Eq(EqCoord),
+    /// Point already in the observer's sphere coordinates: neither epoch nor
+    /// observer conversion is applied to it afterwards
+    SpherePt(Point3D),
 }
 
 struct PaintCtx<'a> {
@@ -871,6 +867,7 @@ impl ItemPainter {
 
             let crd_sphere = match obj.point_crd(i) {
                 PainterCrd::Horiz(horiz) => horiz.to_sphere_pt(),
+                PainterCrd::SpherePt(pt) => pt,
                 PainterCrd::Eq(eq) => {
                     let mut sphere_pt = eq.to_sphere_pt();
                     if use_now_epoch {
@@ -979,8 +976,42 @@ impl Item for DsoNamePainter<'_> {
 
 // Paint ellipse around DSO object
 
+/// Object local frame (axis 2 points at the object) in the observer's sphere
+/// coordinates. The conversions are linear, so the images of the basis stand
+/// for the whole chain: points built from them need no epoch conversion
+struct EqLocalFrame {
+    axes: [Point3D; 3],
+}
+
+impl EqLocalFrame {
+    fn new(
+        ra:             f64,
+        dec:            f64,
+        epoch_cvt:      &EpochCvt,
+        eq_sphere_cvt:  &EqToSphereCvt,
+    ) -> Self {
+        let dec_rot = RotMatrix::new(0.5 * PI - dec);
+        let ra_rot = RotMatrix::new(PI / 2.0 - ra);
+
+        let mut axes = [
+            Point3D { x: 1.0, y: 0.0, z: 0.0 },
+            Point3D { x: 0.0, y: 1.0, z: 0.0 },
+            Point3D { x: 0.0, y: 0.0, z: 1.0 },
+        ];
+        for axis in axes.iter_mut() {
+            axis.rotate_over_x_mat(&dec_rot);
+            axis.rotate_over_z_mat(&ra_rot);
+            *axis = epoch_cvt.convert_pt(axis);
+            eq_sphere_cvt.apply(axis);
+        }
+
+        Self { axes }
+    }
+}
+
 struct DsoEllipse {
-    points:     Vec<EqCoord>,
+    /// Already in the now-epoch observer sphere coordinates
+    points:     Vec<Point3D>,
     line_width: f64,
     dso_type:   SkyItemType,
 }
@@ -993,11 +1024,99 @@ impl DsoEllipse {
             dso_type: SkyItemType::Galaxy
         }
     }
+
+    /// Rebuilds the outline: the angular axes in radians (any of them may be the
+    /// longer one) are oriented by `angle` in the local frame; `pxls_per_rad` and
+    /// `max_line_width` affect only the line thickness
+    fn set_shape(
+        &mut self,
+        frame:          &EqLocalFrame,
+        maj_axis:       f64,
+        min_axis:       f64,
+        angle:          f64,
+        pxls_per_rad:   f64,
+        max_line_width: f64,
+    ) {
+        let a = 0.5 * maj_axis;
+        let b = 0.5 * min_axis;
+
+        self.points.clear();
+        let pts_count = Self::segments_count(a, b, pxls_per_rad);
+        Self::fill_points(frame, a, b, angle, pts_count, &mut self.points);
+
+        let mut line_width = 0.01 * f64::max(maj_axis, min_axis) * pxls_per_rad;
+        line_width = line_width.max(1.0);
+        self.line_width = f64::min(line_width, max_line_width);
+    }
+
+    /// Angular radius of the ellipse at the polar angle `az` of the object local
+    /// frame, given as its sine and cosine
+    fn radius_at(a: f64, b: f64, sin_az: f64, cos_az: f64) -> f64 {
+        a * b / f64::sqrt(a * a * sin_az * sin_az + b * b * cos_az * cos_az)
+    }
+
+    /// Segments for a polygon sagitta of ~0.25 px at the ends of the major axis,
+    /// where the curvature is the highest: sagitta ~ 2 * PI^2 * A / N^2, with A
+    /// the axis length in px. Very large objects hit the cap and get a bigger one
+    fn segments_count(a: f64, b: f64, pxls_per_rad: f64) -> usize {
+        const MAX_PTS_COUNT: usize = 66;
+        const MIN_PTS_COUNT: usize = 8;
+        const SAGITTA_PX: f64 = 0.25;
+
+        let maj_axis_pxls = f64::max(a, b) * pxls_per_rad;
+        let count = f64::ceil(PI * f64::sqrt(maj_axis_pxls / (2.0 * SAGITTA_PX))) as usize;
+        usize::clamp(count, MIN_PTS_COUNT, MAX_PTS_COUNT)
+    }
+
+    /// Outline points in the observer's sphere coordinates
+    fn fill_points(
+        frame:     &EqLocalFrame,
+        a:         f64,
+        b:         f64,
+        angle:     f64,
+        pts_count: usize,
+        points:    &mut Vec<Point3D>,
+    ) {
+        let x_ax = &frame.axes[0];
+        let y_ax = &frame.axes[1];
+        let z_ax = &frame.axes[2];
+
+        let (sin_angle, cos_angle) = f64::sin_cos(angle);
+
+        for i in 0..pts_count {
+            let t = 2.0 * PI * i as f64 / pts_count as f64;
+            let (sin_t, cos_t) = f64::sin_cos(t);
+
+            // Sampling by the ellipse parameter, not by the polar angle, puts the
+            // points where the curvature is the highest, at the major axis ends
+            let u = a * cos_t;
+            let v = b * sin_t;
+            let len = f64::sqrt(u * u + v * v);
+            let inv_len = 1.0 / len;
+
+            // radius_at() of the (u, v) direction is |(u, v)|, so the outline stays
+            // the catalog ellipse
+            let alt = Self::radius_at(a, b, v * inv_len, u * inv_len);
+            let (sin_alt, cos_alt) = f64::sin_cos(alt);
+
+            // (w1, w2) is the point direction turned by `angle`, k scales it by sin(alt)
+            let w1 = u * cos_angle + v * sin_angle;
+            let w2 = v * cos_angle - u * sin_angle;
+            let k = sin_alt * inv_len;
+
+            points.push(Point3D {
+                x: cos_alt * z_ax.x + k * (w1 * x_ax.x + w2 * y_ax.x),
+                y: cos_alt * z_ax.y + k * (w1 * x_ax.y + w2 * y_ax.y),
+                z: cos_alt * z_ax.z + k * (w1 * x_ax.z + w2 * y_ax.z),
+            });
+        }
+    }
 }
 
 impl Item for DsoEllipse {
     fn has_to_convert_to_now_epoch(&self) -> bool {
-        true
+        // Points are built in the now-epoch observer frame already
+        false
     }
 
     fn points_count(&self) -> usize {
@@ -1005,7 +1124,7 @@ impl Item for DsoEllipse {
     }
 
     fn point_crd(&self, index: usize) -> PainterCrd {
-        PainterCrd::Eq(self.points[index])
+        PainterCrd::SpherePt(self.points[index].clone())
     }
 
     fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> eyre::Result<()> {
