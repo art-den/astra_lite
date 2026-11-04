@@ -1,4 +1,4 @@
-use std::{cell::{Cell, RefCell}, collections::HashSet, f64::consts::PI, rc::Rc};
+use std::{cell::RefCell, collections::HashSet, f64::consts::PI, rc::Rc};
 use chrono::{DateTime, Local, NaiveDateTime, Utc};
 use gtk::{cairo, gdk_pixbuf, pango};
 use itertools::{izip, Itertools};
@@ -159,7 +159,8 @@ pub struct SkyMapPainter {
     dso_ellipse:   DsoEllipse,
     visible_zones: HashSet<SkyZoneKey>,
     persp_pnt:     RefCell<PerspectivePainter>,
-    cur_cont_id:   Option<u8>,
+    const_bounds:  ConstBoundsPainter,
+    horizon_glow:  HorizonGlowPainter,
 }
 
 impl SkyMapPainter {
@@ -169,7 +170,8 @@ impl SkyMapPainter {
             dso_ellipse:   DsoEllipse::new(),
             visible_zones: HashSet::new(),
             persp_pnt:     RefCell::new(PerspectivePainter::new()),
-            cur_cont_id:   None,
+            const_bounds:  ConstBoundsPainter::new(),
+            horizon_glow:  HorizonGlowPainter::new(),
         }
     }
 
@@ -221,7 +223,7 @@ impl SkyMapPainter {
             // Current constellation bounds
 
             if args.config.filter.contains(ItemsToShow::CONSTS) {
-                self.paint_constellation_bounds(sky_map, &ctx)?;
+                self.const_bounds.paint(&mut self.item_painter, sky_map, &ctx)?;
             }
 
             // DSO objects
@@ -273,7 +275,7 @@ impl SkyMapPainter {
         // Horizon glow
 
         if args.config.horizon_glow.visible {
-            self.paint_horizon_glow(&ctx)?;
+            self.horizon_glow.paint(&mut self.item_painter, &ctx)?;
         }
 
         // Ground
@@ -445,58 +447,41 @@ impl SkyMapPainter {
         }
     }
 
-    fn paint_constellation_bounds(
-        &mut self,
-        sky_map: &SkyMap,
-        ctx:     &PaintCtx,
-    ) -> eyre::Result<()> {
-        let constellations = sky_map.constellations();
-
-        // Find current constellation (at screen center)
-        self.cur_cont_id = None;
-        let mut test_object = PolygonIsAtScreenCenterTestObject {
-            polygon:    None,
-            tmp_buffer: RefCell::new(Vec::new()),
-            result:    Cell::new(false)
-        };
-        for (id, constellation) in constellations {
-            for polygon in &constellation.bounds {
-                test_object.polygon = Some(polygon);
-                self.item_painter.paint(&test_object, ctx, false)?;
-                if test_object.result.get() {
-                    self.cur_cont_id = Some(*id);
-                    break;
-                }
-            }
-            if self.cur_cont_id.is_some() { break; }
-        }
-
-        for (id, constellation) in constellations {
-            for polygon in &constellation.bounds {
-                let test_object = ConstBoundsPainter {
-                    polygon,
-                    is_active: Some(*id) == self.cur_cont_id
-                };
-                self.item_painter.paint(&test_object, ctx, false)?;
-            }
-        }
-
-        Ok(())
-    }
-
     fn paint_constellations_lines(
         &mut self,
         sky_map: &SkyMap,
         ctx:     &PaintCtx,
     ) -> eyre::Result<()> {
         let constellations = sky_map.constellations();
-        for (id, constellation) in constellations {
-            for polyline in &constellation.lines {
-                let painter = ConstLinesPainter {
-                    polyline,
-                    is_current: Some(*id) == self.cur_cont_id
-                };
-                self.item_painter.paint(&painter, ctx, false)?;
+        // Two style buckets: common lines first, current constellation on top
+        for is_current in [false, true] {
+            ctx.cairo.set_antialias(ctx.config.get_antialias());
+            ctx.cairo.set_dash(&[], 0.0);
+            if is_current {
+                ctx.cairo.set_source_rgba(0.3, 0.6, 0.3, 0.5);
+                ctx.cairo.set_line_width(f64::max(ctx.screen.dpmm_x() * 0.7, 1.0));
+            } else {
+                ctx.cairo.set_source_rgba(0.45, 0.45, 1.0, 0.5);
+                ctx.cairo.set_line_width(f64::max(ctx.screen.dpmm_x() * 0.5, 1.0));
+            }
+            let mut any = false;
+            for (id, constellation) in constellations {
+                if (Some(*id) == self.const_bounds.cur_cont_id) != is_current {
+                    continue;
+                }
+                for polyline in &constellation.lines {
+                    let Some(points) = self.item_painter.project_eq_polyline(polyline, ctx) else {
+                        continue;
+                    };
+                    ctx.cairo.move_to(points[0].x, points[0].y);
+                    for pt in &points[1..] {
+                        ctx.cairo.line_to(pt.x, pt.y);
+                    }
+                    any = true;
+                }
+            }
+            if any {
+                ctx.cairo.stroke()?;
             }
         }
         Ok(())
@@ -521,7 +506,7 @@ impl SkyMapPainter {
                 ra: avg_ra,
                 dec: avg_dec,
                 name: &constellation.name,
-                is_current: Some(*id) == self.cur_cont_id,
+                is_current: Some(*id) == self.const_bounds.cur_cont_id,
             };
             self.item_painter.paint(&painter, ctx, false)?;
         }
@@ -680,29 +665,6 @@ impl SkyMapPainter {
         for world_side in world_sides {
             self.item_painter.paint(&world_side, ctx, false)?;
         }
-        Ok(())
-    }
-
-    fn paint_horizon_glow(&mut self, ctx: &PaintCtx) -> eyre::Result<()> {
-        const STEP: i32 = 2;
-        let angle = degree_to_radian(ctx.config.horizon_glow.angle);
-
-        ctx.cairo.set_antialias(gtk::cairo::Antialias::None);
-
-        for i in 0..(360/STEP) {
-            let az1 = degree_to_radian((STEP * i) as f64);
-            let az2 = degree_to_radian((STEP * (i+1)) as f64);
-            let item = HorizonGlowItem {
-                coords: [
-                    HorizCoord { alt: angle, az: az1 },
-                    HorizCoord { alt: angle, az: az2 },
-                    HorizCoord { alt:   0.0, az: az2 },
-                    HorizCoord { alt:   0.0, az: az1 },
-                ]
-            };
-            self.item_painter.paint(&item, ctx, false)?;
-        }
-
         Ok(())
     }
 
@@ -910,32 +872,309 @@ impl ItemPainter {
         }
 
         // check if 2D lines cross screen boundaries
-        if !obj_is_visible && self.points_screen.len() >= 2 {
-            let top_line = scr_tolerance.top_line();
-            let bottom_line = scr_tolerance.bottom_line();
-            let left_line = scr_tolerance.left_line();
-            let right_line = scr_tolerance.right_line();
-            obj_is_visible =
-                self.points_screen
-                    .iter()
-                    .circular_tuple_windows()
-                    .any(|(&crd1, &crd2)| {
-                        let line = Line2D { pt1: crd1, pt2: crd2 };
-                        Line2D::intersection(&line, &top_line).is_some() ||
-                        Line2D::intersection(&line, &bottom_line).is_some() ||
-                        Line2D::intersection(&line, &left_line).is_some() ||
-                        Line2D::intersection(&line, &right_line).is_some()
-                    }
-                );
-        }
-
-        if !obj_is_visible {
+        if !obj_is_visible && !self.screen_rect_crossed(ctx) {
             return Ok(false);
         }
 
         obj.paint(ctx, &self.points_screen)?;
 
         Ok(true)
+    }
+
+    /// Fallback visibility test: a segment of the projected figure crosses
+    /// the screen boundary. Uses `points_screen`
+    fn screen_rect_crossed(&self, ctx: &PaintCtx) -> bool {
+        if self.points_screen.len() < 2 {
+            return false;
+        }
+        let scr_tolerance = ctx.screen.tolerance();
+        let top_line = scr_tolerance.top_line();
+        let bottom_line = scr_tolerance.bottom_line();
+        let left_line = scr_tolerance.left_line();
+        let right_line = scr_tolerance.right_line();
+        self.points_screen
+            .iter()
+            .circular_tuple_windows()
+            .any(|(&crd1, &crd2)| {
+                let line = Line2D { pt1: crd1, pt2: crd2 };
+                Line2D::intersection(&line, &top_line).is_some() ||
+                Line2D::intersection(&line, &bottom_line).is_some() ||
+                Line2D::intersection(&line, &left_line).is_some() ||
+                Line2D::intersection(&line, &right_line).is_some()
+            }
+        )
+    }
+
+    /// Projects an equatorial polyline (precession to now epoch applied) to
+    /// screen coordinates without the `&dyn Item` overhead.
+    /// Returns None if the polyline is culled, see `fill_screen_pts()`
+    fn project_eq_polyline(&mut self, pts: &[EqCoord], ctx: &PaintCtx) -> Option<&[Point2D]> {
+        self.points_3d.clear();
+        let mut sphere_visible = false;
+        for eq in pts {
+            let mut crd_sphere = eq.to_sphere_pt();
+            crd_sphere = ctx.epoch_cvt.convert_pt(&crd_sphere);
+            ctx.eq_sphere_cvt.apply(&mut crd_sphere);
+            let crd_vp = ctx.sphere_scr_cvt.apply_viewpoint(&crd_sphere);
+            if crd_sphere.x >= 0.0 && crd_vp.z >= -0.5 {
+                sphere_visible = true;
+            }
+            self.points_3d.push(crd_vp);
+        }
+        if !sphere_visible {
+            return None;
+        }
+        self.fill_screen_pts(ctx)
+    }
+
+    /// Projects points already in the observer's sphere coordinates (see
+    /// `PainterCrd::SpherePt`). Returns None if the figure is culled,
+    /// see `fill_screen_pts()`
+    fn project_sphere_pts(&mut self, pts: &[Point3D], ctx: &PaintCtx) -> Option<&[Point2D]> {
+        self.points_3d.clear();
+        let mut sphere_visible = false;
+        for crd_sphere in pts {
+            let crd_vp = ctx.sphere_scr_cvt.apply_viewpoint(crd_sphere);
+            if crd_sphere.x >= 0.0 && crd_vp.z >= -0.5 {
+                sphere_visible = true;
+            }
+            self.points_3d.push(crd_vp);
+        }
+        if !sphere_visible {
+            return None;
+        }
+        self.fill_screen_pts(ctx)
+    }
+
+    /// Second stage of the projection: viewpoint-space points from
+    /// `points_3d` to screen coordinates in `points_screen`, with the common
+    /// visibility tests. Unlike `paint()`, also culls figures with non-finite
+    /// projections. Returns None if the figure is culled
+    fn fill_screen_pts(&mut self, ctx: &PaintCtx) -> Option<&[Point2D]> {
+        self.points_screen.clear();
+        let mut screen_visible = false;
+        let scr_tolerance = ctx.screen.tolerance();
+        for crd_vp in &self.points_3d {
+            let pt_s = ctx.screen.sphere_to_screen(crd_vp, ctx.view_point.mag_factor);
+            if !f64::is_finite(pt_s.x) || !f64::is_finite(pt_s.y) {
+                // point at the projection antipode: skip the whole figure
+                return None;
+            }
+            if !screen_visible
+            && scr_tolerance.left < pt_s.x && pt_s.x < scr_tolerance.right
+            && scr_tolerance.top < pt_s.y && pt_s.y < scr_tolerance.bottom {
+                screen_visible = true;
+            }
+            self.points_screen.push(pt_s);
+        }
+        if !screen_visible && !self.screen_rect_crossed(ctx) {
+            return None;
+        }
+        Some(&self.points_screen)
+    }
+}
+
+struct HorizonGlowPainter {
+    // Cached sphere grid (bottom/top point per azimuth column) and projected
+    // corners of the visible azimuth bands, reused per frame
+    grid:       Vec<Point3D>,
+    grid_angle: f64,
+    corners:    Vec<Point2D>,
+}
+
+impl HorizonGlowPainter {
+    // Horizon glow azimuth resolution, degrees
+    const AZ_STEP_DEG: f64 = 2.0;
+    // Constant-alpha sub-bands replacing the per-band gradient
+    const ALT_STEPS:   usize = 32;
+
+    fn new() -> Self {
+        Self {
+            grid:       Vec::new(),
+            // NaN != any angle, so the grid is built on the first call
+            grid_angle: f64::NAN,
+            corners:    Vec::new(),
+        }
+    }
+
+    fn paint(&mut self, item_painter: &mut ItemPainter, ctx: &PaintCtx) -> eyre::Result<()> {
+        let angle = degree_to_radian(ctx.config.horizon_glow.angle);
+        // The UI angle is at least 1 degree, a zero one means the glow is off
+        if angle <= 0.0 {
+            return Ok(());
+        }
+        self.rebuild_grid(angle);
+
+        let color = &ctx.config.horizon_glow.color;
+        ctx.cairo.set_antialias(gtk::cairo::Antialias::None);
+        ctx.cairo.set_fill_rule(gtk::cairo::FillRule::Winding);
+
+        self.corners.clear();
+
+        // Project the corners of every azimuth band once per frame and keep
+        // the visible bands for the sub-band pass
+        let cols = self.grid.len() / 2;
+        for i in 0..cols - 1 {
+            // Corner order: top of both columns first, then the bottoms,
+            // see the grid layout in `rebuild_grid()`
+            let corners = [
+                self.grid[i * 2 + 1].clone(),
+                self.grid[(i + 1) * 2 + 1].clone(),
+                self.grid[(i + 1) * 2].clone(),
+                self.grid[i * 2].clone(),
+            ];
+            let Some(scr) = item_painter.project_sphere_pts(&corners, ctx) else {
+                continue;
+            };
+            self.corners.extend_from_slice(scr);
+        }
+        if self.corners.is_empty() {
+            return Ok(());
+        }
+
+        // Split each visible band into horizontal sub-bands of constant alpha:
+        // solid fills instead of a gradient per band. Lerping between the
+        // projected band edges matches the old gradient's approximation, which
+        // interpolated linearly between the top and bottom edge midpoints
+        let lerp = |a: f64, b: f64, t: f64| a + (b - a) * t;
+        // t=0 is the outer edge (alpha 0), t=1 is the horizon (full alpha):
+        // sample the alpha of each step at its midpoint
+        for k in 0..Self::ALT_STEPS {
+            let t0 = k as f64 / Self::ALT_STEPS as f64;
+            let t1 = (k + 1) as f64 / Self::ALT_STEPS as f64;
+            let alpha = color.a * (k as f64 + 0.5) / Self::ALT_STEPS as f64;
+            ctx.cairo.set_source_rgba(color.r, color.g, color.b, alpha);
+            for band in self.corners.as_chunks::<4>().0 {
+                let (top1, top2, bottom2, bottom1) = (band[0], band[1], band[2], band[3]);
+                ctx.cairo.move_to(lerp(top1.x, bottom1.x, t0), lerp(top1.y, bottom1.y, t0));
+                ctx.cairo.line_to(lerp(top2.x, bottom2.x, t0), lerp(top2.y, bottom2.y, t0));
+                ctx.cairo.line_to(lerp(top2.x, bottom2.x, t1), lerp(top2.y, bottom2.y, t1));
+                ctx.cairo.line_to(lerp(top1.x, bottom1.x, t1), lerp(top1.y, bottom1.y, t1));
+                ctx.cairo.close_path();
+            }
+            ctx.cairo.fill()?;
+        }
+
+        Ok(())
+    }
+
+    fn rebuild_grid(&mut self, angle: f64) {
+        if self.grid_angle == angle {
+            return;
+        }
+        // Grid layout: per azimuth column, a horizon point then a top point
+        let cols = (360.0 / Self::AZ_STEP_DEG) as usize + 1;
+        self.grid.clear();
+        self.grid.reserve(cols * 2);
+        for i in 0..cols {
+            let az = degree_to_radian(Self::AZ_STEP_DEG * i as f64);
+            self.grid.push(HorizCoord { alt: 0.0,  az  }.to_sphere_pt());
+            self.grid.push(HorizCoord { alt: angle, az }.to_sphere_pt());
+        }
+        self.grid_angle = angle;
+    }
+}
+
+struct ConstBoundsPainter {
+    // Projected bounds polygons and their spans in it, reused per frame
+    buf:   Vec<[f64; 2]>,
+    spans: Vec<(u8, u32, u32)>,
+    // Constellation whose bounds contain the screen center, found per frame
+    // and reused by the constellation lines and names painters
+    cur_cont_id: Option<u8>,
+}
+
+impl ConstBoundsPainter {
+    fn new() -> Self {
+        Self {
+            buf:         Vec::new(),
+            spans:       Vec::new(),
+            cur_cont_id: None,
+        }
+    }
+
+    fn paint(
+        &mut self,
+        item_painter: &mut ItemPainter,
+        sky_map:      &SkyMap,
+        ctx:          &PaintCtx,
+    ) -> eyre::Result<()> {
+        let constellations = sky_map.constellations();
+
+        // Project each bounds polygon once; the projection is reused for both
+        // the screen center test and the batched painting
+        self.cur_cont_id = None;
+        self.buf.clear();
+        self.spans.clear();
+        let screen_center = [ctx.screen.center_x, ctx.screen.center_y];
+        for (id, constellation) in constellations {
+            for polygon in &constellation.bounds {
+                let Some(points) = item_painter.project_eq_polyline(polygon, ctx) else {
+                    continue;
+                };
+                let (start, len) = (self.buf.len(), points.len());
+                for pt in points {
+                    self.buf.push([pt.x, pt.y]);
+                }
+                self.spans.push((*id, start as u32, len as u32));
+                if self.cur_cont_id.is_none()
+                && point_in_polygon(&self.buf[start..start + len], screen_center) {
+                    self.cur_cont_id = Some(*id);
+                }
+            }
+        }
+
+        ctx.cairo.set_antialias(ctx.config.get_antialias());
+
+        // Polygons of all other constellations share one path and one stroke.
+        // Note: at wide view the shared borders of adjacent constellations were
+        // previously stroked by both polygons (double alpha ~0.51), now they are
+        // drawn once with the nominal 0.3 - the layer became uniformly fainter
+        ctx.cairo.set_source_rgba(0.2, 0.5, 0.2, 0.3);
+        ctx.cairo.set_dash(&[], 0.0);
+        ctx.cairo.set_line_width(f64::max(ctx.screen.dpmm_x() * 0.5, 1.0));
+        let mut any = false;
+        for &(id, start, len) in &self.spans {
+            if Some(id) == self.cur_cont_id {
+                continue;
+            }
+            self.add_polygon(ctx, start, len);
+            any = true;
+        }
+        if any {
+            ctx.cairo.stroke()?;
+        }
+
+        // Current constellation polygons: fill and dashed stroke on top
+        if let Some(cur_id) = self.cur_cont_id {
+            ctx.cairo.set_fill_rule(gtk::cairo::FillRule::Winding);
+            ctx.cairo.set_line_width(f64::max(ctx.screen.dpmm_x() * 0.7, 1.0));
+            ctx.cairo.set_dash(&[6.0, 6.0], 0.0);
+            for &(id, start, len) in &self.spans {
+                if id != cur_id {
+                    continue;
+                }
+                self.add_polygon(ctx, start, len);
+                ctx.cairo.set_source_rgba(0.3, 0.6, 0.3, 0.3);
+                ctx.cairo.fill_preserve()?;
+                ctx.cairo.set_source_rgb(0.4, 0.7, 0.4);
+                ctx.cairo.stroke()?;
+            }
+            // Do not leak the dash pattern to the layers that do not set it
+            ctx.cairo.set_dash(&[], 0.0);
+        }
+
+        Ok(())
+    }
+
+    // Adds the spanned polygon to the current cairo path
+    fn add_polygon(&self, ctx: &PaintCtx, start: u32, len: u32) {
+        let pts = &self.buf[start as usize..(start + len) as usize];
+        ctx.cairo.move_to(pts[0][0], pts[0][1]);
+        for pt in &pts[1..] {
+            ctx.cairo.line_to(pt[0], pt[1]);
+        }
+        ctx.cairo.close_path();
     }
 }
 
@@ -1600,48 +1839,6 @@ impl Item for WorldSide<'_> {
     }
 }
 
-// Paint horizon glow
-
-struct HorizonGlowItem {
-    coords: [HorizCoord; 4],
-}
-
-impl Item for HorizonGlowItem {
-    fn has_to_convert_to_now_epoch(&self) -> bool {
-        false
-    }
-
-    fn points_count(&self) -> usize {
-        self.coords.len()
-    }
-
-    fn point_crd(&self, index: usize) -> PainterCrd {
-        PainterCrd::Horiz(self.coords[index])
-    }
-
-    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> eyre::Result<()> {
-        let top_pt_x = 0.5 * (points[0].x + points[1].x);
-        let top_pt_y = 0.5 * (points[0].y + points[1].y);
-        let bottom_pt_x = 0.5 * (points[2].x + points[3].x);
-        let bottom_pt_y = 0.5 * (points[2].y + points[3].y);
-        let gradient = gtk::cairo::LinearGradient::new(
-            top_pt_x, top_pt_y,
-            bottom_pt_x, bottom_pt_y
-        );
-        let color = &ctx.config.horizon_glow.color;
-        gradient.add_color_stop_rgba(0.0, color.r, color.g, color.b, 0.0);
-        gradient.add_color_stop_rgba(1.0, color.r, color.g, color.b, color.a);
-        ctx.cairo.move_to(points[0].x, points[0].y);
-        for pt in &points[1..] {
-            ctx.cairo.line_to(pt.x, pt.y);
-        }
-        ctx.cairo.close_path();
-        ctx.cairo.set_source(&gradient)?;
-        ctx.cairo.fill()?;
-        Ok(())
-    }
-}
-
 struct ZoneVisibilityTestObject {
     coords: [EqCoord; 4],
 }
@@ -1871,85 +2068,6 @@ impl Item for PlateSolvedImagePainter<'_> {
     }
 }
 
-struct PolygonIsAtScreenCenterTestObject<'a> {
-    polygon:    Option<&'a Vec<EqCoord>>,
-    tmp_buffer: RefCell<Vec<[f64; 2]>>,
-    result:     Cell<bool>,
-}
-
-impl<'a> Item for PolygonIsAtScreenCenterTestObject<'a> {
-    fn has_to_convert_to_now_epoch(&self) -> bool {
-        true
-    }
-
-    fn points_count(&self) -> usize {
-        if let Some(polygon) = &self.polygon {
-            polygon.len()
-        } else {
-            unreachable!()
-        }
-    }
-
-    fn point_crd(&self, index: usize) -> PainterCrd {
-        if let Some(polygon) = &self.polygon {
-            PainterCrd::Eq(polygon[index])
-        } else {
-            unreachable!()
-        }
-    }
-
-    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> eyre::Result<()> {
-        let screen_center = [ctx.screen.center_x, ctx.screen.center_y];
-        let mut tmp_buffer = self.tmp_buffer.borrow_mut();
-        tmp_buffer.clear();
-        for point in points {
-            tmp_buffer.push([point.x, point.y]);
-        }
-        let polygon_in_center = point_in_polygon(&tmp_buffer, screen_center);
-        self.result.set(polygon_in_center);
-        Ok(())
-    }
-}
-
-struct ConstLinesPainter<'a> {
-    polyline:   &'a Polyline,
-    is_current: bool,
-}
-
-impl<'a> Item for ConstLinesPainter<'a> {
-    fn has_to_convert_to_now_epoch(&self) -> bool {
-        true
-    }
-
-    fn points_count(&self) -> usize {
-        self.polyline.len()
-    }
-
-    fn point_crd(&self, index: usize) -> PainterCrd {
-        PainterCrd::Eq(self.polyline[index])
-    }
-
-    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> eyre::Result<()> {
-        ctx.cairo.move_to(points[0].x, points[0].y);
-        for pt in &points[1..] {
-            ctx.cairo.line_to(pt.x, pt.y);
-        }
-        ctx.cairo.set_antialias(ctx.config.get_antialias());
-
-        ctx.cairo.set_dash(&[], 0.0);
-        if self.is_current {
-            ctx.cairo.set_source_rgba(0.3, 0.6, 0.3, 0.5);
-            ctx.cairo.set_line_width(f64::max(ctx.screen.dpmm_x() * 0.7, 1.0));
-        } else {
-            ctx.cairo.set_source_rgba(0.45, 0.45, 1.0, 0.5);
-            ctx.cairo.set_line_width(f64::max(ctx.screen.dpmm_x() * 0.5, 1.0));
-        }
-        ctx.cairo.stroke()?;
-
-        Ok(())
-    }
-}
-
 struct ConstNamePainter<'a> {
     ra:         f64,
     dec:        f64,
@@ -1983,49 +2101,6 @@ impl<'a> Item for ConstNamePainter<'a> {
             ctx.cairo.set_source_rgb(0.2, 0.2, 0.6);
         }
         pangocairo::show_layout(ctx.cairo, ctx.layout);
-
-        Ok(())
-    }
-}
-
-struct ConstBoundsPainter<'a> {
-    polygon:   &'a Vec<EqCoord>,
-    is_active: bool,
-}
-
-impl<'a> Item for ConstBoundsPainter<'a> {
-    fn has_to_convert_to_now_epoch(&self) -> bool {
-        true
-    }
-
-    fn points_count(&self) -> usize {
-        self.polygon.len()
-    }
-
-    fn point_crd(&self, index: usize) -> PainterCrd {
-        PainterCrd::Eq(self.polygon[index])
-    }
-
-    fn paint(&self, ctx: &PaintCtx, points: &[Point2D]) -> eyre::Result<()> {
-        ctx.cairo.move_to(points[0].x, points[0].y);
-        for pt in &points[1..] {
-            ctx.cairo.line_to(pt.x, pt.y);
-        }
-        ctx.cairo.close_path();
-        ctx.cairo.set_antialias(ctx.config.get_antialias());
-        if self.is_active {
-            ctx.cairo.set_source_rgba(0.3, 0.6, 0.3, 0.3);
-            ctx.cairo.fill_preserve()?;
-            ctx.cairo.set_source_rgb(0.4, 0.7, 0.4);
-            ctx.cairo.set_dash(&[6.0, 6.0], 0.0);
-            ctx.cairo.set_line_width(f64::max(ctx.screen.dpmm_x() * 0.7, 1.0));
-            ctx.cairo.stroke()?;
-        } else {
-            ctx.cairo.set_source_rgba(0.2, 0.5, 0.2, 0.3);
-            ctx.cairo.set_dash(&[], 0.0);
-            ctx.cairo.set_line_width(f64::max(ctx.screen.dpmm_x() * 0.5, 1.0));
-            ctx.cairo.stroke()?;
-        }
 
         Ok(())
     }
