@@ -551,14 +551,14 @@ impl MapUi {
     fn show_options(&self) {
         let opts = self.ui_options.borrow();
 
-        self.widgets.top.chb_show_stars.set_active(opts.paint.filter.contains(ItemsToShow::STARS));
-        self.widgets.top.chb_show_dso.set_active(opts.paint.filter.contains(ItemsToShow::DSO));
-        self.widgets.top.chb_show_galaxies.set_active(opts.paint.filter.contains(ItemsToShow::GALAXIES));
-        self.widgets.top.chb_show_nebulas.set_active(opts.paint.filter.contains(ItemsToShow::NEBULAS));
-        self.widgets.top.chb_show_sclusters.set_active(opts.paint.filter.contains(ItemsToShow::CLUSTERS));
+        self.widgets.top.chb_show_stars.set_active(opts.paint.items_filter.contains(ItemsToShow::STARS));
+        self.widgets.top.chb_show_dso.set_active(opts.paint.items_filter.contains(ItemsToShow::DSO));
+        self.widgets.top.chb_show_galaxies.set_active(opts.paint.items_filter.contains(ItemsToShow::GALAXIES));
+        self.widgets.top.chb_show_nebulas.set_active(opts.paint.items_filter.contains(ItemsToShow::NEBULAS));
+        self.widgets.top.chb_show_sclusters.set_active(opts.paint.items_filter.contains(ItemsToShow::CLUSTERS));
         self.widgets.top.chb_show_eq_grid.set_active(opts.paint.eq_grid.visible);
         self.widgets.top.chb_show_ccd.set_active(opts.show_ccd);
-        self.widgets.top.chb_show_const.set_active(opts.paint.filter.contains(ItemsToShow::CONSTS));
+        self.widgets.top.chb_show_const.set_active(opts.paint.items_filter.contains(ItemsToShow::CONSTS));
         self.widgets.top.chb_show_ps.set_active(opts.show_ps);
         self.widgets.top.scl_max_dso_mag.set_value(opts.paint.max_dso_mag as f64);
 
@@ -573,12 +573,12 @@ impl MapUi {
     }
 
     fn read_visibility_options_from_widgets(&self, opts: &mut UiOptions) {
-        opts.paint.filter.set(ItemsToShow::STARS, self.widgets.top.chb_show_stars.is_active());
-        opts.paint.filter.set(ItemsToShow::DSO, self.widgets.top.chb_show_dso.is_active());
-        opts.paint.filter.set(ItemsToShow::GALAXIES, self.widgets.top.chb_show_galaxies.is_active());
-        opts.paint.filter.set(ItemsToShow::NEBULAS, self.widgets.top.chb_show_nebulas.is_active());
-        opts.paint.filter.set(ItemsToShow::CLUSTERS, self.widgets.top.chb_show_sclusters.is_active());
-        opts.paint.filter.set(ItemsToShow::CONSTS, self.widgets.top.chb_show_const.is_active());
+        opts.paint.items_filter.set(ItemsToShow::STARS, self.widgets.top.chb_show_stars.is_active());
+        opts.paint.items_filter.set(ItemsToShow::DSO, self.widgets.top.chb_show_dso.is_active());
+        opts.paint.items_filter.set(ItemsToShow::GALAXIES, self.widgets.top.chb_show_galaxies.is_active());
+        opts.paint.items_filter.set(ItemsToShow::NEBULAS, self.widgets.top.chb_show_nebulas.is_active());
+        opts.paint.items_filter.set(ItemsToShow::CLUSTERS, self.widgets.top.chb_show_sclusters.is_active());
+        opts.paint.items_filter.set(ItemsToShow::CONSTS, self.widgets.top.chb_show_const.is_active());
 
         opts.paint.eq_grid.visible = self.widgets.top.chb_show_eq_grid.is_active();
         opts.show_ccd = self.widgets.top.chb_show_ccd.is_active();
@@ -643,7 +643,7 @@ impl MapUi {
             drop(config);
 
             let cam_frame = if show_ccd {
-                || -> Option<CameraFrame> {
+                || -> Option<CameraFov> {
                     let camera = self.engine.cur_devices.camera()?;
                     if !camera.is_active().unwrap_or(false) { return None; }
                     let options = self.engine.options.read().unwrap();
@@ -659,10 +659,10 @@ impl MapUi {
                     let rot_angle = *cam_rotation.get(camera.name()).unwrap_or(&0.0);
                     drop(cam_rotation);
 
-                    Some(CameraFrame{
+                    Some(CameraFov{
                         name: camera.name().to_string(),
-                        horiz_angle: f64::atan2(width_mm, focal_len),
-                        vert_angle: f64::atan2(height_mm, focal_len),
+                        horiz_fov: f64::atan2(width_mm, focal_len),
+                        vert_fov: f64::atan2(height_mm, focal_len),
                         rot_angle,
                     })
                 } ()
@@ -685,12 +685,12 @@ impl MapUi {
                 if let (Some(solved_img), Some(ps_result), true)
                 = (&*ps_img, &*ps_result, show_ps_image) {
                     Some(PlateSolvedImage {
-                        image:       solved_img.clone(),
-                        coord:       ps_result.crd_now,
-                        horiz_angle: ps_result.width,
-                        vert_angle:  ps_result.height,
-                        rot_angle:   ps_result.rotation,
-                        time:        ps_result.time,
+                        image:      solved_img.clone(),
+                        center_crd: ps_result.crd_now,
+                        horiz_fov:  ps_result.width,
+                        vert_fov:   ps_result.height,
+                        rotation:   ps_result.rotation,
+                        time:       ps_result.time,
                     })
                 } else {
                     None

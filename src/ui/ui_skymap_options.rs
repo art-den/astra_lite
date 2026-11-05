@@ -1,7 +1,7 @@
 use std::rc::Rc;
 use gtk::{prelude::*, glib::clone, gdk};
 use macros::FromBuilder;
-use super::{gtk_utils::*, sky_map::painter::Color, ui_skymap::UiOptions};
+use super::{gtk_utils::*, sky_map::painter::Rgba, ui_skymap::UiOptions};
 
 #[derive(FromBuilder)]
 struct Widgets {
@@ -45,7 +45,7 @@ impl SkymapOptionsDialog {
     ) {
         self.widgets.chb_high_qual.set_active(ui_options.paint.high_quality);
         self.widgets.chb_horiz_glow.set_active(ui_options.paint.horizon_glow.visible);
-        self.widgets.spb_horiz_glow_angle.set_value(ui_options.paint.horizon_glow.angle);
+        self.widgets.spb_horiz_glow_angle.set_value(ui_options.paint.horizon_glow.height_deg);
 
         let c = &ui_options.paint.horizon_glow.color;
         self.widgets.clrb_horiz_glow.set_rgba(&gdk::RGBA::new(c.r, c.g, c.b, c.a));
@@ -67,16 +67,16 @@ impl SkymapOptionsDialog {
 
         let c = self.widgets.clrb_horiz_glow.rgba();
 
-        ui_options.paint.horizon_glow.color = Color { r: c.red(), g: c.green(), b: c.blue(), a: c.alpha() };
+        ui_options.paint.horizon_glow.color = Rgba { r: c.red(), g: c.green(), b: c.blue(), a: c.alpha() };
 
 
-        ui_options.paint.horizon_glow.angle = self.widgets.spb_horiz_glow_angle.value();
+        ui_options.paint.horizon_glow.height_deg = self.widgets.spb_horiz_glow_angle.value();
 
         let c = self.widgets.clrb_eq_grid_line.rgba();
-        ui_options.paint.eq_grid.line_color = Color { r: c.red(), g: c.green(), b: c.blue(), a: c.alpha() };
+        ui_options.paint.eq_grid.line_color = Rgba { r: c.red(), g: c.green(), b: c.blue(), a: c.alpha() };
 
         let c = self.widgets.clrb_eq_grid_text.rgba();
-        ui_options.paint.eq_grid.text_color = Color { r: c.red(), g: c.green(), b: c.blue(), a: c.alpha() };
+        ui_options.paint.eq_grid.text_color = Rgba { r: c.red(), g: c.green(), b: c.blue(), a: c.alpha() };
 
         Ok(())
     }

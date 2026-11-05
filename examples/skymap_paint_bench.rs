@@ -10,7 +10,7 @@ use std::{rc::Rc, time::Instant};
 
 use astra_lite::ui::sky_map::{
     data::{ItemsToShow, Observer, SkyMap},
-    painter::{PaintArgs, PaintConfig, SkyMapPainter, ViewPoint},
+    painter::{PaintRequest, PaintConfig, SkyMapPainter, ViewPoint},
     utils::{Rect, Screen},
 };
 use gtk::{cairo, pango};
@@ -110,7 +110,7 @@ fn bench(
     vp.mag_factor = mag_factor;
 
     let paint = |painter: &mut SkyMapPainter| {
-        painter.paint(PaintArgs {
+        painter.paint(PaintRequest {
             sky_map:     &sky_map,
             selection:   &selection,
             tele_pos:    &tele_pos,
@@ -195,13 +195,13 @@ fn main() {
                 | ItemsToShow::GALAXIES.bits(),
         );
         match config_name.as_str() {
-            "none"        => config.filter = ItemsToShow::empty(),
-            "stars"       => config.filter = ItemsToShow::STARS,
-            "consts"      => config.filter = ItemsToShow::CONSTS,
-            "dso"         => config.filter = DSO_FLAGS,
-            "no_stars"    => config.filter = ItemsToShow::all() - ItemsToShow::STARS,
-            "no_consts"   => config.filter = ItemsToShow::all() - ItemsToShow::CONSTS,
-            "no_dso"      => config.filter = ItemsToShow::all() - DSO_FLAGS,
+            "none"        => config.items_filter = ItemsToShow::empty(),
+            "stars"       => config.items_filter = ItemsToShow::STARS,
+            "consts"      => config.items_filter = ItemsToShow::CONSTS,
+            "dso"         => config.items_filter = DSO_FLAGS,
+            "no_stars"    => config.items_filter = ItemsToShow::all() - ItemsToShow::STARS,
+            "no_consts"   => config.items_filter = ItemsToShow::all() - ItemsToShow::CONSTS,
+            "no_dso"      => config.items_filter = ItemsToShow::all() - DSO_FLAGS,
             "low_quality" => config.high_quality = false,
             _ => {}
         }
@@ -224,7 +224,7 @@ fn main() {
         vp.mag_factor = mag;
         let total_start = Instant::now();
         for _ in 0..iters {
-            painter.paint(PaintArgs {
+            painter.paint(PaintRequest {
                 sky_map: &sky_map, selection: &selection, tele_pos: &tele_pos,
                 cam_frame: &cam_frame, plate_solve: &plate_solve, observer: &observer,
                 utc_time: &utc_time, config: &config, view_point: &vp,
@@ -238,12 +238,12 @@ fn main() {
     println!("\nhigh_quality = {}", all.high_quality);
 
     let no_stars = PaintConfig {
-        filter: ItemsToShow::DSO | ItemsToShow::CONSTS | ItemsToShow::NEBULAS
+        items_filter: ItemsToShow::DSO | ItemsToShow::CONSTS | ItemsToShow::NEBULAS
             | ItemsToShow::CLUSTERS | ItemsToShow::GALAXIES,
         ..PaintConfig::default()
     };
 
-    let only_stars = PaintConfig { filter: ItemsToShow::STARS, ..PaintConfig::default() };
+    let only_stars = PaintConfig { items_filter: ItemsToShow::STARS, ..PaintConfig::default() };
 
     for (name, config) in [("all", &all), ("no stars", &no_stars), ("only stars", &only_stars)] {
         println!("\n--- {name} ---");

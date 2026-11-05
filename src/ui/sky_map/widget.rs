@@ -30,7 +30,7 @@ pub struct SkymapWidget {
     selected_obj:    RefCell<Option<SkymapObject>>,
     center_crd:      RefCell<Option<EqCoord>>,
     telescope_pos:   RefCell<Option<EqCoord>>,
-    camera_frame:    RefCell<Option<CameraFrame>>,
+    camera_frame:    RefCell<Option<CameraFov>>,
     solved_image:    RefCell<Option<PlateSolvedImage>>,
     ani_goto_data:   RefCell<Option<AnimatedGotoCrdData>>,
     select_handlers: RefCell<Vec<Box<dyn Fn(Option<SkymapObject>)>>>,
@@ -100,7 +100,7 @@ impl SkymapWidget {
         time:          &NaiveDateTime,
         config:        &PaintConfig,
         telescope_pos: &Option<EqCoord>,
-        camera_frame:  &Option<CameraFrame>,
+        camera_frame:  &Option<CameraFov>,
         solved_image:  &Option<PlateSolvedImage>,
     ) {
         *self.time.borrow_mut() = *time;
@@ -235,8 +235,8 @@ impl SkymapWidget {
 
         let config = self.config.borrow();
         let vp = self.view_point.borrow();
-        let max_stars_mag = calc_max_star_magnitude_for_painting(vp.mag_factor);
-        let selected_obj = skymap.get_nearest(&eq_crd, config.max_dso_mag, max_stars_mag, &config.filter);
+        let max_stars_mag = max_painted_star_mag(vp.mag_factor);
+        let selected_obj = skymap.get_nearest(&eq_crd, config.max_dso_mag, max_stars_mag, &config.items_filter);
 
         if let Some(selected_obj) = &selected_obj {
             let epoch_cvt = EpochCvt::new(&j2000, &time);
@@ -305,7 +305,7 @@ impl SkymapWidget {
         let pango_layout = da.create_pango_layout(None);
         pango_layout.set_font_description(Some(&font));
 
-        let res = painter.paint(PaintArgs {
+        let res = painter.paint(PaintRequest {
             sky_map:     &skymap,
             selection:   &selection,
             tele_pos:    &telescope_pos,
