@@ -62,18 +62,22 @@ fn print_stats(map: &SkyMap) {
         }
     }
 
+    let mut const_parts = 0_usize;
     let mut const_polygons = 0_usize;
     let mut const_bounds_pts = 0_usize;
     let mut const_line_pts = 0_usize;
     let mut const_polylines = 0_usize;
-    for c in map.constellations().values() {
-        const_polygons += c.bounds.len();
-        const_polylines += c.lines.len();
-        for p in &c.bounds {
-            const_bounds_pts += p.len();
-        }
-        for l in &c.lines {
-            const_line_pts += l.len();
+    for parts in map.constellations().values() {
+        for c in parts {
+            const_parts += 1;
+            const_polygons += c.bounds.len();
+            const_polylines += c.lines.len();
+            for p in &c.bounds {
+                const_bounds_pts += p.len();
+            }
+            for l in &c.lines {
+                const_line_pts += l.len();
+            }
         }
     }
 
@@ -81,8 +85,8 @@ fn print_stats(map: &SkyMap) {
     println!("mag histogram:  {by_mag:?} (index = magnitude)");
     println!("dso objects:    {}", map.objects().len());
     println!(
-        "constellations: {} polygons ({const_bounds_pts} pts), {const_polylines} polylines ({const_line_pts} pts)",
-        const_polygons
+        "constellations: {} ids, {const_parts} parts, {const_polygons} polygons ({const_bounds_pts} pts), {const_polylines} polylines ({const_line_pts} pts)",
+        map.constellations().len()
     );
 }
 

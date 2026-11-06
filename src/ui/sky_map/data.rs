@@ -679,11 +679,44 @@ impl SkymapObject {
 
 pub type Polyline = Vec<EqCoord>;
 
+/// A named piece of a constellation. Most constellations occupy one contiguous
+/// area, Serpens has two pieces (Caput and Cauda) under one IAU id
 #[derive(Clone)]
-pub struct Constellation {
+pub struct ConstellationPart {
     pub name: String,
     pub bounds: Vec<Polyline>,
     pub lines: Vec<Polyline>,
+}
+
+impl ConstellationPart {
+    /// Mean position of the asterism lines, or of the bounds when there are none:
+    /// used for the map label and as the goto target. For a few parts it falls
+    /// slightly outside their own boundary, so a goto highlights a neighbour
+    pub fn center(&self) -> Option<EqCoord> {
+        for figures in [&self.lines, &self.bounds] {
+            if figures.is_empty() {
+                continue;
+            }
+            let mut ra = angles_mean(figures.iter().flatten().map(|pt| pt.ra));
+            if ra < 0.0 {
+                ra += 2.0 * PI;
+            }
+            return Some(EqCoord { ra, dec: angles_mean(figures.iter().flatten().map(|pt| pt.dec)) });
+        }
+        None
+    }
+}
+
+// Features of one piece share its name, while the bounds and the lines of a piece
+// come from two different files, so both loader passes merge into the part of the same name
+fn add_part(dst: &mut Vec<ConstellationPart>, src: ConstellationPart) {
+    match dst.iter_mut().find(|part| part.name == src.name) {
+        Some(part) => {
+            part.bounds.extend(src.bounds);
+            part.lines.extend(src.lines);
+        },
+        None => dst.push(src),
+    }
 }
 
 pub struct SkyMap {
@@ -692,7 +725,7 @@ pub struct SkyMap {
     stars:            Stars,
     objects:          Vec<DsoItem>,
     outlines:         Vec<Outline>,
-    constellations:   HashMap<u8, Constellation>,
+    constellations:   HashMap<u8, Vec<ConstellationPart>>,
 }
 
 impl SkyMap {
@@ -746,7 +779,8 @@ impl SkyMap {
         &self.stars
     }
 
-    pub fn constellations(&self) -> &HashMap<u8, Constellation> {
+    /// IAU id -> pieces, Serpens is the only id with two of them
+    pub fn constellations(&self) -> &HashMap<u8, Vec<ConstellationPart>> {
         &self.constellations
     }
 
@@ -767,10 +801,15 @@ impl SkyMap {
         self.stars.sort_named_stars_by_mag();
     }
 
+    /// Load either the bounds or the lines of every feature, once per GeoJSON file.
+    /// Repeating a successful call with the same `as_bounds` duplicates the figures
     pub fn load_constellations(&mut self, path: impl AsRef<Path>, as_bounds: bool) -> eyre::Result<()> {
         let reader = std::io::BufReader::new(std::fs::File::open(path)?);
         let v: serde_json::Value = serde_json::from_reader(reader)?;
         let Some(features_js) = v["features"].as_array() else { eyre::bail!("features not found"); };
+
+        // Accumulate in a temporary map: the caller retries a failed load from another path
+        let mut loaded: HashMap<u8, Vec<ConstellationPart>> = HashMap::new();
 
         for feature in features_js {
             let properties_js = &feature["properties"];
@@ -827,17 +866,15 @@ impl SkyMap {
             let Some(id_u8) = self.const_id_by_name.get(id_lc.as_str()) else {
                 eyre::bail!("Unknown constellation id ({id})");
             };
-            let constellation = self.constellations
-                .entry(*id_u8)
-                .or_insert_with(|| Constellation {
-                    name:   name.to_string(),
-                    bounds: Vec::new(),
-                    lines:  Vec::new(),
-                });
-            if as_bounds {
-                constellation.bounds = figures;
-            } else {
-                constellation.lines = figures;
+            let (bounds, lines) = if as_bounds { (figures, Vec::new()) } else { (Vec::new(), figures) };
+            let part = ConstellationPart { name: name.to_string(), bounds, lines };
+            add_part(loaded.entry(*id_u8).or_default(), part);
+        }
+
+        for (id, parts) in loaded {
+            let dst = self.constellations.entry(id).or_default();
+            for part in parts {
+                add_part(dst, part);
             }
         }
         Ok(())
@@ -1154,30 +1191,26 @@ impl SkyMap {
 
     fn find_const(&self, text_lc: &str, mode: SearchMode) -> Vec<SkymapObject> {
         let mut result = Vec::new();
-        for (id, constellation) in &self.constellations {
-            let name_lc = constellation.name.to_lowercase();
-            let found = match mode {
-                SearchMode::Eq =>
-                    name_lc == text_lc,
-                SearchMode::StartWith =>
-                    name_lc.starts_with(text_lc),
-                SearchMode::Contains =>
-                    name_lc.contains(text_lc) && !name_lc.starts_with(text_lc),
-            };
-            if found {
-                let all_ra = constellation.lines.iter().flat_map(|l| l.iter().map(|pt| pt.ra));
-                let all_dec = constellation.lines.iter().flat_map(|l| l.iter().map(|pt| pt.dec));
-                let mut avg_ra = angles_mean(all_ra);
-                let avg_dec = angles_mean(all_dec);
-
-                if avg_ra < 0.0 {
-                    avg_ra += 2.0 * PI;
+        for (id, parts) in &self.constellations {
+            for part in parts {
+                let name_lc = part.name.to_lowercase();
+                let found = match mode {
+                    SearchMode::Eq =>
+                        name_lc == text_lc,
+                    SearchMode::StartWith =>
+                        name_lc.starts_with(text_lc),
+                    SearchMode::Contains =>
+                        name_lc.contains(text_lc) && !name_lc.starts_with(text_lc),
+                };
+                if !found {
+                    continue;
                 }
+                let Some(crd) = part.center() else { continue; };
 
                 result.push(SkymapObject::Dso(DsoItem {
                     obj_type: SkyItemType::Constellation,
-                    names:    vec![DsoName::from_str(&constellation.name)],
-                    crd:      ObjEqCoord::new(avg_ra, avg_dec),
+                    names:    vec![DsoName::from_str(&part.name)],
+                    crd:      ObjEqCoord::new(crd.ra, crd.dec),
                     cnst_id:  *id,
                     ..Default::default()
                 }));

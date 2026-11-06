@@ -3,7 +3,7 @@ use chrono::{DateTime, Local, NaiveDateTime, Utc};
 use gtk::{cairo, gdk_pixbuf, pango};
 use itertools::{izip, Itertools};
 use serde::{Deserialize, Serialize};
-use crate::{sky_math::math::*, utils::math::{angles_mean, linear_interpolate, point_in_polygon}};
+use crate::{sky_math::math::*, utils::math::{linear_interpolate, point_in_polygon}};
 use super::{consts::*, data::*, perspective_painter::PerspectivePainter, utils::*};
 
 const GRID_TEXT_FONT_SCALE: f64 = 0.8;
@@ -220,7 +220,7 @@ impl SkyMapPainter {
         }
 
         if let Some(sky_map) = request.sky_map {
-            // Current constellation bounds
+            // Constellation bounds, the piece at the screen center gets highlighted
 
             if request.config.items_filter.contains(ItemsToShow::CONSTS) {
                 self.constellation_bounds.paint(&mut self.item_painter, sky_map, &ctx)?;
@@ -455,7 +455,7 @@ impl SkyMapPainter {
         ctx:     &PaintCtx,
     ) -> eyre::Result<()> {
         let constellations = sky_map.constellations();
-        // Two style buckets: common lines first, current constellation on top
+        // Two style buckets: common lines first, current piece on top
         for is_current in [false, true] {
             ctx.cairo.set_antialias(ctx.config.antialias());
             ctx.cairo.set_dash(&[], 0.0);
@@ -467,19 +467,21 @@ impl SkyMapPainter {
                 ctx.cairo.set_line_width(f64::max(ctx.screen.dpmm_x() * 0.5, 1.0));
             }
             let mut any = false;
-            for (id, constellation) in constellations {
-                if (Some(*id) == self.constellation_bounds.center_constellation_id) != is_current {
-                    continue;
-                }
-                for polyline in &constellation.lines {
-                    let Some(points) = self.item_painter.project_eq_polyline(polyline, ctx) else {
+            for (id, parts) in constellations {
+                for (part_idx, part) in parts.iter().enumerate() {
+                    if (Some((*id, part_idx)) == self.constellation_bounds.center_part) != is_current {
                         continue;
-                    };
-                    ctx.cairo.move_to(points[0].x, points[0].y);
-                    for pt in &points[1..] {
-                        ctx.cairo.line_to(pt.x, pt.y);
                     }
-                    any = true;
+                    for polyline in &part.lines {
+                        let Some(points) = self.item_painter.project_eq_polyline(polyline, ctx) else {
+                            continue;
+                        };
+                        ctx.cairo.move_to(points[0].x, points[0].y);
+                        for pt in &points[1..] {
+                            ctx.cairo.line_to(pt.x, pt.y);
+                        }
+                        any = true;
+                    }
                 }
             }
             if any {
@@ -499,18 +501,17 @@ impl SkyMapPainter {
         ctx.layout.set_font_description(Some(&font));
 
         let constellations = sky_map.constellations();
-        for (id, constellation) in constellations {
-            let all_ra = constellation.lines.iter().flat_map(|l| l.iter().map(|pt| pt.ra));
-            let all_dec = constellation.lines.iter().flat_map(|l| l.iter().map(|pt| pt.dec));
-            let avg_ra = angles_mean(all_ra);
-            let avg_dec = angles_mean(all_dec);
-            let painter = ConstellationNamePainter {
-                ra: avg_ra,
-                dec: avg_dec,
-                name: &constellation.name,
-                is_current: Some(*id) == self.constellation_bounds.center_constellation_id,
-            };
-            self.item_painter.paint_if_visible(&painter, ctx, false)?;
+        for (id, parts) in constellations {
+            for (part_idx, part) in parts.iter().enumerate() {
+                let Some(crd) = part.center() else { continue; };
+                let painter = ConstellationNamePainter {
+                    ra:          crd.ra,
+                    dec:         crd.dec,
+                    name:        &part.name,
+                    is_current:  Some((*id, part_idx)) == self.constellation_bounds.center_part,
+                };
+                self.item_painter.paint_if_visible(&painter, ctx, false)?;
+            }
         }
         Ok(())
     }
@@ -1080,10 +1081,10 @@ impl HorizonGlowPainter {
 struct ConstellationBoundsPainter {
     // Projected bounds polygons and their spans in it, reused per frame
     buf:   Vec<[f64; 2]>,
-    spans: Vec<(u8, u32, u32)>,
-    // Constellation whose bounds contain the screen center, found per frame
-    // and reused by the constellation lines and names painters
-    center_constellation_id: Option<u8>,
+    spans: Vec<(u8, usize, u32, u32)>,
+    // Piece whose bounds contain the screen center, found per frame and reused by the
+    // lines and names painters. Its index is a position in the map, valid within one frame
+    center_part: Option<(u8, usize)>,
 }
 
 impl ConstellationBoundsPainter {
@@ -1091,7 +1092,7 @@ impl ConstellationBoundsPainter {
         Self {
             buf:         Vec::new(),
             spans:       Vec::new(),
-            center_constellation_id: None,
+            center_part: None,
         }
     }
 
@@ -1105,23 +1106,25 @@ impl ConstellationBoundsPainter {
 
         // Project each bounds polygon once; the projection is reused for both
         // the screen center test and the batched painting
-        self.center_constellation_id = None;
+        self.center_part = None;
         self.buf.clear();
         self.spans.clear();
         let screen_center = [ctx.screen.center_x, ctx.screen.center_y];
-        for (id, constellation) in constellations {
-            for polygon in &constellation.bounds {
-                let Some(points) = item_painter.project_eq_polyline(polygon, ctx) else {
-                    continue;
-                };
-                let (start, len) = (self.buf.len(), points.len());
-                for pt in points {
-                    self.buf.push([pt.x, pt.y]);
-                }
-                self.spans.push((*id, start as u32, len as u32));
-                if self.center_constellation_id.is_none()
-                && point_in_polygon(&self.buf[start..start + len], screen_center) {
-                    self.center_constellation_id = Some(*id);
+        for (id, parts) in constellations {
+            for (part_idx, part) in parts.iter().enumerate() {
+                for polygon in &part.bounds {
+                    let Some(points) = item_painter.project_eq_polyline(polygon, ctx) else {
+                        continue;
+                    };
+                    let (start, len) = (self.buf.len(), points.len());
+                    for pt in points {
+                        self.buf.push([pt.x, pt.y]);
+                    }
+                    self.spans.push((*id, part_idx, start as u32, len as u32));
+                    if self.center_part.is_none()
+                    && point_in_polygon(&self.buf[start..start + len], screen_center) {
+                        self.center_part = Some((*id, part_idx));
+                    }
                 }
             }
         }
@@ -1136,8 +1139,8 @@ impl ConstellationBoundsPainter {
         ctx.cairo.set_dash(&[], 0.0);
         ctx.cairo.set_line_width(f64::max(ctx.screen.dpmm_x() * 0.5, 1.0));
         let mut any = false;
-        for &(id, start, len) in &self.spans {
-            if Some(id) == self.center_constellation_id {
+        for &(id, part_idx, start, len) in &self.spans {
+            if Some((id, part_idx)) == self.center_part {
                 continue;
             }
             self.add_polygon(ctx, start, len);
@@ -1147,13 +1150,13 @@ impl ConstellationBoundsPainter {
             ctx.cairo.stroke()?;
         }
 
-        // Current constellation polygons: fill and dashed stroke on top
-        if let Some(cur_id) = self.center_constellation_id {
+        // Current piece polygons: fill and dashed stroke on top
+        if let Some(cur_part) = self.center_part {
             ctx.cairo.set_fill_rule(gtk::cairo::FillRule::Winding);
             ctx.cairo.set_line_width(f64::max(ctx.screen.dpmm_x() * 0.7, 1.0));
             ctx.cairo.set_dash(&[6.0, 6.0], 0.0);
-            for &(id, start, len) in &self.spans {
-                if id != cur_id {
+            for &(id, part_idx, start, len) in &self.spans {
+                if (id, part_idx) != cur_part {
                     continue;
                 }
                 self.add_polygon(ctx, start, len);
