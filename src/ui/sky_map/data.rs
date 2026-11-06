@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use std::{collections::*, f64::consts::PI, fmt::Debug, io::{BufRead, Read}, path::Path};
+use rayon::prelude::*;
 use bitflags::bitflags;
 use bitstream_io::{BigEndian, BitReader};
 use serde::{Deserialize, Serialize};
@@ -288,19 +289,28 @@ impl Stars {
         }
     }
 
+    /// `max_mag` is exclusive, and there is no radius limit: the star may lie far from `crd`.
+    /// The returned angle is in radians
     pub fn get_nearest(&self, crd: &EqCoord, max_mag: f32) -> Option<(NamedStar, f64)> {
         let max_mag = ObjMagnitude::new(max_mag);
 
-        let nearest = self.zones.values()
-            .flat_map(|zone| &zone.stars)
-            .filter(|star| star.data.mag < max_mag)
-            .map(|star| (star, EqCoord::angle_between(&star.data.crd.to_eq(), crd)))
+        // Full scan is fine: a double click, not a paint loop. A 3x3 zone block (zones are
+        // 9x4.5 deg) would need a radius cap, which would break the contract above, plus
+        // pole and RA-wrap handling
+        let nearest = self.zones.par_iter()
+            .filter_map(|(_, zone)| zone
+                .stars.iter()
+                .filter(|star| star.data.mag < max_mag)
+                .map(|star| (star, EqCoord::angle_between(&star.data.crd.to_eq(), crd)))
+                .min_by(|(_, angle1), (_, angle2)| f64::total_cmp(angle1, angle2)))
             .min_by(|(_, angle1), (_, angle2)| f64::total_cmp(angle1, angle2));
 
-        let nearest_named = self.zones.values()
-            .flat_map(|zone| &zone.nstars)
-            .filter(|star| star.data.mag < max_mag)
-            .map(|star| (star, EqCoord::angle_between(&star.data.crd.to_eq(), crd)))
+        let nearest_named = self.zones.par_iter()
+            .filter_map(|(_, zone)| zone
+                .nstars.iter()
+                .filter(|star| star.data.mag < max_mag)
+                .map(|star| (star, EqCoord::angle_between(&star.data.crd.to_eq(), crd)))
+                .min_by(|(_, angle1), (_, angle2)| f64::total_cmp(angle1, angle2)))
             .min_by(|(_, angle1), (_, angle2)| f64::total_cmp(angle1, angle2));
 
         let star_to_named_star = |star: &Star| -> NamedStar {
