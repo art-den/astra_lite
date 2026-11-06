@@ -240,7 +240,7 @@ impl SkyMapPainter {
 
             let star_painter_params = self.star_paint_params(&ctx);
             if request.config.items_filter.contains(ItemsToShow::STARS) {
-                self.fill_visible_zones(&ctx);
+                self.fill_visible_zones(&ctx, request.utc_time);
 
                 self.paint_stars(
                     sky_map,
@@ -301,11 +301,13 @@ impl SkyMapPainter {
         Ok(())
     }
 
-    fn fill_visible_zones(&mut self, ctx: &PaintCtx) {
+    fn fill_visible_zones(&mut self, ctx: &PaintCtx, utc_time: &NaiveDateTime) {
         self.visible_zones.clear();
 
         let center_crd = ctx.view_point.crd.to_sphere_pt();
         let center_eq_crd = ctx.eq_sphere_cvt.sphere_to_eq(&center_crd);
+        // Zone keys are J2000, while `sphere_to_eq()` yields apparent-of-date coordinates
+        let center_eq_crd = EpochCvt::new(utc_time, &j2000_time()).convert_eq(&center_eq_crd);
         let center_zone_key = SkyZoneKey::from_coord(center_eq_crd.ra, center_eq_crd.dec);
         self.visible_zones.insert(center_zone_key);
         for ra_key in 0..SkyZoneKey::RA_COUNT {
