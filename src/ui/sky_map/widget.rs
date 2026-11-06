@@ -188,7 +188,7 @@ impl SkymapWidget {
 
         let sphere_pt = scr.screen_to_sphere(&Point2D {x, y}, vp.mag_factor);
         let Some(sphere_pt) = sphere_pt else { return; };
-        let cvt = SphereToScreenCvt::new(&HorizCoord { alt: 0.0, az: 0.0 });
+        let cvt = SphereToScreenCvt::new(&vp.crd);
         let pt = cvt.remove_viewpoint(&sphere_pt);
         let hcrd = HorizCoord::from_sphere_pt(&pt);
 
@@ -274,7 +274,7 @@ impl SkymapWidget {
         let mut vp = self.view_point.borrow_mut();
         let sphere_pt = scr.screen_to_sphere(&Point2D {x, y}, vp.mag_factor);
         let Some(sphere_pt) = sphere_pt else { return glib::Propagation::Stop; };
-        let cvt = SphereToScreenCvt::new(&HorizCoord { alt: 0.0, az: 0.0 });
+        let cvt = SphereToScreenCvt::new(&mpress.vp.crd);
         let pt = cvt.remove_viewpoint(&sphere_pt);
         let hcrd = HorizCoord::from_sphere_pt(&pt);
 
