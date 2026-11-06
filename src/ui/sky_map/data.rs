@@ -915,9 +915,9 @@ impl SkyMap {
 
         // stars count
 
-        let mut buf_usize = [0_u8; std::mem::size_of::<usize>()];
-        buffer.read_exact(&mut buf_usize)?;
-        let stars_count = usize::from_be_bytes(buf_usize);
+        let mut stars_count_buf = [0_u8; std::mem::size_of::<u64>()];
+        buffer.read_exact(&mut stars_count_buf)?;
+        let stars_count = u64::from_be_bytes(stars_count_buf) as usize;
 
         // stars data
 
