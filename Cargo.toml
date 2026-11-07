@@ -49,9 +49,7 @@ criterion = { version = "0.5", features = ["html_reports"] }
 unix-ancillary = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-#ascom-alpaca = { version = "1.0.0-beta.10", features = ["client", "camera", "telescope", "focuser", "filter_wheel"] }
-ascom-alpaca = { git = "https://github.com/RReverser/ascom-alpaca-rs.git", features = ["client", "camera", "telescope", "focuser", "filter_wheel"] }
-# ASCOM Classic (COM)
+ascom-alpaca = { version = "1.0.0-beta.10", features = ["client", "camera", "telescope", "focuser", "filter_wheel"] }
 ascom = { path = "./crates/ascom" }
 tokio = { version = "1", features = ["rt-multi-thread", "net"]}
 ndarray = "0.17"
