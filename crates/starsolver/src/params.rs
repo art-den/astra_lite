@@ -304,8 +304,8 @@ pub const UNIFORMIZE_BINS: f64 = 10.0;
 pub const REMOVELINES_LOGCUT: f64 = -100.0;
 
 /// Radius, degrees, of the `--ra/--dec` hint circle when `--radius` is omitted
-/// (`cli::SolveOptions::from_args`; a non-positive or non-finite radius is rejected
-/// there). The same circle gates three things: index selection
+/// (`cli::SolveOptions::from_args`; a non-positive, non-finite or above-180
+/// radius is rejected there). The same circle gates three things: index selection
 /// (`sweep::tile_in_hint` drops sub-region tiles that cannot overlap it), the
 /// matched stars (`Searcher::process_hit` rejects a hit with any quad star outside)
 /// and the finished solution's center (`sweep::RoundCapture`). Too small and a hint

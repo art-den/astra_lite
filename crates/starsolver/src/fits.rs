@@ -11,6 +11,10 @@ pub const BLOCK_SIZE: usize = 2880;
 /// Header card size, bytes.
 pub const CARD_SIZE: usize = 80;
 
+/// The FITS maximum number of BINTABLE columns (Standard 8.3.1). `NAXIS1`
+/// bounds a column loop only while `NAXIS2 >= 1`, so it cannot be the bound.
+const MAX_TFIELDS: usize = 999;
+
 /// Byte order of binary data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Endian {
@@ -515,6 +519,7 @@ impl Fits {
                 hdus.len(),
                 buf.len()
             );
+            // Safe without a check: `end <= buf.len()`, so this cannot overflow.
             let padded = end.div_ceil(BLOCK_SIZE) * BLOCK_SIZE;
             hdus.push(Hdu {
                 header,
@@ -554,7 +559,8 @@ impl Fits {
 
     /// First BINTABLE holding a column named `name` (any position, unlike
     /// `find_table`) as `(HDU index, 1-based column index)`, giving callers a
-    /// clearer error than "no such column".
+    /// clearer error than "no such column". At most `MAX_TFIELDS` columns of a
+    /// table are scanned, which is every column a conformant file can have.
     pub fn find_column(&self, name: &str) -> Option<(usize, usize)> {
         self.hdus.iter().enumerate().find_map(|(hdu, h)| {
             if !is_bintable(&h.header) {
@@ -562,10 +568,9 @@ impl Fits {
             }
             let nfields = h.header.get_i64("TFIELDS").unwrap_or(0);
             let nfields = usize::try_from(nfields).unwrap_or(0);
-            // Reject-biased bound mirroring `Table::new` (this is the reject path):
-            // every column takes >=1 row byte, so a hostile `TFIELDS` cannot spin this.
-            let row_len = usize::try_from(h.header.get_i64("NAXIS1").unwrap_or(0)).unwrap_or(0);
-            let nfields = usize::min(nfields, usize::max(row_len, 1));
+            // The standard's column maximum, not `NAXIS1`, bounds this scan: a
+            // zero-row table has an empty data area, so its row length is free.
+            let nfields = usize::min(nfields, MAX_TFIELDS);
             (1..=nfields)
                 .find(|i| h.header.get_str(&format!("TTYPE{i}")) == Some(name))
                 .map(|col| (hdu, col))
@@ -777,12 +782,14 @@ fn read_chunk<R: Read>(reader: &mut R, block: &mut [u8; BLOCK_SIZE]) -> Result<C
 
 /// Walks the HDU headers of a FITS stream, seeking over every data area.
 /// [`Fits::from_storage`] (also behind the test-only `Fits::from_bytes`) is its
-/// twin: the stop rule and header/data size math are shared, any change belongs
-/// to both. Generic over `Read + Seek` so tests can run it on a `Cursor`.
+/// twin: the stop rule and `data_size` are shared, so a change belongs to both,
+/// while each bounds the data area by what it can address, a seekable offset
+/// here and the file's length there. Generic over `Read + Seek` so tests can
+/// run it on a `Cursor`.
 fn scan_headers<R: Read + Seek>(reader: &mut R) -> Result<Vec<Header>> {
     let mut headers: Vec<Header> = Vec::new();
     let mut block = [0u8; BLOCK_SIZE];
-    // Byte offset of the block most recently read.
+    // Byte offset of the block most recently read; diagnostics only, never addressing.
     let mut off: u64 = 0;
     loop {
         match read_chunk(reader, &mut block)? {
@@ -819,11 +826,19 @@ fn scan_headers<R: Read + Seek>(reader: &mut R) -> Result<Vec<Header>> {
         // The END block is consumed whole, so data starts on the next block boundary.
         off += BLOCK_SIZE as u64;
         let len = data_size(&header).with_context(|| format!("HDU {} header", headers.len()))?;
-        let skip = (len as u64).div_ceil(BLOCK_SIZE as u64) * BLOCK_SIZE as u64;
+        // Rounding up must not wrap: a wrapped skip is always < BLOCK_SIZE, so it
+        // would resume the walk inside the data area instead of the next header.
+        let skip = (len as u64)
+            .checked_next_multiple_of(BLOCK_SIZE as u64)
+            .ok_or_else(|| anyhow::anyhow!("data area size overflow in HDU {}", headers.len()))?;
+        // Past `i64::MAX` the seek offset is negative, failing with a bare EINVAL.
+        let skip = i64::try_from(skip).map_err(|_| {
+            anyhow::anyhow!("data area in HDU {} is too large to skip", headers.len())
+        })?;
         reader
-            .seek(SeekFrom::Current(skip as i64))
+            .seek(SeekFrom::Current(skip))
             .with_context(|| format!("skipping the data of HDU {}", headers.len()))?;
-        off += skip;
+        off += skip as u64;
         headers.push(header);
     }
     Ok(headers)
@@ -1000,8 +1015,15 @@ impl<'a> Table<'a> {
             row_len != 0 || nrows == 0,
             "BINTABLE has zero-width rows but {nrows} of them"
         );
-        // Cheap, reject-biased pre-`with_capacity` bound: real columns are >=1
-        // byte, so TFIELDS <= row_len; the offset loop below enforces the exact
+        // Both bounds must precede `with_capacity`: a failed allocation aborts
+        // the process, which no `Result` can report. Only the standard limit
+        // bounds a zero-row table, whose empty data area bounds nothing.
+        ensure!(
+            nfields <= MAX_TFIELDS,
+            "TFIELDS {nfields} exceeds the FITS maximum of {MAX_TFIELDS}"
+        );
+        // Cheap, reject-biased bound: real columns are >=1 byte, so
+        // TFIELDS <= row_len; the offset loop below enforces the exact
         // sum(nbytes) <= row_len (zero-width TFORMs only make this stricter).
         ensure!(
             nfields <= usize::max(row_len, 1),
@@ -1430,6 +1452,77 @@ mod tests {
         assert_rejected(buf);
     }
 
+    /// The positive twin of [`rejects_negative_tfields`]: with zero rows the
+    /// standard's column limit is what keeps `Vec::with_capacity` from aborting.
+    #[test]
+    fn rejects_huge_tfields_with_zero_rows() {
+        for n in ["2000000000", "9223372036854775807"] {
+            let buf = make_fits(
+                &[
+                    &format!("NAXIS1  = {:>20}", n),
+                    "NAXIS2  =                    0",
+                    "PCOUNT  =                    0",
+                    "GCOUNT  =                    1",
+                    &format!("TFIELDS = {:>20}", n),
+                    "TFORM1  = '8D     '",
+                    "TTYPE1  = 'BLOB    '",
+                ],
+                &[],
+            );
+            let fits = Fits::from_bytes(buf).unwrap();
+            // `{:#}` renders the cause chain, where the gate message sits.
+            let err = format!("{:#}", fits.table_by_ttype("BLOB").unwrap_err());
+            assert!(err.contains("FITS maximum"), "got: {err}");
+        }
+    }
+
+    /// A zero-row table gives `find_column` no row-length bound, so without the
+    /// standard limit this call spins for as long as `TFIELDS` says.
+    #[test]
+    fn find_column_stops_at_the_standard_column_limit() {
+        let buf = make_fits(
+            &[
+                "NAXIS1  =           2000000000",
+                "NAXIS2  =                    0",
+                "PCOUNT  =                    0",
+                "GCOUNT  =                    1",
+                "TFIELDS =           2000000000",
+                "TFORM1  = '8D     '",
+                "TTYPE1  = 'NOTX    '",
+            ],
+            &[],
+        );
+        let fits = Fits::from_bytes(buf).unwrap();
+        assert_eq!(fits.find_column("X"), None);
+        // A real column below the limit is still found in the same table.
+        assert_eq!(fits.find_column("NOTX"), Some((1, 1)));
+    }
+
+    /// The scan bound is exactly the standard's column maximum, and never the
+    /// row length: column 999 must be reachable, and so must one past `NAXIS1`.
+    #[test]
+    fn find_column_scans_beyond_the_row_length() {
+        for (tfields, col, want) in [
+            ("1000", "500", Some((1, 500))),
+            ("999", "999", Some((1, 999))),
+        ] {
+            let buf = make_fits(
+                &[
+                    "NAXIS1  =                    8",
+                    "NAXIS2  =                    1",
+                    "PCOUNT  =                    0",
+                    "GCOUNT  =                    1",
+                    &format!("TFIELDS = {:>20}", tfields),
+                    // An 8-character keyword leaves no room for the usual padding.
+                    &format!("TTYPE{col}= 'X       '"),
+                ],
+                &[0u8; 8],
+            );
+            let fits = Fits::from_bytes(buf).unwrap();
+            assert_eq!(fits.find_column("X"), want, "TFIELDS {tfields}");
+        }
+    }
+
     /// A BINTABLE must declare `NAXIS == 2`: 0 or 1 lets a negative `NAXIS2`
     /// slip past `data_size`'s per-axis checks into an unchecked cast.
     #[test]
@@ -1619,6 +1712,120 @@ mod tests {
         assert_eq!(headers.table_names(), full.table_names());
         assert!(headers.header_by_ttype("quads").is_ok());
         assert!(headers.header_by_ttype("stars").is_err());
+    }
+
+    /// Wrapping made the headers-only reader seek 704 bytes instead of ~`u64::MAX`
+    /// and lose the table after the primary; both readers must refuse the file.
+    #[test]
+    fn header_only_reader_rejects_an_unskippable_data_area() {
+        for (cards, want, want_full) in [
+            // 8 * NAXIS1 is u64::MAX - 7, so padding to a block overflows u64;
+            // here the two readers refuse in the same words.
+            (
+                [
+                    "BITPIX  =                   64",
+                    "NAXIS   =                    1",
+                    "NAXIS1  =    2305843009213693951",
+                ]
+                .as_slice(),
+                "data area size overflow in HDU 0",
+                "data area size overflow in HDU 0",
+            ),
+            // Representable, but past i64::MAX once padded. `Fits` refuses it for
+            // its own reason: the bytes cannot exist in the buffer.
+            (
+                [
+                    "BITPIX  =                    8",
+                    "NAXIS   =                    1",
+                    "NAXIS1  =    9223372036854775807",
+                ]
+                .as_slice(),
+                "data area in HDU 0 is too large to skip",
+                "runs past the end of file",
+            ),
+        ] {
+            let mut primary = vec!["SIMPLE  =                    T"];
+            primary.extend_from_slice(cards);
+            primary.extend_from_slice(&["ENDIAN  = '04:03:02:01'", "AN_FILE = 'QUAD'"]);
+            let mut bytes = hdu_block(&primary);
+            bytes.extend_from_slice(&hdu_block(&[
+                "XTENSION= 'BINTABLE'",
+                "BITPIX  =                    8",
+                "NAXIS   =                    2",
+                "NAXIS1  =                    4",
+                "NAXIS2  =                    1",
+                "TFIELDS =                    1",
+                "TFORM1  = '4A'",
+                "TTYPE1  = 'quads'",
+            ]));
+            bytes.resize(3 * BLOCK_SIZE, 0);
+
+            let full = format!(
+                "{:#}",
+                Fits::from_bytes(bytes.clone())
+                    .err()
+                    .unwrap_or_else(|| panic!("whole-file reader accepted {cards:?}"))
+            );
+            assert!(full.contains(want_full), "got: {full}");
+            let err = format!(
+                "{:#}",
+                FitsHeaders::from_bytes(bytes)
+                    .err()
+                    .unwrap_or_else(|| panic!("headers-only reader accepted {cards:?}"))
+            );
+            assert!(err.contains(want), "got: {err}");
+        }
+    }
+
+    /// The guards bound absurd areas only: an area that is not a whole number of
+    /// blocks must still land the walk exactly on the next HDU.
+    #[test]
+    fn header_only_reader_resumes_after_a_partial_block_area() {
+        let mut bytes = hdu_block(&[
+            "SIMPLE  =                    T",
+            "BITPIX  =                    8",
+            "NAXIS   =                    1",
+            "NAXIS1  =               100000",
+        ]);
+        // 100000 bytes pad up to 35 blocks, so the table sits off a round offset.
+        bytes.resize(bytes.len() + 35 * BLOCK_SIZE, 0);
+        bytes.extend_from_slice(&hdu_block(&[
+            "XTENSION= 'BINTABLE'",
+            "BITPIX  =                    8",
+            "NAXIS   =                    2",
+            "NAXIS1  =                    4",
+            "NAXIS2  =                    1",
+            "TFIELDS =                    1",
+            "TFORM1  = '4A'",
+            "TTYPE1  = 'quads'",
+        ]));
+        // Room for the table's own 4-byte data area, so both readers can take it.
+        bytes.resize(38 * BLOCK_SIZE, 0);
+
+        let headers =
+            FitsHeaders::from_bytes(bytes.clone()).expect("a legal area must be skippable");
+        assert_eq!(headers.table_names(), vec!["quads"]);
+        let full = Fits::from_bytes(bytes).expect("every declared byte is present");
+        assert_eq!(full.table_names(), headers.table_names());
+    }
+
+    /// The bound is exactly the seekable range: the largest padded area that fits
+    /// an `i64` offset must be accepted, and one block more must not be.
+    #[test]
+    fn header_only_reader_skips_to_the_last_seekable_offset() {
+        for (naxis1, want_ok) in [
+            ("9223372036854774720", true),
+            ("9223372036854774721", false),
+        ] {
+            let bytes = hdu_block(&[
+                "SIMPLE  =                    T",
+                "BITPIX  =                    8",
+                "NAXIS   =                    1",
+                &format!("NAXIS1  = {:>20}", naxis1),
+            ]);
+            let read = FitsHeaders::from_bytes(bytes).map(|h| h.table_names().len());
+            assert_eq!(read.is_ok(), want_ok, "NAXIS1 {naxis1}: {read:?}");
+        }
     }
 
     /// Scanning a directory must not read data: a header declaring a gigabyte is

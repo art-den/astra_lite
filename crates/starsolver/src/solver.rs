@@ -47,7 +47,9 @@ pub enum Flow {
 /// The `--ra/--dec/--radius` position hint: a circle on the sky (`--radius`
 /// falls back to `params::DEFAULT_RADECS_RADIUS_DEG`); the single source of the
 /// chord²-vs-`deg2distsq` test behind the pre-fit solver-side gate and the
-/// post-fit check of a finished solution.
+/// post-fit check of a finished solution. `cli` validates `radius_deg` to
+/// `(0, 180]`: `deg2distsq` is not monotone past 180 deg, so a larger radius
+/// would silently narrow the circle.
 ///
 /// [`contains`](Self::contains) is boundary-inclusive and the two sites that run
 /// this test differ on NaN deliberately (see their docs). No `Eq`/`Hash` (the
@@ -67,6 +69,10 @@ impl PositionHint {
     /// NaN star distance.
     #[must_use]
     pub fn precompute(&self) -> ([f64; 3], f64) {
+        debug_assert!(
+            self.radius_deg <= 180.0,
+            "a radius above 180 deg silently narrows the circle (chord^2 is not monotone)"
+        );
         (
             radec_to_xyz(self.ra_deg, self.dec_deg),
             deg2distsq(self.radius_deg),
@@ -83,6 +89,10 @@ impl PositionHint {
     #[must_use]
     #[allow(clippy::neg_cmp_op_on_partial_ord)]
     pub fn contains(&self, ra_deg: f64, dec_deg: f64) -> bool {
+        debug_assert!(
+            self.radius_deg <= 180.0,
+            "a radius above 180 deg silently narrows the circle (chord^2 is not monotone)"
+        );
         !(distsq(
             &radec_to_xyz(ra_deg, dec_deg),
             &radec_to_xyz(self.ra_deg, self.dec_deg),

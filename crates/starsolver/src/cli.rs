@@ -195,7 +195,7 @@ pub struct Args {
     )]
     dec: Option<String>,
 
-    /// Search radius around --ra/--dec, degrees.
+    /// Search radius around --ra/--dec, degrees (at most 180).
     #[arg(short = '5', long = "radius", value_name = "DEG")]
     radius: Option<f64>,
 
@@ -299,9 +299,11 @@ impl SolveOptions {
             _ => bail!("--ra and --dec must be given together"),
         };
         if let Some(h) = radecs {
+            // Past 180 deg the chord^2 metric is not monotone, so a larger
+            // radius would silently NARROW the hint circle instead of widening it.
             ensure!(
-                h.radius_deg.is_finite() && h.radius_deg > 0.0,
-                "--radius must be positive and finite"
+                h.radius_deg.is_finite() && h.radius_deg > 0.0 && h.radius_deg <= 180.0,
+                "--radius must be positive, finite and at most 180 degrees"
             );
         }
 
@@ -545,6 +547,7 @@ mod tests {
         assert!(parse_options(&["--scale-high", "inf"]).is_err());
         assert!(parse_options(&["--scale-low", "nan"]).is_err());
         assert!(parse_options(&["--ra", "10", "--dec", "5", "--radius", "inf"]).is_err());
+        assert!(parse_options(&["--ra", "10", "--dec", "5", "--radius", "nan"]).is_err());
     }
 
     /// A negative hint may be a separate token (`-3 -4 -4 -60`), sexagesimal
@@ -576,6 +579,9 @@ mod tests {
         assert!(parse_options(&["--radius", "5"]).is_err());
         // A radius of 0 is rejected, but a default one is filled in.
         assert!(parse_options(&["--ra", "10", "--dec", "5", "--radius", "0"]).is_err());
+        // Above 180 deg the circle would silently narrow again; 180 itself is valid.
+        assert!(parse_options(&["--ra", "10", "--dec", "5", "--radius", "181"]).is_err());
+        assert!(parse_options(&["--ra", "10", "--dec", "5", "--radius", "180"]).is_ok());
         let opt = parse_options(&["--ra", "10", "--dec", "5"]).unwrap();
         let h = opt.radecs.unwrap();
         assert_eq!((h.ra_deg, h.dec_deg), (10.0, 5.0));
