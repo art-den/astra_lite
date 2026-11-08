@@ -166,7 +166,9 @@ pub fn draw_histogram(
     }
 
     let total_max_v = hist_chans.iter()
-        .filter_map(|v| v.map(|v| (v.count, v.freq.iter().max())))
+        // empty channels must not reach the `cnt` divisor below
+        .filter_map(|v| v.filter(|v| !v.is_empty()))
+        .map(|v| (v.count, v.freq.iter().max()))
         .map(|(cnt, v)| *v.unwrap_or(&0) as u64 * max_count as u64 / cnt as u64)
         .max()
         .unwrap_or(0);
@@ -179,6 +181,9 @@ pub fn draw_histogram(
 
         let paint_channel = |chan: &Option<HistogramChan>, r, g, b, a| -> eyre::Result<()> {
             let Some(chan) = chan.as_ref() else { return Ok(()); };
+            if chan.is_empty() {
+                return Ok(());
+            }
             let k = max_count as f64 / chan.count as f64;
             let max_x = hist.max as f64;
             cr.set_source_rgba(r, g, b, a);

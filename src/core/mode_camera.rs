@@ -1083,7 +1083,8 @@ impl TakingPicturesMode {
             if let Some(offset_calc) = &mut self.cam_offset_calc => {
                 let hist = self.raw_histogram.read().unwrap();
                 let chan = if hist.g.is_some() { &hist.g } else { &hist.l };
-                if let Some(chan) = chan {
+                // an empty channel would contribute median 65535 with std_dev 0, which wins the min-diff search below
+                if let Some(chan) = chan.as_ref().filter(|c| !c.is_empty()) {
                     if offset_calc.step % 2 == 0 {
                         offset_calc.low_values.push((chan.median(), chan.std_dev));
                     } else {

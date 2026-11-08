@@ -6,6 +6,7 @@ use super::{raw::*, image::*};
 pub struct HistogramChan {
     pub mean:    f32,
     pub std_dev: f32,
+    /// Sum of the `freq` bins; 0 means the channel holds no data even when it is `Some(..)`
     pub count:   usize,
     pub freq:    Vec<u32>,
 }
@@ -20,13 +21,24 @@ impl HistogramChan {
         }
     }
 
+    /// No samples: the moments are placeholders and the accessors return the `u16::MAX` sentinel
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    /// Replaces all fields, so an existing instance may be reused for the next frame
     fn take_from_freq(&mut self, freq: Vec<u32>, max_value: u16) {
         self.freq = freq;
         self.freq.resize(max_value as usize + 1, 0);
         let total_cnt = self.freq.iter().sum::<u32>() as usize;
+        self.count = total_cnt;
+        if total_cnt == 0 {
+            self.mean = 0.0;
+            self.std_dev = 0.0;
+            return;
+        }
         // u64: usize wraps on 32-bit targets once samples*mean > 2^32; total_cnt is a count, it fits
         let total_sum = self.freq.iter().enumerate().map(|(i, v)| i as u64 * *v as u64).sum::<u64>();
-        self.count = total_cnt;
         let mean = total_sum as f64 / total_cnt as f64;
         self.mean = mean as f32;
         let mut sum = 0_f64;
@@ -229,5 +241,39 @@ impl TmpFreqValues {
 
     fn append(&mut self, other: &TmpFreqValues) {
         for (s, d) in izip!(&other.0, &mut self.0) { *d += *s; }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_freq_yields_zero_moments() {
+        let mut chan = HistogramChan::new();
+        chan.take_from_freq(vec![0; 1024], 255);
+        assert!(chan.is_empty());
+        assert_eq!((chan.mean, chan.std_dev), (0.0, 0.0));
+        assert_eq!(chan.freq.len(), 256);
+    }
+
+    #[test]
+    fn reuse_does_not_keep_stale_moments() {
+        let mut chan = HistogramChan::new();
+        chan.take_from_freq(vec![0, 3, 5], 2);
+        assert!(!chan.is_empty());
+        assert!(chan.std_dev > 0.0);
+        chan.take_from_freq(vec![0; 4], 3);
+        assert!(chan.is_empty());
+        assert_eq!((chan.mean, chan.std_dev), (0.0, 0.0));
+    }
+
+    // Characterization: the sentinel is still u16::MAX; revisit the consumers when it changes
+    #[test]
+    fn empty_channel_accessors_return_the_sentinel() {
+        let mut chan = HistogramChan::new();
+        chan.take_from_freq(vec![0; 8], 7);
+        assert_eq!(chan.median(), u16::MAX);
+        assert_eq!(chan.get_percentile(95.0), u16::MAX);
     }
 }
