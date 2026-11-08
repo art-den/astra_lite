@@ -169,6 +169,9 @@ impl<T: Copy + Default> ImageLayer<T> {
     }
 }
 
+/// Below this side length the neighbour estimator has too few samples (23 at 42 px, 2 needed)
+const MIN_SIDE_FOR_NEIGHBOUR_NOISE: usize = 42;
+
 impl ImageLayer<u16> {
     pub fn iter_div2(&self, rect: Option<(usize, usize, usize, usize)>) -> DivNLIterator<'_, 2> {
         DivNLIterator::new(self, rect)
@@ -182,9 +185,36 @@ impl ImageLayer<u16> {
         DivNLIterator::new(self, rect)
     }
 
+    /// Noise in DN: neighbour diff RMS, plain std dev for small images, 0.0 for an empty layer
     pub fn calc_noise(&self) -> f32 {
-        let mut diffs = Vec::with_capacity(self.data.len()/10);
-        // To roughly estimate the noise level, we can take every 7th tuple of 10 pixels
+        if self.data.is_empty() {
+            0.0
+        } else if usize::min(self.width, self.height) < MIN_SIDE_FOR_NEIGHBOUR_NOISE {
+            self.calc_std_dev()
+        } else {
+            self.calc_noise_80_percentile()
+        }
+    }
+
+    /// Plain standard deviation: the fallback when there is too little data for
+    /// the neighbour based estimator. Includes the signal, so it is only an upper bound.
+    fn calc_std_dev(&self) -> f32 {
+        let n = self.data.len();
+        if n < 2 {
+            return 0.0;
+        }
+        let mean = self.data.iter().map(|v| *v as f64).sum::<f64>() / n as f64;
+        let var = self.data.iter()
+            .map(|v| f64::powi(*v as f64 - mean, 2))
+            .sum::<f64>() / n as f64;
+        f64::sqrt(var) as f32
+    }
+
+    /// RMS of the lowest 80 % of |centre - mean(10 neighbours)|: stars and hot pixels land in the
+    /// discarded top 20 %. Needs at least 2 samples, which the caller's size threshold guarantees
+    fn calc_noise_80_percentile(&self) -> f32 {
+        let mut diffs = Vec::with_capacity(self.data.len()/77);
+        // Every 7th tuple of 11 contiguous pixels; `m` is the 6th, the others are its neighbours
         for (v1, v2, v3, v4, v5, m, v6, v7, v8, v9, v10)
         in self.data.iter().tuples().step_by(7) {
             let avg = (
@@ -209,6 +239,9 @@ impl ImageLayer<u16> {
     }
 
     pub fn calc_background(&self, mt: bool) -> u16 {
+        if self.data.is_empty() {
+            return 0;
+        }
         let sum: u64 = if mt {
             self.data.par_iter().map(|v| *v as u64).sum()
         } else {
@@ -1236,5 +1269,65 @@ mod tests {
         check_l_rows_in_bounds::<2>(&img.l, Some((10, 10, 2, 2)));
         check_l_rows_in_bounds::<2>(&img.l, Some((2, 2, 1, 2)));
         check_rgb_rows_in_bounds::<2>(&img, Some((2, 2, 1, 2)));
+    }
+
+    #[test]
+    fn test_calc_noise_small_images() {
+        // A side below MIN_SIDE_FOR_NEIGHBOUR_NOISE takes the std dev fallback:
+        // neither a panic nor NaN
+        assert_eq!(Image::new_empty().l.calc_noise(), 0.0);
+        assert_eq!(ImageLayer::<u16>::new_with_size(1, 1).calc_noise(), 0.0);
+        assert_eq!(ImageLayer::<u16>::new_with_size(3, 3).calc_noise(), 0.0);
+        assert_eq!(ImageLayer::<u16>::new_with_size(9, 200).calc_noise(), 0.0);
+        // 50 px used to give max_pos == 0 and hence sqrt(0.0/0.0)
+        assert_eq!(ImageLayer::<u16>::new_with_size(5, 10).calc_noise(), 0.0);
+        // a zero side holds no pixels
+        assert_eq!(ImageLayer::<u16>::new_with_size(100, 0).calc_noise(), 0.0);
+    }
+
+    #[test]
+    fn test_calc_noise_std_dev_fallback() {
+        // 41x40 is below the limit; half of the pixels 100 and half 200 => mean 150, sigma 50
+        let mut layer = ImageLayer::<u16>::new_with_size(41, 40);
+        for (i, v) in layer.data.iter_mut().enumerate() {
+            *v = if i % 2 == 0 { 100 } else { 200 };
+        }
+        assert!((layer.calc_noise() - 50.0).abs() < 1e-4);
+
+        // The threshold applies to the shorter side, so both 41x42 and 42x41 keep the std dev,
+        // which a hot pixel dominates, while the estimator would have rejected it
+        for (w, h) in [(41usize, 42), (42, 41)] {
+            let mut layer = ImageLayer::<u16>::new_with_size(w, h);
+            layer.data[5] = 65535;
+            assert!(layer.calc_noise() > 1000.0);
+        }
+    }
+
+    #[test]
+    fn test_calc_noise_neighbour_estimator_above_the_limit() {
+        // 42x42 is the smallest size that takes the neighbour estimator path
+        let mut layer = ImageLayer::<u16>::new_with_size(
+            MIN_SIDE_FOR_NEIGHBOUR_NOISE, MIN_SIDE_FOR_NEIGHBOUR_NOISE);
+        assert_eq!(layer.calc_noise(), 0.0);
+
+        // one hot pixel (the 'm' of the first sampled tuple) is rejected as an outlier,
+        // while a plain std dev is dominated by it
+        layer.data[5] = 65535;
+        assert_eq!(layer.calc_noise(), 0.0);
+        assert!(layer.calc_std_dev() > 1000.0);
+
+        // Every tuple centre is 7 DN above the mean of its neighbours => the RMS is exactly 7
+        let mut layer = ImageLayer::<u16>::new_with_size(64, 64);
+        layer.data.fill(1000);
+        for i in (5..layer.data.len()).step_by(11) {
+            layer.data[i] = 1007;
+        }
+        assert_eq!(layer.calc_noise(), 7.0);
+    }
+
+    #[test]
+    fn test_calc_background_empty() {
+        assert_eq!(ImageLayer::<u16>::new_empty().calc_background(false), 0);
+        assert_eq!(ImageLayer::<u16>::new_empty().calc_background(true), 0);
     }
 }
