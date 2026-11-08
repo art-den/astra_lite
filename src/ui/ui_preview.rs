@@ -41,6 +41,7 @@ pub fn init_ui(
         calibr_history:     RefCell::new(Vec::new()),
         flat_info:          RefCell::new(FlatImageInfo::default()),
         preview:            RefCell::new(None),
+        preview_cache:      RefCell::new(PreviewCache::default()),
         is_color_image:     Cell::new(false),
         levels_locked:      Cell::new(false),
         gamma_mark:         Cell::new(false),
@@ -315,10 +316,6 @@ struct PreviewImageData {
     // differ from the current ones
     pixbuf: gtk::gdk_pixbuf::Pixbuf,
 
-    // Gamma tables for the rgb conversion; reused until the
-    // levels/gamma/WB change (not recreated on every scroll)
-    tables: GammaTables,
-
     // Top-left and bottom-right corners of PreviewImageData::image
     // in reduced image pixels
     left:   isize,
@@ -352,6 +349,8 @@ struct PreviewUi {
     calibr_history:     RefCell<Vec<CalibrHistoryItem>>,
     flat_info:          RefCell<FlatImageInfo>,
     preview:            RefCell<Option<PreviewImageData>>,
+    // Gamma tables shared by the full-frame and the part preview paths
+    preview_cache:      RefCell<PreviewCache>,
     is_color_image:     Cell<bool>,
     levels_locked:      Cell<bool>,
     // Last mark state applied to scl_gamma: marks are updated only on a change
@@ -1168,7 +1167,8 @@ impl PreviewUi {
                 &image,
                 &hist,
                 &pp,
-                stars.as_ref().map(|s| &s.items)
+                stars.as_ref().map(|s| &s.items),
+                &mut self.preview_cache.borrow_mut(),
             ) else {
                 return;
             };
@@ -1283,11 +1283,11 @@ impl PreviewUi {
 
         if image_stale || options_changed || stars_changed {
             let tmr = TimeLogger::start();
-            // Take the prev data out so the part image buffers and the gamma
-            // tables can be reused instead of allocating fresh ones
-            let (mut part_image, tables) = match preview.take() {
-                Some(p) => (p.image, Some(p.tables)),
-                None    => (Image::new_empty(), None),
+            // Take the prev part image out so its buffers are reused instead of
+            // allocating fresh ones (the gamma tables live in self.preview_cache)
+            let mut part_image = match preview.take() {
+                Some(p) => p.image,
+                None    => Image::new_empty(),
             };
             if image_stale {
                 // rect for build_part_image is in original image pixels
@@ -1305,7 +1305,7 @@ impl PreviewUi {
 
             let part_width = (right - left) as usize;
             let part_height = (bottom - top) as usize;
-            let Some((rgb_bytes, tables)) = get_preview_part_rgb_bytes(
+            let Some(rgb_bytes) = get_preview_part_rgb_bytes(
                 &part_image,
                 &image,
                 &hist,
@@ -1313,7 +1313,7 @@ impl PreviewUi {
                 reduct_ratio,
                 (left as usize, top as usize),
                 stars.as_ref().map(|s| &s.items),
-                tables,
+                &mut self.preview_cache.borrow_mut(),
             ) else {
                 return;
             };
@@ -1347,7 +1347,6 @@ impl PreviewUi {
             *preview = Some(PreviewImageData {
                 image:  part_image,
                 pixbuf,
-                tables,
                 left, top, right, bottom,
                 reduct_ratio,
                 options,
@@ -1483,7 +1482,9 @@ impl PreviewUi {
             let image = image.read().unwrap();
             let hist = hist.read().unwrap();
             let preview_params = preview_options.preview_params();
-            let rgb_data = get_preview_rgb_data(&image, &hist, &preview_params, None);
+            let rgb_data = get_preview_rgb_data(
+                &image, &hist, &preview_params, None, &mut self.preview_cache.borrow_mut()
+            );
             let Some(rgb_data) = rgb_data else { eyre::bail!("wrong RGB data"); };
             let bytes = glib::Bytes::from_owned(rgb_data.bytes);
             let pixbuf = gtk::gdk_pixbuf::Pixbuf::from_bytes(

@@ -128,11 +128,15 @@ pub struct PreviewRgbData {
     pub sensor_name:    String, // sensor for auto WB
 }
 
+/// RGB data of a whole image for the preview: used by `PreviewScale::CenterAndCorners`,
+/// the "save preview as JPEG" export and the plate solve preview. Returns `None` for an
+/// empty image or an empty histogram. `cache` must live between calls to be of any use
 pub fn get_preview_rgb_data(
     image:  &Image,
     hist:   &Histogram,
     params: &PreviewParams,
     stars:  Option<&StarItems>,
+    cache:  &mut PreviewCache,
 ) -> Option<PreviewRgbData> {
     if (hist.l.is_none() && hist.b.is_none()) || image.is_empty() {
         return None;
@@ -141,30 +145,13 @@ pub fn get_preview_rgb_data(
     let reduct_ratio = params.calc_reduct_ratio(image.width(), image.height());
     log::debug!("preview reduct_ratio = {}", reduct_ratio);
 
-    let levels = calc_levels(
-        hist,
-        params,
-        image.max_value() as f64,
-        image.levels_locked()
-    );
-    log::debug!("preview levels = {:?}", levels);
-
-    let (wb, sensor) = get_wb_and_sensor(
-        &params.wb,
-        image.raw_info
-            .as_ref()
-            .map(|info| info.camera.as_str())
-            .unwrap_or_default(),
-        image.levels_locked()
-    );
-    log::debug!("preview wb and sensor = {:?} {}", wb, sensor);
+    let (tables, sensor) = prepare_tables(hist, params, image, cache);
 
     let (mut bytes, width, height) = to_grb_bytes(
         image,
         params,
-        &levels,
-        reduct_ratio,
-        &wb
+        tables,
+        reduct_ratio
     );
 
     if params.stars && let Some(stars) = stars
@@ -232,8 +219,7 @@ fn show_part_stars(
 /// `part` is the part image, `src` is the full source image (its color mode and
 /// camera are used), `hist` is the FULL image histogram: display levels must not
 /// depend on the visible part. `part_origin` is the part's top-left corner in
-/// reduced image pixels. `tables` are the gamma tables cached from the prev
-/// call: they are reused when still valid and returned to be cached again.
+/// reduced image pixels. `cache` keeps the gamma tables between calls.
 pub fn get_preview_part_rgb_bytes(
     part:         &Image,
     src:          &Image,
@@ -242,29 +228,13 @@ pub fn get_preview_part_rgb_bytes(
     reduct_ratio: usize,
     part_origin:  (usize, usize),
     stars:        Option<&StarItems>,
-    tables:       Option<GammaTables>,
-) -> Option<(Vec<u8>, GammaTables)> {
+    cache:        &mut PreviewCache,
+) -> Option<Vec<u8>> {
     if part.is_empty() || (hist.l.is_none() && hist.b.is_none()) {
         return None;
     }
 
-    let levels = calc_levels(
-        hist,
-        params,
-        src.max_value() as f64,
-        src.levels_locked()
-    );
-
-    let (wb, _) = get_wb_and_sensor(
-        &params.wb,
-        src.raw_info
-            .as_ref()
-            .map(|info| info.camera.as_str())
-            .unwrap_or_default(),
-        src.levels_locked()
-    );
-
-    let tables = GammaTables::new_or_keep(tables, &levels, params.gamma, wb);
+    let (tables, _) = prepare_tables(hist, params, src, cache);
 
     // In single-channel color modes the part holds only the selected layer,
     // so take the size from that layer (Image::width/height fall back l -> r)
@@ -291,7 +261,7 @@ pub fn get_preview_part_rgb_bytes(
         show_part_stars(stars, &mut rgb_bytes, width, height, reduct_ratio, part_origin.0, part_origin.1);
     }
 
-    Some((rgb_bytes, tables))
+    Some(rgb_bytes)
 }
 
 #[derive(Debug, Default, PartialEq, Clone)]
@@ -303,9 +273,10 @@ struct PreviewLevels {
 }
 
 /// Gamma correction tables for the preview rgb conversion.
-/// Rebuilt only when the display levels or gamma/wb change;
-/// the old vecs' capacity is reused on rebuild
-pub struct GammaTables {
+/// Owned by `PreviewCache`: rebuilt only when the display levels or gamma/wb
+/// change, and the old vecs' capacity is reused on rebuild
+#[derive(Default)]
+struct GammaTables {
     r:      Vec<u8>,
     g:      Vec<u8>,
     b:      Vec<u8>,
@@ -318,29 +289,18 @@ pub struct GammaTables {
 impl GammaTables {
     /// Reuses `old` when it was built from the same levels/gamma/wb,
     /// otherwise rebuilds the tables in place (reusing the vecs' capacity)
-    fn new_or_keep(old: Option<Self>, levels: &PreviewLevels, gamma: f64, wb: [f64; 3]) -> Self {
-        match old {
-            Some(t) if t.levels == *levels && t.gamma == gamma && t.wb == wb => t,
-            Some(mut t) => {
-                Self::fill_all_tables(&mut t, levels, gamma, wb);
-                t
-            }
-            None => {
-                let mut t = Self {
-                    r: Vec::new(),
-                    g: Vec::new(),
-                    b: Vec::new(),
-                    l: Vec::new(),
-                    levels: PreviewLevels::default(),
-                    gamma:  1.0,
-                    wb:     [1.0; 3],
-                };
-                Self::fill_all_tables(&mut t, levels, gamma, wb);
-                t
-            }
+    fn new_or_keep<'a>(old: &'a mut Option<Self>, levels: &PreviewLevels, gamma: f64, wb: [f64; 3]) -> &'a mut Self {
+        let is_new = old.is_none();
+        let t = old.get_or_insert_with(Self::default);
+        if is_new || t.levels != *levels || t.gamma != gamma || t.wb != wb {
+            Self::fill_all_tables(t, levels, gamma, wb);
         }
+        t
     }
 
+    /// Everything `fill_table()` gets its values from: the key compared in
+    /// `new_or_keep()` must cover all of it, or the cache serves tables built
+    /// from other parameters
     fn fill_all_tables(tables: &mut Self, levels: &PreviewLevels, gamma: f64, wb: [f64; 3]) {
         Self::fill_table(&mut tables.r, levels.r.dark, levels.r.light, gamma, wb[0]);
         Self::fill_table(&mut tables.g, levels.g.dark, levels.g.light, gamma, wb[1]);
@@ -370,6 +330,45 @@ impl GammaTables {
             table.push(table_v as u8);
         }
     }
+}
+
+/// Reusable state of the preview rgb conversion. Both entry points
+/// (`get_preview_rgb_data`, `get_preview_part_rgb_bytes`) take it by `&mut`,
+/// so a caller cannot skip the gamma table cache by accident
+#[derive(Default)]
+pub struct PreviewCache {
+    tables: Option<GammaTables>,
+}
+
+impl PreviewCache {
+    /// Gamma tables for the given levels/gamma/wb, rebuilt only when they changed
+    fn tables(&mut self, levels: &PreviewLevels, gamma: f64, wb: [f64; 3]) -> &mut GammaTables {
+        GammaTables::new_or_keep(&mut self.tables, levels, gamma, wb)
+    }
+}
+
+/// What the gamma tables are built from: display levels taken from the FULL image
+/// histogram, WB taken from the source camera; both feed the `cache` key
+fn prepare_tables<'a>(
+    hist:   &Histogram,
+    params: &PreviewParams,
+    src:    &Image,
+    cache:  &'a mut PreviewCache,
+) -> (&'a mut GammaTables, String) {
+    let levels = calc_levels(hist, params, src.max_value() as f64, src.levels_locked());
+    log::debug!("preview levels = {:?}", levels);
+
+    let (wb, sensor) = get_wb_and_sensor(
+        &params.wb,
+        src.raw_info
+            .as_ref()
+            .map(|info| info.camera.as_str())
+            .unwrap_or_default(),
+        src.levels_locked()
+    );
+    log::debug!("preview wb and sensor = {:?} {}", wb, sensor);
+
+    (cache.tables(&levels, params.gamma, wb), sensor)
 }
 
 fn calc_levels(
@@ -475,11 +474,9 @@ fn get_wb_and_sensor(
 fn to_grb_bytes(
     image:        &Image,
     params:       &PreviewParams,
-    levels:       &PreviewLevels,
+    tables:       &GammaTables,
     reduct_ratio: usize,
-    wb:           &[f64; 3],
 ) -> (Vec<u8>, usize, usize) {
-    let tables = GammaTables::new_or_keep(None, levels, params.gamma, *wb);
     let (result_width, result_height) = params.get_preview_img_size(image.width(), image.height());
     let (cell_width, cell_height) = corner_rect_size(result_width, result_height);
     // Below `GRID` cells per axis the cells overlap in the source, so the frame is drawn whole
