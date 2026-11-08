@@ -481,10 +481,15 @@ fn to_grb_bytes(
 ) -> (Vec<u8>, usize, usize) {
     let tables = GammaTables::new_or_keep(None, levels, params.gamma, *wb);
     let (result_width, result_height) = params.get_preview_img_size(image.width(), image.height());
+    let (cell_width, cell_height) = corner_rect_size(result_width, result_height);
+    // Below `GRID` cells per axis the cells overlap in the source, so the frame is drawn whole
+    let use_corners = params.scale == PreviewScale::CenterAndCorners
+        && image.width()  >= GRID * cell_width
+        && image.height() >= GRID * cell_height;
 
     let rgb_bytes = if image.is_color() && params.color == PreviewColorMode::Rgb {
-        match (params.scale, reduct_ratio) {
-            (PreviewScale::CenterAndCorners, _) => to_grb_bytes_corners_rgb(image, &tables.r, &tables.g, &tables.b, result_width, result_height),
+        match (use_corners, reduct_ratio) {
+            (true, _) => to_grb_bytes_corners_rgb(image, &tables.r, &tables.g, &tables.b, result_width, result_height),
             (_, 1) => to_grb_bytes_no_reduct_rgb(image, &tables.r, &tables.g, &tables.b, image.width(), image.height()),
             (_, 2) => to_grb_bytes_reduct2_rgb  (image, &tables.r, &tables.g, &tables.b),
             (_, 3) => to_grb_bytes_reduct3_rgb  (image, &tables.r, &tables.g, &tables.b),
@@ -499,8 +504,8 @@ fn to_grb_bytes(
             (_, PreviewColorMode::Blue)  => (&image.b, &tables.b),
             _ => unreachable!(),
         };
-        match (params.scale, reduct_ratio) {
-            (PreviewScale::CenterAndCorners, _) => to_grb_bytes_corners_mono(layer, table, result_width, result_height),
+        match (use_corners, reduct_ratio) {
+            (true, _) => to_grb_bytes_corners_mono(layer, table, result_width, result_height),
             (_, 1) => to_grb_bytes_no_reduct_mono(layer, table, image.width(), image.height()),
             (_, 2) => to_grb_bytes_reduct2_mono  (layer, table),
             (_, 3) => to_grb_bytes_reduct3_mono  (layer, table),
@@ -509,7 +514,7 @@ fn to_grb_bytes(
         }
     };
 
-    let (width, height) = if params.scale == PreviewScale::CenterAndCorners {
+    let (width, height) = if use_corners {
         (result_width, result_height)
     } else {
         (image.width()/reduct_ratio, image.height()/reduct_ratio)
@@ -528,26 +533,40 @@ struct CopyRectParams {
     height: usize,
 }
 
+// Cells per preview side in the CenterAndCorners mode
+const GRID: usize = 3;
+
+/// Corner/center cell size for a `width` x `height` preview. It is derived from the widget
+/// size only, so it can exceed a small source image (see `to_grb_bytes`)
+fn corner_rect_size(width: usize, height: usize) -> (usize, usize) {
+    const SPACING: usize = 6;
+    (
+        usize::saturating_sub(width, 2 * SPACING) / GRID,
+        usize::saturating_sub(height, 2 * SPACING) / GRID
+    )
+}
+
 fn get_rects_for_corners_and_center(
     src_width: usize,
     src_height: usize,
     width:  usize,
     height: usize
 ) -> Vec<CopyRectParams> {
-    const SPACING: usize = 6;
     fn pos(img_size: usize, rect_size: usize, pos: usize) -> usize {
         match pos {
             0 => 0,
-            1 => (img_size - rect_size) / 2,
-            2 => img_size - rect_size,
+            1 => usize::saturating_sub(img_size, rect_size) / 2,
+            2 => usize::saturating_sub(img_size, rect_size),
             _ => unreachable!(),
         }
     }
     let mut result = Vec::new();
-    let rect_width = (width - 2 * SPACING) / 3;
-    let rect_height = (height - 2 * SPACING) / 3;
-    for i in 0..3 {
-        for j in 0..3 {
+    let (rect_width, rect_height) = corner_rect_size(width, height);
+    // Defensive: the callers guarantee the cells fit in the source
+    let rect_width = usize::min(rect_width, src_width);
+    let rect_height = usize::min(rect_height, src_height);
+    for i in 0..GRID {
+        for j in 0..GRID {
             result.push(CopyRectParams {
                 src_left: pos(src_width, rect_width, i),
                 src_top: pos(src_height, rect_height, j),

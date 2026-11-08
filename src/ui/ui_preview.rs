@@ -1161,8 +1161,8 @@ impl PreviewUi {
 
         let zoom = options.scale.zoom_factor() as f64;
 
-        // CenterAndCorners needs the whole image (corners + center), so it
-        // goes through the full pass
+        // CenterAndCorners is built from the whole image (a mosaic or the frame itself),
+        // so it goes through the full pass
         if pp.scale == PreviewScale::CenterAndCorners {
             let Some(rgb_data) = get_preview_rgb_data(
                 &image,

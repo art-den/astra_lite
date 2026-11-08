@@ -30,6 +30,7 @@ pub enum PreviewScale {
     P15,
     P10,
     P5,
+    /// Corners + center mosaic; a frame smaller than 3 cells per axis is shown whole
     CenterAndCorners,
 }
 
