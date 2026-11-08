@@ -56,7 +56,7 @@ impl RawCalibration {
         let (defect_pixel_file, subtract_fname, subtract_method) =
             if params.extract_dark {
                 let calibr_filename_data = FileNameArg::RawInfo{
-                    info:     &image_info,
+                    info:     image_info,
                     ccd_temp: params.ccd_temp,
                 };
                 let defect_pixel_file = fn_utils.defect_pixels_file_name(

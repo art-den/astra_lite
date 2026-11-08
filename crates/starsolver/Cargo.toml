@@ -20,13 +20,3 @@ test-util = []
 # Cargo builds the lib for the integration targets with this feature on, which is
 # how `tests/` reaches `genfield` without the module joining the public API.
 starsolver = { path = ".", features = ["test-util"] }
-
-[profile.dev]
-opt-level = 1
-panic = "abort"
-
-[profile.release]
-opt-level = 3
-lto = true
-codegen-units = 1
-panic = "abort"
