@@ -24,7 +24,8 @@ impl HistogramChan {
         self.freq = freq;
         self.freq.resize(max_value as usize + 1, 0);
         let total_cnt = self.freq.iter().sum::<u32>() as usize;
-        let total_sum = self.freq.iter().enumerate().map(|(i, v)| { i * *v as usize }).sum::<usize>();
+        // u64: usize wraps on 32-bit targets once samples*mean > 2^32; total_cnt is a count, it fits
+        let total_sum = self.freq.iter().enumerate().map(|(i, v)| i as u64 * *v as u64).sum::<u64>();
         self.count = total_cnt;
         let mean = total_sum as f64 / total_cnt as f64;
         self.mean = mean as f32;
