@@ -746,6 +746,7 @@ impl Image {
         self.b.clear();
         self.levels_locked = false;
         self.max_value = 0;
+        self.raw_info = None;
     }
 
     pub fn is_empty(&self) -> bool {
