@@ -908,14 +908,16 @@ mod tests {
         assert_eq!(empty.l.rect_iter(0, 0, 2, 2).count(), 0);
     }
 
+    // The x*x/y*y terms keep the block sums away from multiples of n*n, so that the
+    // reference tests compare the rounding too, not only the block contents
     fn make_color_image(width: usize, height: usize) -> Image {
         let mut img = Image::new_empty();
         img.make_color(width, height, u16::MAX, false);
         for y in 0..height {
             for x in 0..width {
-                img.r.set(x as isize, y as isize, (x * 7 + y * 13) as u16 % 4096);
-                img.g.set(x as isize, y as isize, (x * 11 + y * 5) as u16 % 4096);
-                img.b.set(x as isize, y as isize, (x * 3 + y * 17) as u16 % 4096);
+                img.r.set(x as isize, y as isize, (x * 7 + y * 13 + x * x) as u16 % 4096);
+                img.g.set(x as isize, y as isize, (x * 11 + y * 5 + y * y) as u16 % 4096);
+                img.b.set(x as isize, y as isize, (x * 3 + y * 17 + x * x) as u16 % 4096);
             }
         }
         img
@@ -969,7 +971,9 @@ mod tests {
     fn test_iter_div_l_matches_reference() {
         for n in [2, 3, 4] {
             for (w, h) in [(4, 4), (5, 3), (7, 9), (1, 8), (8, 1), (12, 8), (13, 10)] {
-                let img = make_image(w, h, |x, y| (x * 7 + y * 13) as u16 % 4096);
+                // nonlinear fill: with a linear one every block sum is a multiple
+                // of n*n, and the reference never sees the rounding step
+                let img = make_image(w, h, |x, y| (x * 7 + y * 13 + x * x) as u16 % 4096);
                 let mut expected = Vec::with_capacity((w/n) * (h/n));
                 for y in 0..h/n {
                     for x in 0..w/n {
@@ -1092,7 +1096,7 @@ mod tests {
                 // rects: a plain sub-rect, a rect clamped to the border,
                 // and a rect smaller than one block (empty result for big n)
                 for (left, top, rw, rh) in [(1usize, 0usize, 6usize, 8usize), (2usize, 1usize, 100usize, 100usize), (5usize, 5usize, 3usize, 4usize)] {
-                    let img = make_image(w, h, |x, y| (x * 7 + y * 13) as u16 % 4096);
+                    let img = make_image(w, h, |x, y| (x * 7 + y * 13 + x * x) as u16 % 4096);
                     let expected = ref_div_rect(&img.l, n, left, top, rw, rh);
                     let actual: Vec<u16> = match n {
                         2 => img.iter_div2_l(Some((left, top, rw, rh))).collect(),
