@@ -250,12 +250,15 @@ impl ImageLayer<u16> {
         (sum / self.data.len() as u64) as u16
     }
 
+    /// Bilinear sample at a coordinate scaled by `CRD_DIV` (pixel centers at its multiples); the
+    /// result is truncated. `None` only when the whole 2x2 footprint is outside, a partial one gets
+    /// the edge value. Euclidean div/rem: with `/` and `%` a negative x or y would look interior
     pub fn get_crd_i64(&self, x: i64, y: i64) -> Option<u16> {
-        let x_i = x / CRD_DIV;
-        let y_i = y / CRD_DIV;
-        let x_p1 = x as usize % CRD_DIV as usize;
+        let x_i = i64::div_euclid(x, CRD_DIV);
+        let y_i = i64::div_euclid(y, CRD_DIV);
+        let x_p1 = i64::rem_euclid(x, CRD_DIV) as usize;
         let x_p0 = CRD_DIV as usize - x_p1;
-        let y_p1 = y as usize % CRD_DIV as usize;
+        let y_p1 = i64::rem_euclid(y, CRD_DIV) as usize;
         let y_p0 = CRD_DIV as usize - y_p1;
         let v = if x_i >= 0 && y_i >= 0 && x_i < self.width_1 && y_i < self.height_1 {
             let pos = x_i as usize + y_i as usize * self.width;
@@ -271,6 +274,7 @@ impl ImageLayer<u16> {
             let v10 = self.get(x_i as isize+1, y_i as isize);
             let v01 = self.get(x_i as isize, y_i as isize+1);
             let v11 = self.get(x_i as isize+1, y_i as isize+1);
+            // a missing neighbour takes the whole weight, which clamps the coordinate to the edge
             let v0 = match (v00, v10) {
                 (Some(v00), Some(v10)) => Some((v00 as usize * x_p0) + (v10 as usize * x_p1)),
                 (Some(v00), None)      => Some((v00 as usize) * CRD_DIV as usize),
@@ -295,6 +299,7 @@ impl ImageLayer<u16> {
         Some(result as u16)
     }
 
+    /// Truncating cast onto the fixed-point grid (the stacker rounds instead); NaN lands on (0, 0)
     pub fn get_f64_crd(&self, x: f64, y: f64) -> Option<u16> {
         self.get_crd_i64(
             (x * CRD_DIV as f64) as i64,
@@ -1330,5 +1335,116 @@ mod tests {
     fn test_calc_background_empty() {
         assert_eq!(ImageLayer::<u16>::new_empty().calc_background(false), 0);
         assert_eq!(ImageLayer::<u16>::new_empty().calc_background(true), 0);
+    }
+
+    /// 4x4 layer with v(x, y) = 1000 + 1000*x + 10000*y, so every sample is exact
+    fn make_grad_layer() -> ImageLayer<u16> {
+        ImageLayer::<u16>::new_mono(
+            (0..16u16).map(|i| 1000 + i % 4 * 1000 + i / 4 * 10000).collect(), 4, 4)
+    }
+
+    #[test]
+    fn test_get_crd_i64_interior() {
+        let layer = make_grad_layer();
+        assert_eq!(layer.get_crd_i64(CRD_DIV, 0), Some(2000));
+        assert_eq!(layer.get_crd_i64(CRD_DIV + CRD_DIV / 4, 0), Some(2250));
+        // bilinear over the (1, 1), (2, 1), (1, 2), (2, 2) square
+        assert_eq!(layer.get_crd_i64(CRD_DIV + CRD_DIV / 2, CRD_DIV + CRD_DIV / 2), Some(17500));
+    }
+
+    #[test]
+    fn test_get_crd_i64_negative_subpixel_is_clamped() {
+        let layer = make_grad_layer();
+        // The whole (-1, 0) px band lies outside the frame: the old truncating `/` and `%`
+        // treated it as an interior coordinate and returned almost v(1, 0) instead of v(0, 0)
+        for x in -(CRD_DIV - 1)..0 {
+            assert_eq!(layer.get_crd_i64(x, 0), Some(1000), "x = {}", x);
+        }
+        for y in -(CRD_DIV - 1)..0 {
+            assert_eq!(layer.get_crd_i64(0, y), Some(1000), "y = {}", y);
+        }
+        assert_eq!(layer.get_crd_i64(-100, -100), Some(1000));
+        // clamped in x, still interpolated along y
+        assert_eq!(layer.get_crd_i64(-100, CRD_DIV + CRD_DIV / 2), Some(16000));
+        assert_eq!(layer.get_crd_i64(-100, CRD_DIV), Some(11000));
+    }
+
+    #[test]
+    fn test_get_f64_crd_negative_subpixel() {
+        let layer = make_grad_layer();
+        assert_eq!(layer.get_f64_crd(-0.004, -0.004), Some(1000));
+        assert_eq!(layer.get_f64_crd(-0.5, 0.5), Some(6000));
+    }
+
+    #[test]
+    fn test_get_crd_i64_outside_is_none() {
+        let layer = make_grad_layer();
+        let last = layer.width() as i64 * CRD_DIV;
+        // the 2x2 footprint still holds pixel 0
+        assert_eq!(layer.get_crd_i64(-CRD_DIV, 0), Some(1000));
+        assert_eq!(layer.get_crd_i64(0, -CRD_DIV), Some(1000));
+        // the whole footprint is outside
+        assert_eq!(layer.get_crd_i64(-CRD_DIV - 1, 0), None);
+        assert_eq!(layer.get_crd_i64(0, -CRD_DIV - 1), None);
+        assert_eq!(layer.get_crd_i64(last, 0), None);
+        assert_eq!(layer.get_crd_i64(0, last), None);
+        // an empty layer never reads its buffer (`width_1` there is 0, not -1)
+        assert_eq!(ImageLayer::<u16>::new_empty().get_crd_i64(0, 0), None);
+    }
+
+    #[test]
+    fn test_get_crd_i64_single_pixel_layer() {
+        // width_1 and height_1 are 0, so every coordinate takes the clamping branch
+        let layer = ImageLayer::<u16>::new_mono(vec![1234], 1, 1);
+        let coords = [-CRD_DIV - 1, -CRD_DIV, -1, 0, 1, CRD_DIV - 1, CRD_DIV];
+        for x in coords {
+            for y in coords {
+                let inside = x >= -CRD_DIV && x < CRD_DIV && y >= -CRD_DIV && y < CRD_DIV;
+                assert_eq!(layer.get_crd_i64(x, y), if inside { Some(1234) } else { None },
+                           "x = {}, y = {}", x, y);
+            }
+        }
+    }
+
+    #[test]
+    fn test_get_crd_i64_right_bottom_border() {
+        let layer = make_grad_layer();
+        let last_x = (layer.width() - 1) as i64 * CRD_DIV;
+        let last_y = (layer.height() - 1) as i64 * CRD_DIV;
+        // the last pixel center takes the clamping branch (it would read one pixel past the row)
+        assert_eq!(layer.get_crd_i64(last_x, 0), Some(4000));
+        assert_eq!(layer.get_crd_i64(0, last_y), Some(31000));
+        assert_eq!(layer.get_crd_i64(last_x, last_y), Some(34000));
+        // past the last center the missing neighbours are replicated
+        assert_eq!(layer.get_crd_i64(last_x + 100, 0), Some(4000));
+        assert_eq!(layer.get_crd_i64(0, last_y + 100), Some(31000));
+        assert_eq!(layer.get_crd_i64(last_x + 100, last_y + 100), Some(34000));
+    }
+
+    /// The sampler must match a plain f64 clamp-to-edge bilinear over its whole `Some` domain
+    #[test]
+    fn test_get_crd_i64_matches_f64_reference() {
+        let (w, h) = (5usize, 3usize);
+        let layer = ImageLayer::<u16>::new_mono(
+            (0..(w * h)).map(|i| (100 + (i % w) * 700 + (i / w) * 31) as u16).collect(), w, h);
+        let px = |x: i64, y: i64| -> f64 {
+            let x = i64::clamp(x, 0, w as i64 - 1) as usize;
+            let y = i64::clamp(y, 0, h as i64 - 1) as usize;
+            layer.as_slice()[y * w + x] as f64
+        };
+        for x in -CRD_DIV..(w as i64 * CRD_DIV) {
+            for y in -CRD_DIV..(h as i64 * CRD_DIV) {
+                let (x0, y0) = (i64::div_euclid(x, CRD_DIV), i64::div_euclid(y, CRD_DIV));
+                let fx = i64::rem_euclid(x, CRD_DIV) as f64 / CRD_DIV as f64;
+                let fy = i64::rem_euclid(y, CRD_DIV) as f64 / CRD_DIV as f64;
+                let row0 = px(x0, y0) * (1.0 - fx) + px(x0 + 1, y0) * fx;
+                let row1 = px(x0, y0 + 1) * (1.0 - fx) + px(x0 + 1, y0 + 1) * fx;
+                let expected = row0 * (1.0 - fy) + row1 * fy;
+                let got = layer.get_crd_i64(x, y).expect("the footprint holds a real pixel");
+                // the sampler truncates its result, the reference does not
+                assert!(f64::abs(got as f64 - expected) < 1.0,
+                        "x = {}, y = {}: got {}, expected {}", x, y, got, expected);
+            }
+        }
     }
 }
