@@ -208,7 +208,7 @@ impl Histogram {
             let slice = layer.as_slice();
             let step = (slice.len() / 3_000_000) | 1;
             let tmp = Self::tmp_from_slice(slice, step);
-            chan.take_from_freq(tmp.0, img.max_value());
+            chan.take_from_freq(tmp.0, u16::MAX);
             Some(chan)
         };
         self.max = img.max_value();
