@@ -414,6 +414,40 @@ fn ptrs_in_bounds(rows: &[*const u16], data: &[u16]) -> bool {
     rows.iter().all(|&p| lo <= p as usize && p as usize <= hi)
 }
 
+// average of the NxN block the row pointers point at, with the rounding used
+// by the preview reduct functions
+fn block_avg<const N: usize>(rows: &[*const u16; N]) -> u16 {
+    let mut sum = 0u32;
+    unsafe {
+        for &p in rows {
+            for i in 0..N {
+                sum += *p.add(i) as u32;
+            }
+        }
+    }
+    let k = N as u32 * N as u32;
+    ((sum + k/2) / k) as u16
+}
+
+// Moves all row pointers of a block forward. Callers must keep the pointers
+// within the layer data (at most one-past-the-end)
+fn advance_rows<const N: usize>(rows: &mut [*const u16; N], count: isize) {
+    unsafe {
+        for p in rows.iter_mut() {
+            *p = p.offset(count);
+        }
+    }
+}
+
+// pixels left in the reduced rect, including the one the pointers are at
+fn div_remaining(width: usize, height: usize, x: usize, y: usize) -> usize {
+    if width == 0 || y >= height {
+        0
+    } else {
+        (height - y - 1) * width + x
+    }
+}
+
 // Iterates over pixels of a monochrome layer reduced N times:
 // each N*N block is averaged (same formula as the preview reduct functions).
 // Uses raw pointers to avoid bounds checks and per-pixel address calculations;
@@ -465,32 +499,8 @@ impl<'a, const N: usize> DivNLIterator<'a, N> {
         it
     }
 
-    // sum of the NxN block the pointers are pointing at
-    // (not named `sum` to avoid resolving to Iterator::sum in `next`)
-    fn calc_sum(&self) -> u32 {
-        let mut sum = 0u32;
-        unsafe {
-            for i in 0..N {
-                let p = self.rows[i];
-                for j in 0..N {
-                    sum += *p.add(j) as u32;
-                }
-            }
-        }
-        sum
-    }
-
     fn rows_in_bounds(&self) -> bool {
         ptrs_in_bounds(&self.rows, self.layer.as_slice())
-    }
-
-    fn advance_rows(rows: &mut [*const u16; N], count: isize) {
-        // pointer updates stay within the data allocation (at most one-past-the-end)
-        unsafe {
-            for p in rows.iter_mut() {
-                *p = p.offset(count);
-            }
-        }
     }
 }
 
@@ -504,18 +514,16 @@ impl<const N: usize> Iterator for DivNLIterator<'_, N> {
         }
         // all reads are inside the layer data: reduced rows/cols are dropped
         // for non-divisible sizes, so the last NxN block never crosses the border
-        let sum = self.calc_sum();
-        let k = N as u32 * N as u32;
-        let v = ((sum + k/2) / k) as u16;
+        let v = block_avg(&self.rows);
         // needs no guard: the last block of a row ends at most at x1 + width*N <= src_width
-        Self::advance_rows(&mut self.rows, N as isize);
+        advance_rows(&mut self.rows, N as isize);
         self.x -= 1;
         if self.x == 0 {
             self.x = self.width;
             self.y += 1;
             // no jump after the last row: it would leave the data allocation (UB)
             if self.y < self.height {
-                Self::advance_rows(&mut self.rows, self.advance);
+                advance_rows(&mut self.rows, self.advance);
             }
         }
         debug_assert!(self.rows_in_bounds(), "DivNLIterator: row pointer outside the layer data");
@@ -523,11 +531,7 @@ impl<const N: usize> Iterator for DivNLIterator<'_, N> {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let remaining = if self.width == 0 || self.y >= self.height {
-            0
-        } else {
-            (self.height - self.y - 1) * self.width + self.x
-        };
+        let remaining = div_remaining(self.width, self.height, self.x, self.y);
         (remaining, Some(remaining))
     }
 }
@@ -538,6 +542,7 @@ impl<const N: usize> FusedIterator for DivNLIterator<'_, N> {}
 
 // Same as DivNLIterator, but averages each NxN block of the r, g and b
 // layers of a color image and yields (r, g, b) tuples.
+// Shares block_avg() and advance_rows() with DivNLIterator.
 pub struct DivNRGBIterator<'a, const N: usize> {
     image:    &'a Image,
     r_rows:   [*const u16; N],
@@ -597,20 +602,6 @@ impl<'a, const N: usize> DivNRGBIterator<'a, N> {
         it
     }
 
-    // average of the NxN block the row pointers are pointing at
-    fn avg(rows: &[*const u16; N]) -> u16 {
-        let mut sum = 0u32;
-        unsafe {
-            for &p in rows {
-                for i in 0..N {
-                    sum += *p.add(i) as u32;
-                }
-            }
-        }
-        let k = N as u32 * N as u32;
-        ((sum + k/2) / k) as u16
-    }
-
     // see ptrs_in_bounds
     fn rows_in_bounds(&self) -> bool {
         ptrs_in_bounds(&self.r_rows, self.image.r.as_slice())
@@ -629,26 +620,22 @@ impl<const N: usize> Iterator for DivNRGBIterator<'_, N> {
         }
         // all reads are inside the layers data: reduced rows/cols are dropped
         // for non-divisible sizes, so the last NxN block never crosses the border
-        let r = Self::avg(&self.r_rows);
-        let g = Self::avg(&self.g_rows);
-        let b = Self::avg(&self.b_rows);
-        // pointer updates stay within the layers data (at most one-past-the-end)
-        unsafe {
-            for p in self.r_rows.iter_mut() { *p = p.add(N); }
-            for p in self.g_rows.iter_mut() { *p = p.add(N); }
-            for p in self.b_rows.iter_mut() { *p = p.add(N); }
-        }
+        let r = block_avg(&self.r_rows);
+        let g = block_avg(&self.g_rows);
+        let b = block_avg(&self.b_rows);
+        // needs no guard: the last block of a row ends at most at x1 + width*N <= src_width
+        advance_rows(&mut self.r_rows, N as isize);
+        advance_rows(&mut self.g_rows, N as isize);
+        advance_rows(&mut self.b_rows, N as isize);
         self.x -= 1;
         if self.x == 0 {
             self.x = self.width;
             self.y += 1;
             // no jump after the last row: it would leave the layers data (UB)
             if self.y < self.height {
-                unsafe {
-                    for p in self.r_rows.iter_mut() { *p = p.offset(self.advance); }
-                    for p in self.g_rows.iter_mut() { *p = p.offset(self.advance); }
-                    for p in self.b_rows.iter_mut() { *p = p.offset(self.advance); }
-                }
+                advance_rows(&mut self.r_rows, self.advance);
+                advance_rows(&mut self.g_rows, self.advance);
+                advance_rows(&mut self.b_rows, self.advance);
             }
         }
         debug_assert!(self.rows_in_bounds(), "DivNRGBIterator: row pointer outside the r/g/b layer data");
@@ -656,11 +643,7 @@ impl<const N: usize> Iterator for DivNRGBIterator<'_, N> {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let remaining = if self.width == 0 || self.y >= self.height {
-            0
-        } else {
-            (self.height - self.y - 1) * self.width + self.x
-        };
+        let remaining = div_remaining(self.width, self.height, self.x, self.y);
         (remaining, Some(remaining))
     }
 }
@@ -1197,6 +1180,30 @@ mod tests {
                 assert!(lo <= p as usize && p as usize <= hi, "N={N}, rect={rect:?}: row pointer out of bounds");
             }
         }
+    }
+
+    #[test]
+    fn test_block_avg_rounds_half_up() {
+        // the reference implementations in this module use the same formula, so they
+        // cannot catch a rounding change; pin the tie cases down directly
+        let avg2 = |vals: [u16; 4]| -> u16 {
+            let d = vals;
+            let p = d.as_ptr();
+            block_avg(&[p, unsafe { p.add(2) }])
+        };
+        assert_eq!(avg2([1, 1, 0, 0]), 1);          // sum 2,  0.5 up
+        assert_eq!(avg2([2, 2, 1, 1]), 2);          // sum 6,  1.5 up
+        assert_eq!(avg2([4, 3, 2, 1]), 3);          // sum 10, 2.5 up
+        assert_eq!(avg2([1, 0, 0, 0]), 0);          // 0.25 down
+        assert_eq!(avg2([3, 0, 0, 0]), 1);          // 0.75 up
+        assert_eq!(avg2([5, 0, 0, 0]), 1);          // 1.25 down
+        assert_eq!(avg2([u16::MAX; 4]), u16::MAX);  // no overflow on a full block
+
+        let mut d4 = [0u16; 16];                    // N=4: sum 8, 0.5 up
+        d4[..8].fill(1);
+        let p = d4.as_ptr();
+        let rows = [p, unsafe { p.add(4) }, unsafe { p.add(8) }, unsafe { p.add(12) }];
+        assert_eq!(block_avg(&rows), 1);
     }
 
     #[test]
