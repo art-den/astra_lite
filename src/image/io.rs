@@ -11,6 +11,9 @@ use super::{image::{Image, ImageLayer}, raw::*, simple_fits::{FitsReader, FitsWr
 /// Gamma used to linearize display-referred pixels on load
 pub const READY_IMAGE_GAMMUT: f32 = 2.4;
 
+/// Max allowed length of one side of a FITS image loaded by this module
+const MAX_FITS_SIDE: usize = 16384;
+
 ///////////////////////////////////////////////////////////////////////////////
 
 // Raw image
@@ -21,6 +24,26 @@ pub fn find_mono_image_hdu_in_fits(reader: &FitsReader) -> Option<&Header> {
     })
 }
 
+/// Returns (width, height) of a FITS image HDU, rejecting corrupt or oversized `NAXIS`
+fn fits_image_dims(hdu: &Header) -> eyre::Result<(usize, usize)> {
+    let dims = hdu.dims();
+    if dims.len() < 2 {
+        eyre::bail!("FITS image HDU must have at least 2 dimensions, got {}", dims.len());
+    }
+    let width  = dims[0];
+    let height = dims[1];
+    if width == 0 || height == 0 {
+        eyre::bail!("FITS image has a zero-sized dimension: {}x{} px", width, height);
+    }
+    if width > MAX_FITS_SIDE || height > MAX_FITS_SIDE {
+        eyre::bail!(
+            "FITS image size {}x{} px exceeds the allowed {} px per side",
+            width, height, MAX_FITS_SIDE
+        );
+    }
+    Ok((width, height))
+}
+
 pub fn load_raw_image_from_fits_reader(
     reader: &FitsReader,
     stream: &mut impl SeekNRead
@@ -28,8 +51,10 @@ pub fn load_raw_image_from_fits_reader(
     let Some(image_hdu) = find_mono_image_hdu_in_fits(reader) else {
         eyre::bail!("No RAW image found in FITS data");
     };
+    let (width, height) = fits_image_dims(image_hdu)?;
     let info = RawImageInfo::new_from_fits_header(image_hdu);
-    let mut data = vec![0; image_hdu.data_len()];
+    // Dims, not `data_len`: PCOUNT/GCOUNT can make data_len huge or wrap it to 0 on 32-bit
+    let mut data = vec![0; width * height];
     FitsReader::read_data(image_hdu, stream, 0, &mut data)?;
     let cfa_array = info.cfa.get_array();
     let data_offset = image_hdu.get_i64("PEDESTAL").unwrap_or_default() as i32;
@@ -230,15 +255,15 @@ pub fn load_image_from_fits_reader(
     let mono_hdu = find_mono_image_hdu_in_fits(reader);
     let color_hdu = find_color_image_hdu_in_fits(reader);
     if let Some(hdu) = mono_hdu {
-        let width  = hdu.dims()[0];
-        let height = hdu.dims()[1];
+        let (width, height) = fits_image_dims(hdu)?;
         image.make_monochrome(width, height, u16::MAX);
         FitsReader::read_data(hdu, stream, 0, image.l.as_slice_mut())?;
     } else if let Some(hdu) = color_hdu {
-        let width  = hdu.dims()[0];
-        let height = hdu.dims()[1];
+        let (width, height) = fits_image_dims(hdu)?;
         image.make_color(width, height, u16::MAX, false);
-        let one_color_bytes_len = hdu.bytes_len() / 3;
+        // Plane offsets from the validated dims, not from `bytes_len` (also GCOUNT-driven)
+        let bytes_per_value = i8::unsigned_abs(hdu.bitpix()) as usize / 8;
+        let one_color_bytes_len = width * height * bytes_per_value;
         FitsReader::read_data(hdu, stream,                       0, image.r.as_slice_mut())?;
         FitsReader::read_data(hdu, stream,     one_color_bytes_len, image.g.as_slice_mut())?;
         FitsReader::read_data(hdu, stream, 2 * one_color_bytes_len, image.b.as_slice_mut())?;
@@ -328,8 +353,13 @@ impl FromFileCameraShot {
         let image_type = if is_fits {
             let mut stream = BufReader::new(File::open(file_name)?);
             let reader = FitsReader::new(&mut stream)?;
-            let has_mono_hdu = find_mono_image_hdu_in_fits(&reader).is_some();
-            if has_mono_hdu {
+            let mono_hdu  = find_mono_image_hdu_in_fits(&reader);
+            let color_hdu = find_color_image_hdu_in_fits(&reader);
+            // Fail fast: reject bogus dims before image processing starts
+            if let Some(hdu) = mono_hdu.or(color_hdu) {
+                fits_image_dims(hdu)?;
+            }
+            if mono_hdu.is_some() {
                 CameraShotType::RawCcdData
             } else {
                 CameraShotType::ReadyImage
