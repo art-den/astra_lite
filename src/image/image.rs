@@ -2,6 +2,7 @@
 
 use itertools::*;
 use rayon::prelude::*;
+use std::iter::FusedIterator;
 use crate::utils::math::*;
 
 use super::raw::RawImageInfo;
@@ -404,6 +405,15 @@ fn clamp_rect(rect: (usize, usize, usize, usize), width: usize, height: usize) -
     (left, top, usize::min(w, width - left), usize::min(h, height - top))
 }
 
+// Debug-only invariant of the DivN iterators: all their row pointers must stay
+// inside the layer data. Forming a pointer beyond one-past-the-end is UB even
+// without dereferencing; the check runs in debug builds only (see rows_in_bounds)
+fn ptrs_in_bounds(rows: &[*const u16], data: &[u16]) -> bool {
+    let lo = data.as_ptr() as usize;
+    let hi = lo + size_of_val(data);
+    rows.iter().all(|&p| lo <= p as usize && p as usize <= hi)
+}
+
 // Iterates over pixels of a monochrome layer reduced N times:
 // each N*N block is averaged (same formula as the preview reduct functions).
 // Uses raw pointers to avoid bounds checks and per-pixel address calculations;
@@ -440,7 +450,7 @@ impl<'a, const N: usize> DivNLIterator<'a, N> {
                 *p = unsafe { data.as_ptr().add((y1 + i) * src_width + x1) };
             }
         }
-        Self {
+        let it = Self {
             layer,
             rows,
             // pointer jump from the last block of the reduced row to the first block
@@ -450,7 +460,9 @@ impl<'a, const N: usize> DivNLIterator<'a, N> {
             y: 0,
             width,
             height: src_h / N,
-        }
+        };
+        debug_assert!(it.rows_in_bounds(), "DivNLIterator: initial row pointer is outside the layer data");
+        it
     }
 
     // sum of the NxN block the pointers are pointing at
@@ -466,6 +478,10 @@ impl<'a, const N: usize> DivNLIterator<'a, N> {
             }
         }
         sum
+    }
+
+    fn rows_in_bounds(&self) -> bool {
+        ptrs_in_bounds(&self.rows, self.layer.as_slice())
     }
 
     fn advance_rows(rows: &mut [*const u16; N], count: isize) {
@@ -491,13 +507,18 @@ impl<const N: usize> Iterator for DivNLIterator<'_, N> {
         let sum = self.calc_sum();
         let k = N as u32 * N as u32;
         let v = ((sum + k/2) / k) as u16;
+        // needs no guard: the last block of a row ends at most at x1 + width*N <= src_width
         Self::advance_rows(&mut self.rows, N as isize);
         self.x -= 1;
         if self.x == 0 {
             self.x = self.width;
             self.y += 1;
-            Self::advance_rows(&mut self.rows, self.advance);
+            // no jump after the last row: it would leave the data allocation (UB)
+            if self.y < self.height {
+                Self::advance_rows(&mut self.rows, self.advance);
+            }
         }
+        debug_assert!(self.rows_in_bounds(), "DivNLIterator: row pointer outside the layer data");
         Some(v)
     }
 
@@ -510,6 +531,10 @@ impl<const N: usize> Iterator for DivNLIterator<'_, N> {
         (remaining, Some(remaining))
     }
 }
+
+// the safety of the guarded row jump relies on the pointers never being used
+// again once next() has returned None
+impl<const N: usize> FusedIterator for DivNLIterator<'_, N> {}
 
 // Same as DivNLIterator, but averages each NxN block of the r, g and b
 // layers of a color image and yields (r, g, b) tuples.
@@ -555,7 +580,7 @@ impl<'a, const N: usize> DivNRGBIterator<'a, N> {
                 }
             }
         }
-        Self {
+        let it = Self {
             image,
             r_rows,
             g_rows,
@@ -567,7 +592,9 @@ impl<'a, const N: usize> DivNRGBIterator<'a, N> {
             y: 0,
             width,
             height: src_h / N,
-        }
+        };
+        debug_assert!(it.rows_in_bounds(), "DivNRGBIterator: initial row pointer is outside the r/g/b layer data");
+        it
     }
 
     // average of the NxN block the row pointers are pointing at
@@ -582,6 +609,13 @@ impl<'a, const N: usize> DivNRGBIterator<'a, N> {
         }
         let k = N as u32 * N as u32;
         ((sum + k/2) / k) as u16
+    }
+
+    // see ptrs_in_bounds
+    fn rows_in_bounds(&self) -> bool {
+        ptrs_in_bounds(&self.r_rows, self.image.r.as_slice())
+        && ptrs_in_bounds(&self.g_rows, self.image.g.as_slice())
+        && ptrs_in_bounds(&self.b_rows, self.image.b.as_slice())
     }
 }
 
@@ -608,12 +642,16 @@ impl<const N: usize> Iterator for DivNRGBIterator<'_, N> {
         if self.x == 0 {
             self.x = self.width;
             self.y += 1;
-            unsafe {
-                for p in self.r_rows.iter_mut() { *p = p.offset(self.advance); }
-                for p in self.g_rows.iter_mut() { *p = p.offset(self.advance); }
-                for p in self.b_rows.iter_mut() { *p = p.offset(self.advance); }
+            // no jump after the last row: it would leave the layers data (UB)
+            if self.y < self.height {
+                unsafe {
+                    for p in self.r_rows.iter_mut() { *p = p.offset(self.advance); }
+                    for p in self.g_rows.iter_mut() { *p = p.offset(self.advance); }
+                    for p in self.b_rows.iter_mut() { *p = p.offset(self.advance); }
+                }
             }
         }
+        debug_assert!(self.rows_in_bounds(), "DivNRGBIterator: row pointer outside the r/g/b layer data");
         Some((r, g, b))
     }
 
@@ -626,6 +664,8 @@ impl<const N: usize> Iterator for DivNRGBIterator<'_, N> {
         (remaining, Some(remaining))
     }
 }
+
+impl<const N: usize> FusedIterator for DivNRGBIterator<'_, N> {}
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -1129,5 +1169,61 @@ mod tests {
         assert_eq!(it.size_hint(), (12, Some(12)));
         it.next(); it.next();
         assert_eq!(it.size_hint(), (10, Some(10)));
+    }
+
+    // A pointer beyond one-past-the-end of the layer data is UB even when it is
+    // never dereferenced. The row pointers only ever move forward, so checking
+    // them after the iterator is exhausted covers every intermediate position.
+    fn check_l_rows_in_bounds<const N: usize>(layer: &ImageLayer<u16>, rect: Option<(usize, usize, usize, usize)>) {
+        let mut it = DivNLIterator::<N>::new(layer, rect);
+        for _ in it.by_ref() {}
+        let data = layer.as_slice();
+        let lo = data.as_ptr() as usize;
+        let hi = lo + size_of_val(data);
+        for p in it.rows {
+            assert!(lo <= p as usize && p as usize <= hi, "N={N}, rect={rect:?}: row pointer out of bounds");
+        }
+    }
+
+    fn check_rgb_rows_in_bounds<const N: usize>(image: &Image, rect: Option<(usize, usize, usize, usize)>) {
+        let mut it = DivNRGBIterator::<N>::new(image, rect);
+        for _ in it.by_ref() {}
+        let rows = [(&it.r_rows, &image.r), (&it.g_rows, &image.g), (&it.b_rows, &image.b)];
+        for (rows, layer) in rows {
+            let data = layer.as_slice();
+            let lo = data.as_ptr() as usize;
+            let hi = lo + size_of_val(data);
+            for &p in rows.iter() {
+                assert!(lo <= p as usize && p as usize <= hi, "N={N}, rect={rect:?}: row pointer out of bounds");
+            }
+        }
+    }
+
+    #[test]
+    fn test_iter_div_rows_stay_in_bounds() {
+        // divisible (the usual binning case) and non-divisible sizes
+        for (w, h) in [(4usize, 4usize), (6, 6), (8, 8), (12, 12), (5, 6), (7, 9), (6, 7), (8, 3)] {
+            let img = make_image(w, h, |x, y| (x * 7 + y * 13) as u16 % 4096);
+            check_l_rows_in_bounds::<2>(&img.l, None);
+            check_l_rows_in_bounds::<3>(&img.l, None);
+            check_l_rows_in_bounds::<4>(&img.l, None);
+            check_l_rows_in_bounds::<2>(&img.l, Some((1, 0, w - 1, h)));
+            check_l_rows_in_bounds::<3>(&img.l, Some((0, 1, w, h - 1)));
+
+            let cimg = make_color_image(w, h);
+            check_rgb_rows_in_bounds::<2>(&cimg, None);
+            check_rgb_rows_in_bounds::<3>(&cimg, None);
+            check_rgb_rows_in_bounds::<4>(&cimg, None);
+            check_rgb_rows_in_bounds::<2>(&cimg, Some((1, 0, w - 1, h)));
+            check_rgb_rows_in_bounds::<3>(&cimg, Some((0, 1, w, h - 1)));
+        }
+
+        let empty = Image::new_empty();
+        check_l_rows_in_bounds::<2>(&empty.l, None);
+        check_rgb_rows_in_bounds::<2>(&empty, None);
+        let img = make_image(4, 4, |_, _| 8);
+        check_l_rows_in_bounds::<2>(&img.l, Some((10, 10, 2, 2)));
+        check_l_rows_in_bounds::<2>(&img.l, Some((2, 2, 1, 2)));
+        check_rgb_rows_in_bounds::<2>(&img, Some((2, 2, 1, 2)));
     }
 }
