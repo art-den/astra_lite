@@ -126,7 +126,7 @@ pub const DATE_OBS_FMT: &str = "%Y-%m-%dT%H:%M:%S%.3f";
 
 impl RawImageInfo {
     pub fn new_from_fits_header(image_hdu: &Header) -> Self {
-        let bitdepth     = image_hdu.get_i64("BITDEPTH").unwrap_or(image_hdu.bitpix() as i64) as i32;
+        let bitdepth     = image_hdu.get_i64("BITDEPTH").unwrap_or(i64::from(image_hdu.bitpix()));
         let width        = image_hdu.dims()[0];
         let height       = image_hdu.dims()[1];
         let exposure     = image_hdu.get_f64("EXPTIME").unwrap_or_default();
@@ -145,8 +145,9 @@ impl RawImageInfo {
         let dec          = image_hdu.get_f64("DEC");
         let ra           = image_hdu.get_f64("RA");
 
-        let max_value = if bitdepth > 0 {
-            ((1 << bitdepth) - 1) as u16
+        // `BITDEPTH` is file data: only 1 .. `u16::BITS` may reach the shift; any other depth means the full 16-bit range
+        let max_value = if (1i64 .. u16::BITS as i64).contains(&bitdepth) {
+            (1u16 << bitdepth as u32) - 1
         } else {
             u16::MAX
         };
