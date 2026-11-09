@@ -324,13 +324,17 @@ impl ImageLayer<u16> {
             .for_each(|(y, row)| {
                 let Some(line) = gradient.intersect_by_xz_plane(y as f64) else { return; };
                 let z1 = line.get(0.0).round() as i32;
+                // z2 is the value at x = width, one pixel past the row: that is the ramp's slope reference
                 let z2 = line.get(self.width as f64).round() as i32;
-                let z_diff = i32::abs(z1-z2);
-                if z_diff < self.width as i32 {
-                    let height = z_diff as usize + 1;
+                let rise = i32::abs_diff(z1, z2);
+                if u64::from(rise) < self.width as u64 {
                     let mut sum = self.width/2;
                     let mut z = z1;
-                    let dz = if z1 < z2 {1} else {-1};
+                    let dz = match i32::cmp(&z1, &z2) {
+                        std::cmp::Ordering::Less    =>  1,
+                        std::cmp::Ordering::Greater => -1,
+                        std::cmp::Ordering::Equal   =>  0,
+                    };
                     for value in row {
                         let mut v = *value as i32;
                         v -= z;
@@ -338,7 +342,7 @@ impl ImageLayer<u16> {
                         else if v > u16::MAX as i32 { v = u16::MAX as i32; }
                         *value = v as u16;
                         // simple Bresenham's algorithm
-                        sum += height;
+                        sum += rise as usize;
                         if sum >= self.width {
                             sum -= self.width;
                             z += dz;
