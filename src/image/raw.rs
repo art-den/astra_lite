@@ -765,35 +765,49 @@ impl RawImage {
                 }
             }
         }
-        let get_99 = |values: &mut Vec<u16>| -> i64 {
+        // The `used` flag tells which channels the CFA actually uses:
+        // an unused channel has no values, so its divisor must not be validated
+        let get_99 = |values: &mut Vec<u16>| -> eyre::Result<(i64, bool)> {
             if values.is_empty() {
-                0
-            } else {
-                let pos = 99 * values.len() / 100;
-                values.select_nth_unstable(pos);
-                let result = values[pos];
-                values.clear();
-                values.shrink_to_fit();
-                result as i64
+                return Ok((0, false));
             }
+            let pos = 99 * values.len() / 100;
+            values.select_nth_unstable(pos);
+            let result = values[pos];
+            values.clear();
+            values.shrink_to_fit();
+            if result <= offset {
+                eyre::bail!("Not valid flat image");
+            }
+            Ok((result as i64 - offset as i64, true))
         };
-        let l_max = get_99(&mut l_values) - offset as i64;
-        let r_max = get_99(&mut r_values) - offset as i64;
-        let g_max = get_99(&mut g_values) - offset as i64;
-        let b_max = get_99(&mut b_values) - offset as i64;
+        let (l_max, l_used) = get_99(&mut l_values)?;
+        let (r_max, r_used) = get_99(&mut r_values)?;
+        let (g_max, g_used) = get_99(&mut g_values)?;
+        let (b_max, b_used) = get_99(&mut b_values)?;
+
         for y in 0..self.info.height {
             let cfa_arr = self.cfa_row(y);
             let row = self.row_mut(y);
             for (v, c) in row.iter_mut().zip(cfa_arr.iter().cycle()) {
                 let max = match *c {
-                    CfaColor::None => l_max,
-                    CfaColor::R => r_max,
-                    CfaColor::G => g_max,
-                    CfaColor::B => b_max,
+                    CfaColor::None => {
+                        debug_assert!(l_used);
+                        l_max
+                    }
+                    CfaColor::R => {
+                        debug_assert!(r_used);
+                        r_max
+                    }
+                    CfaColor::G => {
+                        debug_assert!(g_used);
+                        g_max
+                    }
+                    CfaColor::B => {
+                        debug_assert!(b_used);
+                        b_max
+                    }
                 };
-                if max == 0 {
-                    eyre::bail!("Not valid flat image");
-                }
                 let val = *v as i64 - offset as i64;
                 let normalized: i64 = (u16::MAX as i64 * val) / max;
                 let normalized = normalized.max(0).min(u16::MAX as i64);
