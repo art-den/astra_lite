@@ -891,10 +891,26 @@ impl RawImage {
         }
     }
 
+    /// Interpolates the CFA into `dst_img`, or copies the raw data as monochrome when
+    /// interpolation is impossible: `CfaType::None` or a frame with a side below
+    /// `MIN_SIDE_FOR_DEMOSAIC`. In the copy case `dst_img.raw_info` still reports the CFA.
     pub fn demosaic_into(&self, dst_img: &mut Image, mt: bool) {
+        // The interior pass runs over `0..width - 2`; without the overflow checks of the
+        // release profile a 1 px side wraps that range, and its infinite `izip!` partner
+        // turns the loop into an unbounded walk over out-of-bounds memory
+        const MIN_SIDE_FOR_DEMOSAIC: usize = 3;
+
         match self.info.cfa {
             CfaType::None =>
                 self.copy_into_monochrome(dst_img),
+            _ if usize::min(self.info.width, self.info.height) < MIN_SIDE_FOR_DEMOSAIC => {
+                log::warn!(
+                    "Image is too small ({}x{}) to demosaic, copying it as monochrome",
+                    self.info.width,
+                    self.info.height
+                );
+                self.copy_into_monochrome(dst_img)
+            },
             _ =>
                 self.demosaic_linear(mt, dst_img),
         }
@@ -1109,6 +1125,68 @@ impl Iterator for RawRectIterator<'_> {
 
                 self.next()
             },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_raw(cfa: CfaType, width: usize, height: usize) -> RawImage {
+        let info = RawImageInfo {
+            width,
+            height,
+            max_value: u16::MAX,
+            cfa,
+            ..Default::default()
+        };
+        let data: Vec<u16> = (0..(width * height)).map(|i| i as u16 + 1).collect();
+        let cfa_arr = cfa.get_array();
+        RawImage::new(info, data, cfa_arr, 0)
+    }
+
+    // Tiny frames must be copied, not interpolated: the demosaic pointer loops would then
+    // run over out-of-bounds memory
+    #[test]
+    fn test_demosaic_into_tiny_frames_fall_back_to_monochrome() {
+        let shapes = [
+            (1, 1), (1, 2), (1, 3), (3, 1),
+            (2, 2), (2, 3), (3, 2), (1, 5), (2, 5), (5, 1), (5, 2),
+        ];
+        let cfa_types = [CfaType::BGGR, CfaType::GRBG, CfaType::RGGB, CfaType::GBRG, CfaType::None];
+        for cfa in cfa_types {
+            for (width, height) in shapes {
+                for mt in [false, true] {
+                    let raw = make_raw(cfa, width, height);
+                    let mut img = Image::new_empty();
+                    raw.demosaic_into(&mut img, mt);
+                    assert!(img.is_monochrome(), "{:?} {}x{} px", cfa, width, height);
+                    assert_eq!(img.l.as_slice(), raw.as_slice(), "{:?} {}x{} px", cfa, width, height);
+                    assert_eq!(img.raw_info.as_ref().unwrap().cfa, cfa);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_demosaic_into_minimal_color_frame() {
+        for mt in [false, true] {
+            let raw = make_raw(CfaType::BGGR, 3, 3);
+            let mut img = Image::new_empty();
+            raw.demosaic_into(&mut img, mt);
+            assert!(img.is_color());
+            assert_eq!((img.width(), img.height()), (3, 3));
+            // The interior pixel keeps its raw CFA value
+            assert_eq!(img.r.get(1, 1), raw.get(1, 1));
+            // All channels are filled, including the border pixels
+            for layer in [&img.r, &img.g, &img.b] {
+                for y in 0..3 {
+                    for x in 0..3 {
+                        assert!(layer.get(x, y).unwrap() > 0, "x={} y={}", x, y);
+                    }
+                }
+            }
         }
     }
 }
