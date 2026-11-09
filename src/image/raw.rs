@@ -236,22 +236,12 @@ impl RawImageInfo {
     }
 }
 
+#[derive(Clone)]
 pub struct RawImage {
     info:        RawImageInfo,
     data:        Vec<u16>,
     data_offset: i32, // Mostly used for proper calibration. Not used for preview!
     cfa_arr:     &'static CfaArray,
-}
-
-impl Clone for RawImage {
-    fn clone(&self) -> Self {
-        Self {
-            info:        self.info.clone(),
-            data:        self.data.clone(),
-            data_offset: 0,
-            cfa_arr:     self.cfa_arr
-        }
-    }
 }
 
 impl RawImage {
@@ -748,7 +738,8 @@ impl RawImage {
         Ok(())
     }
 
-    pub fn normalize_flat(&mut self, offset: u16) -> eyre::Result<()> {
+    pub fn normalize_flat(&mut self, force_offset: Option<i32>) -> eyre::Result<()> {
+        let offset = force_offset.unwrap_or(self.data_offset) as i64;
         let mut l_values = Vec::new();
         let mut r_values = Vec::new();
         let mut g_values = Vec::new();
@@ -776,10 +767,10 @@ impl RawImage {
             let result = values[pos];
             values.clear();
             values.shrink_to_fit();
-            if result <= offset {
+            if result as i64 <= offset {
                 eyre::bail!("Not valid flat image");
             }
-            Ok((result as i64 - offset as i64, true))
+            Ok((result as i64 - offset, true))
         };
         let (l_max, l_used) = get_99(&mut l_values)?;
         let (r_max, r_used) = get_99(&mut r_values)?;
@@ -808,12 +799,14 @@ impl RawImage {
                         b_max
                     }
                 };
-                let val = *v as i64 - offset as i64;
+                let val = *v as i64 - offset;
                 let normalized: i64 = (u16::MAX as i64 * val) / max;
                 let normalized = normalized.max(0).min(u16::MAX as i64);
                 *v = normalized as u16;
             }
         }
+        // Normalization removes the pedestal
+        self.data_offset = 0;
         Ok(())
     }
 
