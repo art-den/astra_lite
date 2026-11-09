@@ -262,7 +262,7 @@ pub fn load_image_from_fits_reader(
         let (width, height) = fits_image_dims(hdu)?;
         image.make_color(width, height, u16::MAX, false);
         // Plane offsets from the validated dims, not from `bytes_len` (also GCOUNT-driven)
-        let bytes_per_value = i8::unsigned_abs(hdu.bitpix()) as usize / 8;
+        let bytes_per_value = hdu.bytes_per_value();
         let one_color_bytes_len = width * height * bytes_per_value;
         FitsReader::read_data(hdu, stream,                       0, image.r.as_slice_mut())?;
         FitsReader::read_data(hdu, stream,     one_color_bytes_len, image.g.as_slice_mut())?;

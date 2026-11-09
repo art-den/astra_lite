@@ -24,7 +24,20 @@ pub struct Header {
     bytes_len: usize,
 }
 
-const DEFAULT_BITPIX: u16 = 8;
+const DEFAULT_BITPIX: i64 = 8;
+const FITS_CARD_SIZE: usize = 80;
+const FITS_BLOCK_SIZE: usize = 2880;
+const FITS_CARDS_PER_BLOCK: usize = FITS_BLOCK_SIZE / FITS_CARD_SIZE;
+const MAX_FITS_NAXIS: usize = 999;
+const FITS_BLOCK_ZEROS: [u8; FITS_BLOCK_SIZE] = [0; FITS_BLOCK_SIZE];
+
+fn invalid_data(msg: &str) -> Error {
+    Error::new(ErrorKind::InvalidData, msg)
+}
+
+fn bit_bytes_per_value(bitpix: i8) -> usize {
+    i8::unsigned_abs(bitpix) as usize / 8
+}
 
 impl Header {
     pub fn new() -> Self {
@@ -91,6 +104,10 @@ impl Header {
         self.bitpix
     }
 
+    pub fn bytes_per_value(&self) -> usize {
+        bit_bytes_per_value(self.bitpix)
+    }
+
     pub fn get_i64(&self, key: &str) -> Option<i64> {
         Self::get_value_impl(&self.values, key)
     }
@@ -113,10 +130,12 @@ impl Header {
         &self.dims
     }
 
+    /// Number of values in the HDU, including PCOUNT/GCOUNT.
     pub fn data_len(&self) -> usize {
         self.data_len
     }
 
+    /// Payload length without trailing 2880-byte padding.
     pub fn bytes_len(&self) -> usize {
         self.bytes_len
     }
@@ -149,21 +168,25 @@ impl FitsReader {
                 }
             };
 
-            let size = hdu.bytes_len;
+            // FITS data units are padded to whole 2880-byte blocks.
+            let skip_bytes = usize::checked_next_multiple_of(hdu.bytes_len, FITS_BLOCK_SIZE)
+                .ok_or_else(|| invalid_data("FITS padded data size overflow"))?;
+            let next_pos = u64::checked_add(hdu.data_pos as u64, skip_bytes as u64)
+                .ok_or_else(|| invalid_data("FITS next HDU offset overflow"))?;
             result.push(hdu);
-            stream.seek(SeekFrom::Current(size as i64))?;
+            stream.seek(SeekFrom::Start(next_pos))?;
         }
 
         Ok(result)
     }
 
     fn read_header(stream: &mut dyn SeekNRead) -> Result<Header> {
-        let mut buf = [0_u8; 2880];
+        let mut buf = [0_u8; FITS_BLOCK_SIZE];
         let mut values = Vec::new();
         let mut last_block = false;
         loop {
             stream.read_exact(&mut buf)?;
-            for line in buf.chunks(80) {
+            for line in buf.chunks(FITS_CARD_SIZE) {
                 let line = std::str::from_utf8(line)
                     .map_err(|e| Error::new(ErrorKind::InvalidData, e))?
                     .trim();
@@ -188,25 +211,63 @@ impl FitsReader {
             }
         }
 
-        let ndim: usize = Header::get_value_impl(&values, "NAXIS").unwrap_or(0);
-        let gcount: usize = Header::get_value_impl(&values, "GCOUNT").unwrap_or(1);
-        let pcount: usize = Header::get_value_impl(&values, "PCOUNT").unwrap_or(0);
-        let bitpix: i8 = Header::get_value_impl(&values, "BITPIX").unwrap_or(DEFAULT_BITPIX as i8);
+        let ndim_i64: i64 = Header::get_value_impl(&values, "NAXIS").unwrap_or(0);
+        if ndim_i64 < 0 || ndim_i64 > MAX_FITS_NAXIS as i64 {
+            return Err(invalid_data("NAXIS is invalid"));
+        }
+        let ndim = ndim_i64 as usize;
 
-        let mut dims = Vec::new();
-        let mut data_len = 1_usize;
+        let gcount_i64: i64 = Header::get_value_impl(&values, "GCOUNT").unwrap_or(1);
+        let pcount_i64: i64 = Header::get_value_impl(&values, "PCOUNT").unwrap_or(0);
+        if gcount_i64 < 0 || pcount_i64 < 0 {
+            return Err(invalid_data("GCOUNT or PCOUNT is negative"));
+        }
+        let gcount = usize::try_from(gcount_i64)
+            .map_err(|_| invalid_data("GCOUNT is too large"))?;
+        let pcount = usize::try_from(pcount_i64)
+            .map_err(|_| invalid_data("PCOUNT is too large"))?;
+
+        let bitpix_i64: i64 = Header::get_value_impl(&values, "BITPIX").unwrap_or(DEFAULT_BITPIX);
+        // A primary HDU with NAXIS=0 and no PCOUNT parameters has no data.
+        let no_data = ndim == 0 && pcount == 0;
+        let bitpix = if no_data {
+            i8::try_from(bitpix_i64).unwrap_or(0)
+        } else {
+            if !matches!(bitpix_i64, 8 | 16 | 32 | 64 | -32 | -64) {
+                return Err(invalid_data(&format!("BITPIX = {bitpix_i64} is not supported")));
+            }
+            bitpix_i64 as i8
+        };
+        let byte_per_value = if no_data {
+            0
+        } else {
+            bit_bytes_per_value(bitpix)
+        };
+
+        let mut dims = Vec::with_capacity(ndim);
+        let mut data_len = if no_data { 0 } else { 1 };
         for idx in 1 ..= ndim {
             let key = format!("NAXIS{}", idx);
-            let dim: usize = Header::get_value_impl(&values, &key).unwrap_or(1);
-            data_len *= dim;
+            let dim_i64: i64 = Header::get_value_impl(&values, &key)
+                .ok_or_else(|| invalid_data(&format!("Missing {key}")))?;
+            if dim_i64 < 0 {
+                return Err(invalid_data(&format!("{key} is negative")));
+            }
+            let dim = usize::try_from(dim_i64)
+                .map_err(|_| invalid_data(&format!("{key} is too large")))?;
+            data_len = usize::checked_mul(data_len, dim)
+                .ok_or_else(|| invalid_data("FITS image size overflow"))?;
             dims.push(dim);
         }
-        data_len += pcount;
-        data_len *= gcount;
+        data_len = usize::checked_add(data_len, pcount)
+            .ok_or_else(|| invalid_data("FITS PCOUNT overflow"))?;
+        data_len = usize::checked_mul(data_len, gcount)
+            .ok_or_else(|| invalid_data("FITS GCOUNT overflow"))?;
 
-        let byte_per_value = (bitpix.abs() / 8) as usize;
-        let bytes_len = data_len * byte_per_value;
-        let data_pos = stream.stream_position().unwrap_or(0) as usize;
+        let bytes_len = usize::checked_mul(data_len, byte_per_value)
+            .ok_or_else(|| invalid_data("FITS data size overflow"))?;
+        let data_pos = usize::try_from(stream.stream_position()?)
+            .map_err(|_| invalid_data("FITS position is too large"))?;
 
         Ok(Header{values, bitpix, dims, data_pos, data_len, bytes_len})
     }
@@ -224,7 +285,7 @@ impl FitsReader {
             ));
         }
         let bzero = header.get_i64("BZERO").unwrap_or(0) as u16;
-        let elem_len = header.bitpix.unsigned_abs() as usize / 8;
+        let elem_len = header.bytes_per_value();
         const BUF_DATA_LEN: usize = 512;
         let mut stream_buf = vec![0_u8; BUF_DATA_LEN * elem_len];
         stream.seek(SeekFrom::Start((header.data_pos + offset) as u64))?;
@@ -274,6 +335,14 @@ impl FitsWriter {
         Self {}
     }
 
+    fn write_block_padding<W: Write + ?Sized>(stream: &mut W, written: usize) -> Result<()> {
+        let rem = written % FITS_BLOCK_SIZE;
+        if rem != 0 {
+            stream.write_all(&FITS_BLOCK_ZEROS[..FITS_BLOCK_SIZE - rem])?;
+        }
+        Ok(())
+    }
+
     pub fn write_header(&self, stream: &mut dyn Write, hdu: &Header) -> Result<()> {
         for item in &hdu.values {
             let mut line = format!("{:8}= ", item.name);
@@ -284,15 +353,16 @@ impl FitsWriter {
             }
             line.push_str(" / ");
             line.push_str(item.comment.as_ref().unwrap_or(&item.name));
-            while line.len() < 80 { line.push(' '); }
-            while line.len() > 80 { line.pop(); }
+            while line.len() < FITS_CARD_SIZE { line.push(' '); }
+            while line.len() > FITS_CARD_SIZE { line.pop(); }
             stream.write_all(line.as_bytes())?;
         }
-        write!(stream, "{:80}", "END")?;
+        write!(stream, "{:<width$}", "END", width = FITS_CARD_SIZE)?;
         let lines_written = hdu.values.len() + 1;
-        let lines_to_complete = 36 - lines_written % 36;
+        let lines_to_complete =
+            (FITS_CARDS_PER_BLOCK - lines_written % FITS_CARDS_PER_BLOCK) % FITS_CARDS_PER_BLOCK;
         for _ in 0..lines_to_complete {
-            write!(stream, "{:80}", "")?;
+            write!(stream, "{:width$}", "", width = FITS_CARD_SIZE)?;
         }
         Ok(())
     }
@@ -310,9 +380,10 @@ impl FitsWriter {
                 format!("BITPIX = {} is not supported", bitpix)
             ));
         }
-        let item_len = bitpix as usize / 8;
+        let item_len = bit_bytes_per_value(bitpix);
         const BUF_DATA_LEN: usize = 512;
         let mut stream_buf = vec![0_u8; BUF_DATA_LEN * item_len];
+        let mut written = 0_usize;
         for chunk in data.chunks(BUF_DATA_LEN) {
             let len_to_write = chunk.len();
             let buf = &mut stream_buf[.. item_len * len_to_write];
@@ -331,7 +402,9 @@ impl FitsWriter {
                 _ => unreachable!(),
             }
             stream.write_all(buf)?;
+            written += buf.len();
         }
+        Self::write_block_padding(stream, written)?;
         Ok(())
     }
 
@@ -389,14 +462,192 @@ impl FitsWriter {
             written += buf.len();
         }
 
-        written %= 2880;
-
-        if written != 0 {
-            let zeros = vec![0; 2880 - written];
-            stream.write_all(&zeros)?;
-        }
+        Self::write_block_padding(stream, written)?;
 
         Ok(())
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    fn empty_primary_header() -> Header {
+        let mut hdu = Header::new();
+        hdu.set_bool("SIMPLE", true);
+        hdu.set_i64("BITPIX", 8);
+        hdu.set_i64("NAXIS", 0);
+        hdu.set_bool("EXTEND", true);
+        hdu
+    }
+
+    fn image_header(width: usize, height: usize) -> Header {
+        let mut hdu = Header::new();
+        hdu.set_str("XTENSION", "IMAGE");
+        hdu.set_i64("BITPIX", 16);
+        hdu.set_i64("NAXIS", 2);
+        hdu.set_i64("NAXIS1", width as i64);
+        hdu.set_i64("NAXIS2", height as i64);
+        hdu.set_i64("PCOUNT", 0);
+        hdu.set_i64("GCOUNT", 1);
+        hdu
+    }
+
+    fn empty_primary_bytes() -> Vec<u8> {
+        let mut out = Vec::new();
+        FitsWriter::new().write_header(&mut out, &empty_primary_header()).unwrap();
+        out
+    }
+
+    #[test]
+    fn empty_primary_has_no_data() {
+        let mut cursor = Cursor::new(empty_primary_bytes());
+        let reader = FitsReader::new(&mut cursor).unwrap();
+        assert_eq!(reader.headers.len(), 1);
+        assert_eq!(reader.headers[0].data_len(), 0);
+        assert_eq!(reader.headers[0].bytes_len(), 0);
+    }
+
+    #[test]
+    fn multi_hdu_file_after_empty_primary() {
+        let mut out = empty_primary_bytes();
+        let writer = FitsWriter::new();
+        let hdu = image_header(10, 10);
+        writer.write_header(&mut out, &hdu).unwrap();
+        writer.write_data(16, 0, &mut out, &[1_u16; 100]).unwrap();
+
+        let mut cursor = Cursor::new(out);
+        let reader = FitsReader::new(&mut cursor).unwrap();
+        assert_eq!(reader.headers.len(), 2);
+        assert_eq!(reader.headers[1].dims().as_slice(), &[10_usize, 10]);
+        assert_eq!(reader.headers[1].bytes_len(), 200);
+
+        let mut data = [0_u16; 100];
+        FitsReader::read_data(&reader.headers[1], &mut cursor, 0, &mut data).unwrap();
+        assert!(data.iter().all(|v| *v == 1));
+    }
+
+    #[test]
+    fn write_data_pads_to_fits_block() {
+        let mut out = Vec::new();
+        FitsWriter::new().write_data(16, 0, &mut out, &[0_u16; 100]).unwrap();
+        assert_eq!(out.len(), FITS_BLOCK_SIZE);
+    }
+
+    #[test]
+    fn write_header_does_not_add_extra_block_when_full() {
+        let mut hdu = Header::new();
+        for idx in 0 .. 35 {
+            hdu.set_i64(&format!("K{idx}"), idx);
+        }
+
+        let mut out = Vec::new();
+        FitsWriter::new().write_header(&mut out, &hdu).unwrap();
+        assert_eq!(out.len(), FITS_BLOCK_SIZE);
+    }
+
+    #[test]
+    fn rejects_invalid_bitpix() {
+        let mut hdu = Header::new();
+        hdu.set_i64("BITPIX", 1);
+        hdu.set_i64("NAXIS", 2);
+        hdu.set_i64("NAXIS1", 2);
+        hdu.set_i64("NAXIS2", 2);
+
+        let mut out = Vec::new();
+        FitsWriter::new().write_header(&mut out, &hdu).unwrap();
+
+        let mut cursor = Cursor::new(out);
+        let err = match FitsReader::new(&mut cursor) {
+            Ok(_) => panic!("expected error"),
+            Err(err) => err,
+        };
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn rejects_missing_axis() {
+        let mut hdu = Header::new();
+        hdu.set_i64("BITPIX", 8);
+        hdu.set_i64("NAXIS", 1);
+
+        let mut out = Vec::new();
+        FitsWriter::new().write_header(&mut out, &hdu).unwrap();
+
+        let mut cursor = Cursor::new(out);
+        let err = match FitsReader::new(&mut cursor) {
+            Ok(_) => panic!("expected error"),
+            Err(err) => err,
+        };
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn multi_hdu_reader_skips_padded_data() {
+        let mut out = empty_primary_bytes();
+        let writer = FitsWriter::new();
+
+        let first = image_header(100, 100);
+        writer.write_header(&mut out, &first).unwrap();
+        writer.write_data(16, 0, &mut out, &[1_u16; 10000]).unwrap();
+
+        let second = image_header(10, 10);
+        writer.write_header(&mut out, &second).unwrap();
+        writer.write_data(16, 0, &mut out, &[2_u16; 100]).unwrap();
+
+        let mut cursor = Cursor::new(out);
+        let reader = FitsReader::new(&mut cursor).unwrap();
+        assert_eq!(reader.headers.len(), 3);
+        assert_eq!(reader.headers[1].bytes_len(), 20000);
+        assert_eq!(reader.headers[2].bytes_len(), 200);
+
+        let mut data = [0_u16; 100];
+        FitsReader::read_data(&reader.headers[2], &mut cursor, 0, &mut data).unwrap();
+        assert!(data.iter().all(|v| *v == 2));
+    }
+
+    #[test]
+    fn write_data_pads_8bit_to_fits_block() {
+        let mut out = Vec::new();
+        FitsWriter::new().write_data(8, 0, &mut out, &[0_u16; 100]).unwrap();
+        assert_eq!(out.len(), FITS_BLOCK_SIZE);
+    }
+
+    #[test]
+    fn empty_primary_allows_bitpix_zero() {
+        let mut hdu = Header::new();
+        hdu.set_bool("SIMPLE", true);
+        hdu.set_i64("BITPIX", 0);
+        hdu.set_i64("NAXIS", 0);
+        hdu.set_bool("EXTEND", true);
+
+        let mut out = Vec::new();
+        FitsWriter::new().write_header(&mut out, &hdu).unwrap();
+
+        let mut cursor = Cursor::new(out);
+        let reader = FitsReader::new(&mut cursor).unwrap();
+        assert_eq!(reader.headers.len(), 1);
+        assert_eq!(reader.headers[0].bytes_len(), 0);
+    }
+
+    #[test]
+    fn rejects_bitpix_out_of_i8_range() {
+        let mut hdu = Header::new();
+        hdu.set_i64("BITPIX", 128);
+        hdu.set_i64("NAXIS", 2);
+        hdu.set_i64("NAXIS1", 2);
+        hdu.set_i64("NAXIS2", 2);
+
+        let mut out = Vec::new();
+        FitsWriter::new().write_header(&mut out, &hdu).unwrap();
+
+        let mut cursor = Cursor::new(out);
+        let err = match FitsReader::new(&mut cursor) {
+            Ok(_) => panic!("expected error"),
+            Err(err) => err,
+        };
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+    }
 }
