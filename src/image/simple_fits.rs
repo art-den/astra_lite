@@ -39,8 +39,12 @@ fn bit_bytes_per_value(bitpix: i8) -> usize {
     i8::unsigned_abs(bitpix) as usize / 8
 }
 
+// u16 ADU range and the margin by which a physical value still rounds into it
+const ADU_MAX: f64 = 65535.0;
+const ADU_ROUND_TOL: f64 = 0.5;
+
 // Tolerances for the BITPIX = -32 range heuristic, see `FitsReader::read_data_f32`
-const FLOAT_ADU_MAX: f64 = u16::MAX as f64 + 0.5;
+const FLOAT_ADU_MAX: f64 = ADU_MAX + ADU_ROUND_TOL;
 const FLOAT_NEG_ADU_TOL: f64 = 1000.0;
 const FLOAT_NORM_HIGH_TOL: f64 = 0.001;
 const FLOAT_NORM_NEG_TOL: f64 = 0.01;
@@ -125,6 +129,24 @@ impl Header {
         Self::get_value_impl(&self.values, key)
     }
 
+    /// Reads a real-valued card, both the plain (`32768`) and the exponent
+    /// (`3.27680000000000E+04`) spelling. `None` means absent or unparsable; an unparsable
+    /// card is logged rather than silently read as zero.
+    fn real_card(&self, key: &str) -> Result<Option<f64>> {
+        let Some(item) = self.values.iter().find(|item| item.name.eq_ignore_ascii_case(key)) else {
+            return Ok(None);
+        };
+        let raw = item.value.trim();
+        match raw.parse::<f64>() {
+            Ok(value) if value.is_finite() => Ok(Some(value)),
+            Ok(value) => Err(invalid_data(&format!("{key} = {value:?} is not finite"))),
+            Err(_) => {
+                log::warn!("FITS: unparsable {key} card `{raw}` is treated as absent");
+                Ok(None)
+            }
+        }
+    }
+
     /// String value without surrounding apostrophes, trimmed; unterminated quotes (corrupt file) are returned verbatim to avoid a panic.
     pub fn get_str<'b>(&'b self, key: &str) -> Option<&'b str> {
         let mut result = self.values.iter()
@@ -148,6 +170,110 @@ impl Header {
     /// Payload length without trailing 2880-byte padding.
     pub fn bytes_len(&self) -> usize {
         self.bytes_len
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+/// `BZERO` and `BSCALE` of an HDU, which define `physical = intrinsic * BSCALE + BZERO`.
+/// Absent cards mean no mapping: 0 and 1.
+fn mapping_cards(header: &Header) -> Result<(f64, f64)> {
+    let bzero = header.real_card("BZERO")?.unwrap_or(0.0);
+    let bscale = header.real_card("BSCALE")?.unwrap_or(1.0);
+    if bscale == 0.0 {
+        return Err(invalid_data("BSCALE = 0 is invalid"));
+    }
+    Ok((bzero, bscale))
+}
+
+/// How stored `BITPIX = 8`/`16` pixels map to `u16` ADU counts, see `IntMapping::from_header`.
+enum IntMapping {
+    /// Unit BSCALE and an integral BZERO: exact integer math
+    Offset { bzero: i64 },
+    /// Any other mapping: `f64` math
+    Scaled { bscale: f64, bzero: f64 },
+}
+
+impl IntMapping {
+    /// Builds the mapping from BZERO/BSCALE and rejects one that cannot reach the ADU range
+    /// at all. The verdict is taken from the header, never from the pixels, so per-plane reads
+    /// of an RGB triplet file always get the same mapping.
+    fn from_header(header: &Header) -> Result<Self> {
+        let (bzero, bscale) = mapping_cards(header)?;
+        let mapped = bzero != 0.0 || bscale != 1.0;
+        let (imin, imax) = intrinsic_range(header.bitpix, mapped);
+        // The mapping is linear, so its extremes sit at the intrinsic bounds
+        // (comparing both also swaps them for a negative BSCALE)
+        let v1 = imin * bscale + bzero;
+        let v2 = imax * bscale + bzero;
+        let pmin = f64::min(v1, v2);
+        let pmax = f64::max(v1, v2);
+
+        if mapped {
+            log::info!("FITS: applying BSCALE = {bscale:?}, BZERO = {bzero:?}");
+            if pmin > ADU_MAX + ADU_ROUND_TOL || pmax < -ADU_ROUND_TOL {
+                // No pixel is representable here, so the file would decode to uniform black/white
+                return Err(Error::new(
+                    ErrorKind::Unsupported,
+                    format!(
+                        "FITS mapping [BSCALE = {bscale:?}, BZERO = {bzero:?}] puts {}-bit data in \
+                         [{pmin:?}, {pmax:?}]: nothing rounds into 0..{}",
+                        header.bitpix, u16::MAX
+                    )
+                ));
+            }
+            if pmin < 0.0 || pmax > ADU_MAX {
+                log::warn!(
+                    "FITS: values [{pmin:?}, {pmax:?}] do not fit 0..{} and are saturated",
+                    u16::MAX
+                );
+            }
+        }
+
+        if bscale == 1.0 && f64::trunc(bzero) == bzero {
+            // The check above bounds BZERO well inside i64, so the cast is loss-free
+            Ok(IntMapping::Offset { bzero: bzero as i64 })
+        } else {
+            Ok(IntMapping::Scaled { bscale, bzero })
+        }
+    }
+
+    /// Whether the stored bits hold signed two's complement values, see `intrinsic_range`
+    fn signed_stored(&self, bitpix: i8) -> bool {
+        let mapped = match self {
+            IntMapping::Offset { bzero } => *bzero != 0,
+            IntMapping::Scaled { .. } => true
+        };
+        bitpix == 16 && mapped
+    }
+
+    fn to_adu(&self, intrinsic: i32) -> u16 {
+        match self {
+            // Out-of-range results saturate; `from_header` warns when the mapping can produce them
+            IntMapping::Offset { bzero } => {
+                i64::clamp(i64::from(intrinsic) + bzero, 0, i64::from(u16::MAX)) as u16
+            }
+            IntMapping::Scaled { bscale, bzero } => {
+                let physical = f64::from(intrinsic) * bscale + bzero;
+                f64::clamp(f64::round(physical), 0.0, ADU_MAX) as u16
+            }
+        }
+    }
+}
+
+/// Intrinsic value range stored in the file.
+///
+/// `BITPIX = 8` is always unsigned. `BITPIX = 16` bits hold a signed range only for a
+/// non-identity mapping (the canonical `BZERO = 32768` shifts signed int16 into the storage
+/// slot); with no mapping they stay unsigned, because many cameras dump `uint16` payloads
+/// without a BZERO card.
+fn intrinsic_range(bitpix: i8, mapped: bool) -> (f64, f64) {
+    if bitpix == 8 {
+        (0.0, 255.0)
+    } else if mapped {
+        (f64::from(i16::MIN), f64::from(i16::MAX))
+    } else {
+        (0.0, ADU_MAX)
     }
 }
 
@@ -283,7 +409,12 @@ impl FitsReader {
     }
 
     /// Decodes an image HDU region into `u16` ADU counts.
-    /// For `BITPIX = -32` the mapping is chosen per HDU, see `read_data_f32`.
+    ///
+    /// For `BITPIX = 8`/`16` the `BZERO`/`BSCALE` mapping is applied (both cards are real
+    /// values in FITS, so `32768`, `32768.0` and `3.2768E+04` are equivalent); results outside
+    /// the ADU range saturate. A non-finite card or `BSCALE = 0` is `InvalidData`, a mapping
+    /// that cannot reach the ADU range at all is `Unsupported`. For `BITPIX = -32` the mapping
+    /// is chosen per HDU, see `read_data_f32`.
     pub fn read_data(
         header: &Header,
         stream: &mut dyn SeekNRead,
@@ -299,7 +430,8 @@ impl FitsReader {
         if header.bitpix == -32 {
             return Self::read_data_f32(header, stream, offset, result);
         }
-        let bzero = header.get_i64("BZERO").unwrap_or(0) as u16;
+        let mapping = IntMapping::from_header(header)?;
+        let signed_stored = mapping.signed_stored(header.bitpix);
         let elem_len = header.bytes_per_value();
         let mut stream_buf = vec![0_u8; BUF_DATA_LEN * elem_len];
         stream.seek(SeekFrom::Start((header.data_pos + offset) as u64))?;
@@ -309,15 +441,15 @@ impl FitsReader {
             stream.read_exact(buf)?;
             match header.bitpix {
                 8 => {
-                    let add = bzero as u8;
                     for (b, dst) in izip!(buf, chunk) {
-                        *dst = b.wrapping_add(add) as u16;
+                        *dst = mapping.to_adu(i32::from(*b));
                     }
                 }
                 16 => {
                     for ((b1, b2), dst) in izip!(buf.iter().tuples(), chunk) {
-                        let value = ((*b1 as u16) << 8) + *b2 as u16;
-                        *dst = value.wrapping_add(bzero);
+                        let raw = ((*b1 as u16) << 8) + *b2 as u16;
+                        let intrinsic = if signed_stored { i32::from(raw as i16) } else { i32::from(raw) };
+                        *dst = mapping.to_adu(intrinsic);
                     }
                 },
                 _ => unreachable!(),
@@ -345,28 +477,8 @@ impl FitsReader {
         if result.is_empty() {
             return Ok(());
         }
-        // BZERO/BSCALE are floats in FITS; `get_f64` accepts both `32768` and `3.2768E+04` forms
-        let has_card = |key: &str| header.values.iter().any(|v| v.name.eq_ignore_ascii_case(key));
-        let bzero = match header.get_f64("BZERO") {
-            Some(v) if v.is_finite() => v,
-            Some(v) => return Err(invalid_data(&format!("BZERO = {v} is not finite"))),
-            None => {
-                if has_card("BZERO") {
-                    log::warn!("FITS float: unparsable BZERO card ignored");
-                }
-                0.0
-            }
-        };
-        let bscale = match header.get_f64("BSCALE") {
-            Some(v) if v.is_finite() && v != 0.0 => v,
-            Some(v) => return Err(invalid_data(&format!("BSCALE = {v} is invalid"))),
-            None => {
-                if has_card("BSCALE") {
-                    log::warn!("FITS float: unparsable BSCALE card ignored");
-                }
-                1.0
-            }
-        };
+        // BZERO/BSCALE are real values in FITS; `mapping_cards` accepts both spellings
+        let (bzero, bscale) = mapping_cards(header)?;
         let mapped = bzero != 0.0 || bscale != 1.0;
         let physical = |v: f64| v * bscale + bzero;
 
@@ -808,12 +920,7 @@ mod tests {
     }
 
     fn float32_file(data: &[f32], extra: &dyn Fn(&mut Header)) -> Vec<u8> {
-        let mut hdu = Header::new();
-        hdu.set_bool("SIMPLE", true);
-        hdu.set_i64("BITPIX", -32);
-        hdu.set_i64("NAXIS", 2);
-        hdu.set_i64("NAXIS1", data.len() as i64);
-        hdu.set_i64("NAXIS2", 1);
+        let mut hdu = test_image_header(-32, data.len());
         extra(&mut hdu);
 
         let mut out = Vec::new();
@@ -885,8 +992,7 @@ mod tests {
     }
 
     #[test]
-    fn float32_float_form_bzero_parses_without_error() {
-        // astropy writes `BZERO =  32768.0`; the old integer-only parse panicked casting to u16
+    fn float32_explicit_zero_bzero_is_identity() {
         let data = read_float32(&[0.0, 500.0], &|hdu| {
             hdu.set_f64("BZERO", 0.0);
         }).unwrap();
@@ -906,6 +1012,212 @@ mod tests {
     fn float32_bad_bscale_is_invalid_data() {
         let err = match read_float32(&[0.0, 1.0], &|hdu| {
             hdu.set_f64("BSCALE", 0.0);
+        }) {
+            Ok(_) => panic!("expected error"),
+            Err(err) => err,
+        };
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+    }
+
+    /// One-row image header of `len` pixels with the given BITPIX
+    fn test_image_header(bitpix: i8, len: usize) -> Header {
+        let mut hdu = Header::new();
+        hdu.set_bool("SIMPLE", true);
+        hdu.set_i64("BITPIX", i64::from(bitpix));
+        hdu.set_i64("NAXIS", 2);
+        hdu.set_i64("NAXIS1", len as i64);
+        hdu.set_i64("NAXIS2", 1);
+        hdu
+    }
+
+    /// Writes a card value verbatim, to exercise spellings `set_i64`/`set_f64` cannot produce
+    fn set_raw_card(hdu: &mut Header, key: &str, raw: &str) {
+        hdu.set_value_impl(key, raw.to_string());
+    }
+
+    /// Builds a file whose stored payload corresponds to `data` written with the pedestal
+    /// `write_bzero`, so the caller can declare any mapping spelling over it (see `FitsWriter::write_data`)
+    fn int_file(bitpix: i8, write_bzero: u16, data: &[u16], extra: &dyn Fn(&mut Header)) -> Vec<u8> {
+        let mut hdu = test_image_header(bitpix, data.len());
+        extra(&mut hdu);
+
+        let mut out = Vec::new();
+        let writer = FitsWriter::new();
+        writer.write_header(&mut out, &hdu).unwrap();
+        writer.write_data(bitpix, write_bzero, &mut out, data).unwrap();
+        out
+    }
+
+    fn read_int(bitpix: i8, write_bzero: u16, data: &[u16], extra: &dyn Fn(&mut Header)) -> std::io::Result<Vec<u16>> {
+        let mut cursor = Cursor::new(int_file(bitpix, write_bzero, data, extra));
+        let reader = FitsReader::new(&mut cursor)?;
+        let mut result = vec![0_u16; data.len()];
+        FitsReader::read_data(&reader.headers[0], &mut cursor, 0, &mut result)?;
+        Ok(result)
+    }
+
+    #[test]
+    fn int16_bzero_forms_are_equivalent() {
+        // The reproduction payload from VERIFICATION_ISSUES.md. The real-value spellings of
+        // BZERO come from third-party writers, the plain integer one is what Astra writes today
+        let payload = [32767_u16, 32768, 32769, 0, 65535];
+        for form in ["32768.0", "32768.", "3.27680000000000E+04", "32768", " 32768.0 "] {
+            let data = read_int(16, 32768, &payload, &|hdu| {
+                set_raw_card(hdu, "BZERO", form);
+            }).unwrap();
+            assert_eq!(data, payload, "BZERO card `{form}` must round-trip");
+        }
+    }
+
+    #[test]
+    fn int16_bscale_is_applied() {
+        // Scaled int16 data is signed two's complement; payload holds -100, 0, 1000
+        let stored = [(-100_i16) as u16, 0, 1000];
+        let data = read_int(16, 0, &stored, &|hdu| {
+            set_raw_card(hdu, "BSCALE", "5.00000000000000E-01");
+            hdu.set_f64("BZERO", 100.0);
+        }).unwrap();
+        assert_eq!(data, vec![50, 100, 600]);
+    }
+
+    #[test]
+    fn int16_out_of_range_mapping_clips_instead_of_wrapping() {
+        // The old modular `wrapping_add` turned 72767 into 7231; now it saturates
+        let stored = [(-32768_i16) as u16, 0, 32767];
+        let data = read_int(16, 0, &stored, &|hdu| {
+            set_raw_card(hdu, "BZERO", "40000.0");
+        }).unwrap();
+        assert_eq!(data, vec![7232, 40000, 65535]);
+    }
+
+    #[test]
+    fn int16_negative_mapping_clips_instead_of_wrapping() {
+        let stored = [(-100_i16) as u16, 0, 16000];
+        let data = read_int(16, 0, &stored, &|hdu| {
+            hdu.set_f64("BSCALE", 2.0);
+        }).unwrap();
+        assert_eq!(data, vec![0, 0, 32000]);
+    }
+
+    #[test]
+    fn int16_mapping_fully_above_adu_range_is_unsupported() {
+        let err = match read_int(16, 0, &[0, 1], &|hdu| {
+            set_raw_card(hdu, "BZERO", "100000.0");
+        }) {
+            Ok(_) => panic!("expected error"),
+            Err(err) => err,
+        };
+        assert_eq!(err.kind(), ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn int16_without_cards_keeps_unsigned_payload() {
+        // Third-party `uint16` payloads written without a BZERO card must not be read as signed
+        let payload = [0_u16, 40000, 65535];
+        let data = read_int(16, 0, &payload, &|_hdu| {}).unwrap();
+        assert_eq!(data, payload);
+    }
+
+    #[test]
+    fn int16_identity_cards_keep_unsigned_payload() {
+        // `BSCALE = 1.` declares nothing; only a mapping that shifts values may imply signed
+        // storage (see `intrinsic_range`)
+        let payload = [0_u16, 40000, 65535];
+        let data = read_int(16, 0, &payload, &|hdu| {
+            set_raw_card(hdu, "BSCALE", "1.");
+        }).unwrap();
+        assert_eq!(data, payload);
+    }
+
+    #[test]
+    fn int16_unparsable_bzero_is_treated_as_absent() {
+        let payload = [0_u16, 1000, 65535];
+        let data = read_int(16, 0, &payload, &|hdu| {
+            set_raw_card(hdu, "BZERO", "'32768'");
+        }).unwrap();
+        assert_eq!(data, payload);
+    }
+
+    #[test]
+    fn int16_negative_bscale_is_applied() {
+        // A negative scale swaps the mapping extremes; payload holds -100, 0, 1000
+        let stored = [(-100_i16) as u16, 0, 1000];
+        let data = read_int(16, 0, &stored, &|hdu| {
+            hdu.set_f64("BSCALE", -0.5);
+            hdu.set_f64("BZERO", 500.0);
+        }).unwrap();
+        assert_eq!(data, vec![550, 500, 0]);
+    }
+
+    #[test]
+    fn int16_fractional_bzero_is_applied() {
+        let data = read_int(16, 0, &[0, 10, 20], &|hdu| {
+            set_raw_card(hdu, "BZERO", "0.5");
+        }).unwrap();
+        assert_eq!(data, vec![1, 11, 21]);
+    }
+
+    #[test]
+    fn int16_per_plane_reads_share_the_mapping() {
+        // `io.rs` reads the R/G/B planes of a triplet file from one HDU by byte offset
+        let payload = [1_u16, 2, 30000, 65535];
+        let file = int_file(16, 32768, &payload, &|hdu| {
+            set_raw_card(hdu, "BZERO", "32768.0");
+        });
+        let mut cursor = Cursor::new(file);
+        let reader = FitsReader::new(&mut cursor).unwrap();
+        let hdu = &reader.headers[0];
+
+        let mut all = vec![0_u16; 2];
+        FitsReader::read_data(hdu, &mut cursor, 0, &mut all).unwrap();
+        let mut plane = vec![0_u16; 2];
+        let plane_bytes = hdu.bytes_per_value() * 2;
+        FitsReader::read_data(hdu, &mut cursor, plane_bytes, &mut plane).unwrap();
+
+        all.extend_from_slice(&plane);
+        assert_eq!(all, payload);
+    }
+
+    #[test]
+    fn int8_bscale_is_applied() {
+        let data = read_int(8, 0, &[0, 10, 255], &|hdu| {
+            hdu.set_f64("BSCALE", 2.0);
+        }).unwrap();
+        assert_eq!(data, vec![0, 20, 510]);
+    }
+
+    #[test]
+    fn int8_negative_bzero_is_clipped_not_wrapped() {
+        // Signed byte data (BZERO = -128): physical values below 0 must land on 0, not wrap to white
+        let data = read_int(8, 0, &[10, 128, 255], &|hdu| {
+            set_raw_card(hdu, "BZERO", "-128.0");
+        }).unwrap();
+        assert_eq!(data, vec![0, 0, 127]);
+    }
+
+    #[test]
+    fn int16_float_form_bzero_covers_the_whole_adu_range() {
+        let data = read_int(16, 32768, &[0, 1000, 65535], &|hdu| {
+            set_raw_card(hdu, "BZERO", "32768.0");
+        }).unwrap();
+        assert_eq!(data, vec![0, 1000, 65535]);
+    }
+
+    #[test]
+    fn int16_nan_bzero_is_invalid_data() {
+        let err = match read_int(16, 0, &[0, 1], &|hdu| {
+            set_raw_card(hdu, "BZERO", "NaN");
+        }) {
+            Ok(_) => panic!("expected error"),
+            Err(err) => err,
+        };
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn int16_bscale_zero_is_invalid_data() {
+        let err = match read_int(16, 0, &[0, 1], &|hdu| {
+            set_raw_card(hdu, "BSCALE", "0");
         }) {
             Ok(_) => panic!("expected error"),
             Err(err) => err,
