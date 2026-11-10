@@ -116,12 +116,13 @@ impl Header {
         Self::get_value_impl(&self.values, key)
     }
 
+    /// String value without surrounding apostrophes, trimmed; unterminated quotes (corrupt file) are returned verbatim to avoid a panic.
     pub fn get_str<'b>(&'b self, key: &str) -> Option<&'b str> {
         let mut result = self.values.iter()
             .find(|item| item.name.eq_ignore_ascii_case(key))?
             .value.as_str();
-        if result.starts_with("'") && result.ends_with("'") {
-            result = &result[1..result.len()-1];
+        if let Some(stripped) = result.strip_prefix("'").and_then(|s| s.strip_suffix("'")) {
+            result = stripped;
         }
         Some(result.trim())
     }
@@ -630,6 +631,28 @@ mod tests {
         let reader = FitsReader::new(&mut cursor).unwrap();
         assert_eq!(reader.headers.len(), 1);
         assert_eq!(reader.headers[0].bytes_len(), 0);
+    }
+
+    #[test]
+    fn corrupt_lone_apostrophe_card_does_not_panic() {
+        let mut block = vec![b' '; FITS_BLOCK_SIZE];
+        let cards = [
+            "SIMPLE =                        T",
+            "BITPIX =                        0",
+            "NAXIS =                         0",
+            "BAYERPAT=                       '",
+            "OBSERVAT=                       ''",
+            "END",
+        ];
+        for (idx, card) in cards.iter().enumerate() {
+            let start = idx * FITS_CARD_SIZE;
+            block[start .. start + card.len()].copy_from_slice(card.as_bytes());
+        }
+
+        let mut cursor = Cursor::new(block);
+        let reader = FitsReader::new(&mut cursor).unwrap();
+        assert_eq!(reader.headers[0].get_str("BAYERPAT"), Some("'"));
+        assert_eq!(reader.headers[0].get_str("OBSERVAT"), Some(""));
     }
 
     #[test]
