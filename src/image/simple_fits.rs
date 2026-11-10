@@ -39,6 +39,15 @@ fn bit_bytes_per_value(bitpix: i8) -> usize {
     i8::unsigned_abs(bitpix) as usize / 8
 }
 
+// Tolerances for the BITPIX = -32 range heuristic, see `FitsReader::read_data_f32`
+const FLOAT_ADU_MAX: f64 = u16::MAX as f64 + 0.5;
+const FLOAT_NEG_ADU_TOL: f64 = 1000.0;
+const FLOAT_NORM_HIGH_TOL: f64 = 0.001;
+const FLOAT_NORM_NEG_TOL: f64 = 0.01;
+
+// Streaming buffer size in elements for pixel data read/write loops
+const BUF_DATA_LEN: usize = 512;
+
 impl Header {
     pub fn new() -> Self {
         Self {
@@ -273,6 +282,8 @@ impl FitsReader {
         Ok(Header{values, bitpix, dims, data_pos, data_len, bytes_len})
     }
 
+    /// Decodes an image HDU region into `u16` ADU counts.
+    /// For `BITPIX = -32` the mapping is chosen per HDU, see `read_data_f32`.
     pub fn read_data(
         header: &Header,
         stream: &mut dyn SeekNRead,
@@ -285,9 +296,11 @@ impl FitsReader {
                 format!("BITPIX = {} is not supported", header.bitpix)
             ));
         }
+        if header.bitpix == -32 {
+            return Self::read_data_f32(header, stream, offset, result);
+        }
         let bzero = header.get_i64("BZERO").unwrap_or(0) as u16;
         let elem_len = header.bytes_per_value();
-        const BUF_DATA_LEN: usize = 512;
         let mut stream_buf = vec![0_u8; BUF_DATA_LEN * elem_len];
         stream.seek(SeekFrom::Start((header.data_pos + offset) as u64))?;
         for chunk in result.chunks_mut(BUF_DATA_LEN) {
@@ -307,17 +320,139 @@ impl FitsReader {
                         *dst = value.wrapping_add(bzero);
                     }
                 },
-                -32 => {
-                    for ((b1, b2, b3, b4), dst) in izip!(buf.iter().tuples(), chunk) {
-                        let value = f32::from_be_bytes([*b1, *b2, *b3, *b4]);
-                        let i32_value = (value * u16::MAX as f32 + 0.5) as i32;
-                        *dst = i32_value.max(0).min(u16::MAX as i32) as u16;
-                    }
-                }
                 _ => unreachable!(),
             }
         }
         Ok(())
+    }
+
+    /// Converts float32 (`BITPIX = -32`) pixels to `u16` ADU counts.
+    ///
+    /// The FITS mapping `physical = intrinsic * BSCALE + BZERO` is applied when
+    /// BZERO/BSCALE cards are present. Third-party float files use two conventions
+    /// that no header key reliably distinguishes: normalized 0..1 values
+    /// (PixInsight/Siril exports) and physical counts (astropy/NOIRLab calibrated
+    /// or stacked frames), so the value range scanned over the whole HDU decides
+    /// the mapping (consistent across per-plane reads of RGB triplet files).
+    /// If neither candidate maps into the `u16` ADU range, `Unsupported` is
+    /// returned instead of silently clipping the whole image to 0/65535.
+    fn read_data_f32(
+        header: &Header,
+        stream: &mut dyn SeekNRead,
+        offset: usize,
+        result: &mut [u16]
+    ) -> Result<()> {
+        if result.is_empty() {
+            return Ok(());
+        }
+        // BZERO/BSCALE are floats in FITS; `get_f64` accepts both `32768` and `3.2768E+04` forms
+        let has_card = |key: &str| header.values.iter().any(|v| v.name.eq_ignore_ascii_case(key));
+        let bzero = match header.get_f64("BZERO") {
+            Some(v) if v.is_finite() => v,
+            Some(v) => return Err(invalid_data(&format!("BZERO = {v} is not finite"))),
+            None => {
+                if has_card("BZERO") {
+                    log::warn!("FITS float: unparsable BZERO card ignored");
+                }
+                0.0
+            }
+        };
+        let bscale = match header.get_f64("BSCALE") {
+            Some(v) if v.is_finite() && v != 0.0 => v,
+            Some(v) => return Err(invalid_data(&format!("BSCALE = {v} is invalid"))),
+            None => {
+                if has_card("BSCALE") {
+                    log::warn!("FITS float: unparsable BSCALE card ignored");
+                }
+                1.0
+            }
+        };
+        let mapped = bzero != 0.0 || bscale != 1.0;
+        let physical = |v: f64| v * bscale + bzero;
+
+        let elem_len = header.bytes_per_value();
+        let data_start = (header.data_pos + offset) as u64;
+        let mut stream_buf = vec![0_u8; BUF_DATA_LEN * elem_len];
+
+        // Pass 1: physical value range over the whole HDU (from `data_pos`, not `offset`)
+        // so that sequential per-plane reads of an RGB triplet file share one mapping
+        let mut scan_len = 1_usize;
+        for dim in &header.dims {
+            scan_len = usize::checked_mul(scan_len, *dim).unwrap_or(usize::MAX);
+        }
+        let scan_len = usize::max(scan_len, result.len());
+        stream.seek(SeekFrom::Start(header.data_pos as u64))?;
+        let mut min = f64::INFINITY;
+        let mut max = f64::NEG_INFINITY;
+        let mut pos = 0_usize;
+        while pos < scan_len {
+            let count = usize::min(BUF_DATA_LEN, scan_len - pos);
+            let buf = &mut stream_buf[.. elem_len * count];
+            stream.read_exact(buf)?;
+            for b in buf.chunks_exact(elem_len) {
+                let bytes: [u8; 4] = b.try_into().unwrap();
+                // Float overflow is defined (inf) and caught by the finiteness check below
+                let phys = physical(f64::from(f32::from_be_bytes(bytes)));
+                if !phys.is_finite() {
+                    return Err(Error::new(
+                        ErrorKind::Unsupported,
+                        format!("Non-finite float pixel value ({phys})")
+                    ));
+                }
+                min = f64::min(min, phys);
+                max = f64::max(max, phys);
+            }
+            pos += count;
+        }
+
+        // Choose the ADU mapping from the value range
+        let normalized = if max <= 1.0 + FLOAT_NORM_HIGH_TOL {
+            if min < -FLOAT_NORM_NEG_TOL {
+                return Self::float_unsupported(min, max, mapped);
+            }
+            true
+        } else if max <= FLOAT_ADU_MAX && min >= -FLOAT_NEG_ADU_TOL {
+            if min < 0.0 {
+                log::warn!("FITS float: negative values (min {min}) clipped to 0");
+            }
+            false
+        } else {
+            return Self::float_unsupported(min, max, mapped);
+        };
+        // Normalized 0..1 convention (also covers all-zero files) is stretched to the ADU range
+        let stretch = if normalized { u16::MAX as f64 } else { 1.0 };
+        log::info!("FITS float: reading as {}", if normalized {
+            "0..1 normalized values (stretched to 0..65535)"
+        } else {
+            "ADU counts"
+        });
+
+        // Pass 2: convert
+        stream.seek(SeekFrom::Start(data_start))?;
+        for chunk in result.chunks_mut(BUF_DATA_LEN) {
+            let buf = &mut stream_buf[.. elem_len * chunk.len()];
+            stream.read_exact(buf)?;
+            let buf = &*buf;
+            for ((b1, b2, b3, b4), dst) in izip!(buf.iter().tuples(), chunk) {
+                let value = f64::from(f32::from_be_bytes([*b1, *b2, *b3, *b4]));
+                // Range-checked in pass 1, so `adu` is finite here
+                let adu = physical(value) * stretch;
+                // Slight negatives and the rounding overshoot clip to the 0..65535 bounds
+                let rounded = f64::min(f64::max(f64::round(adu), 0.0), u16::MAX as f64);
+                *dst = rounded as u16;
+            }
+        }
+        Ok(())
+    }
+
+    fn float_unsupported(min: f64, max: f64, mapped: bool) -> Result<()> {
+        Err(Error::new(
+            ErrorKind::Unsupported,
+            format!(
+                "FITS float values [{min}, {max}] cannot be mapped to the 0..65535 ADU range{}",
+                if mapped { " (after the BZERO/BSCALE mapping)" } else { "" }
+            )
+        ))
     }
 }
 
@@ -382,7 +517,6 @@ impl FitsWriter {
             ));
         }
         let item_len = bit_bytes_per_value(bitpix);
-        const BUF_DATA_LEN: usize = 512;
         let mut stream_buf = vec![0_u8; BUF_DATA_LEN * item_len];
         let mut written = 0_usize;
         for chunk in data.chunks(BUF_DATA_LEN) {
@@ -451,7 +585,6 @@ impl FitsWriter {
         data:   &[f64],
     ) -> Result<()> {
         let item_len = std::mem::size_of::<f64>();
-        const BUF_DATA_LEN: usize = 512;
         let mut stream_buf = vec![0_u8; BUF_DATA_LEN * item_len];
         let mut written = 0_usize;
         for chunk in data.chunks(BUF_DATA_LEN) {
@@ -668,6 +801,112 @@ mod tests {
 
         let mut cursor = Cursor::new(out);
         let err = match FitsReader::new(&mut cursor) {
+            Ok(_) => panic!("expected error"),
+            Err(err) => err,
+        };
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+    }
+
+    fn float32_file(data: &[f32], extra: &dyn Fn(&mut Header)) -> Vec<u8> {
+        let mut hdu = Header::new();
+        hdu.set_bool("SIMPLE", true);
+        hdu.set_i64("BITPIX", -32);
+        hdu.set_i64("NAXIS", 2);
+        hdu.set_i64("NAXIS1", data.len() as i64);
+        hdu.set_i64("NAXIS2", 1);
+        extra(&mut hdu);
+
+        let mut out = Vec::new();
+        FitsWriter::new().write_header(&mut out, &hdu).unwrap();
+        for v in data {
+            out.extend_from_slice(&v.to_be_bytes());
+        }
+        out
+    }
+
+    fn read_float32(data: &[f32], extra: &dyn Fn(&mut Header)) -> std::io::Result<Vec<u16>> {
+        let mut cursor = Cursor::new(float32_file(data, extra));
+        let reader = FitsReader::new(&mut cursor)?;
+        let mut result = vec![0_u16; data.len()];
+        FitsReader::read_data(&reader.headers[0], &mut cursor, 0, &mut result)?;
+        Ok(result)
+    }
+
+    #[test]
+    fn float32_counts_are_not_rescaled() {
+        let data = read_float32(
+            &[1000.0, 20000.5, 50000.0, -50.0],
+            &|_hdu| {}
+        ).unwrap();
+        assert_eq!(data, vec![1000, 20001, 50000, 0]);
+    }
+
+    #[test]
+    fn float32_normalized_is_stretched() {
+        let data = read_float32(
+            &[0.0, 0.5, 1.0, 0.25],
+            &|_hdu| {}
+        ).unwrap();
+        assert_eq!(data, vec![0, 32768, 65535, 16384]);
+    }
+
+    #[test]
+    fn float32_out_of_counts_range_is_unsupported() {
+        // The reproduction payload from VERIFICATION_ISSUES.md: physical values
+        // beyond the u16 ADU range must be rejected, not clipped to white
+        let err = match read_float32(
+            &[1000.0, 20000.5, 50000.0, -50.0, 370000.0],
+            &|_hdu| {}
+        ) {
+            Ok(_) => panic!("expected error"),
+            Err(err) => err,
+        };
+        assert_eq!(err.kind(), ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn float32_applies_bzero_bscale() {
+        let data = read_float32(&[0.0, 1.0, 2.0], &|hdu| {
+            hdu.set_f64("BSCALE", 100.0);
+            hdu.set_f64("BZERO", 10.0);
+        }).unwrap();
+        assert_eq!(data, vec![10, 110, 210]);
+    }
+
+    #[test]
+    fn float32_mapped_out_of_range_is_unsupported() {
+        let err = match read_float32(&[0.0, 1.0, 2.0], &|hdu| {
+            hdu.set_f64("BSCALE", 1.0e6);
+        }) {
+            Ok(_) => panic!("expected error"),
+            Err(err) => err,
+        };
+        assert_eq!(err.kind(), ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn float32_float_form_bzero_parses_without_error() {
+        // astropy writes `BZERO =  32768.0`; the old integer-only parse panicked casting to u16
+        let data = read_float32(&[0.0, 500.0], &|hdu| {
+            hdu.set_f64("BZERO", 0.0);
+        }).unwrap();
+        assert_eq!(data, vec![0, 500]);
+    }
+
+    #[test]
+    fn float32_nan_is_unsupported() {
+        let err = match read_float32(&[0.0, f32::NAN], &|_hdu| {}) {
+            Ok(_) => panic!("expected error"),
+            Err(err) => err,
+        };
+        assert_eq!(err.kind(), ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn float32_bad_bscale_is_invalid_data() {
+        let err = match read_float32(&[0.0, 1.0], &|hdu| {
+            hdu.set_f64("BSCALE", 0.0);
+        }) {
             Ok(_) => panic!("expected error"),
             Err(err) => err,
         };
