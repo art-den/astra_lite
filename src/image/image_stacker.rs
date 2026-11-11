@@ -436,6 +436,7 @@ impl ImageStacker {
             .for_each(|((((((r1, r2), r3), r4), r5), d), c)| {
                 let mut result =
                     if *r1 != 0 && *r2 != 0 && *r3 != 0 && *r4 != 0 && *r5 != 0 {
+                        // Fast branch. Pixels in all 5 frames are active
                         median5(
                             *r1 as i32 - src1.background as i32,
                             *r2 as i32 - src2.background as i32,
@@ -452,7 +453,7 @@ impl ImageStacker {
                         if *r4 != 0 { tmp[idx] = *r4 as i32 - src4.background as i32; idx += 1; }
                         if *r5 != 0 { tmp[idx] = *r5 as i32 - src5.background as i32; idx += 1; }
                         match idx {
-                            0 => 0,
+                            0 => i32::MIN,
                             1 => tmp[0],
                             2 => (tmp[0] + tmp[1]) / 2,
                             3 => median3(tmp[0], tmp[1], tmp[2]),
