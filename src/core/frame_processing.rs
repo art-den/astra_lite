@@ -665,7 +665,10 @@ impl FrameProcessing {
 
             // Live stacking
 
-            if let (Some(live_stacking), true) = (&command.live_stacking, quality.is_ok()) {
+            if let Some(live_stacking) = &command.live_stacking
+                && quality.is_ok()
+                && quality.offset_is_ok
+            {
                 // Translate/rotate image to reference image and add
                 let offset = lf_info.offset.clone().unwrap_or_default();
                 let mut stacker = live_stacking.data.stacker.write().unwrap();
