@@ -113,6 +113,11 @@ impl StarsFinder {
         image:       &ImageLayer<u16>,
         sensitivity: StarRecognSensitivity,
     ) -> eyre::Result<u16> {
+        // Bail early: chunking/indexing below panics on tiny images
+        if image.width() < MAX_STAR_DIAM || image.height() < MAX_STAR_DIAM {
+            eyre::bail!("Image is too small for stars detection");
+        }
+
         let mut diffs = Vec::new();
         for (y, row) in image.as_slice().chunks_exact(image.width()).enumerate() {
             let start = y & 0xF;
@@ -168,6 +173,8 @@ impl StarsFinder {
                 }
 
                 if y < MAX_STAR_DIAM/2 || y > image.height()-MAX_STAR_DIAM/2 {
+                    // height >= MAX_STAR_DIAM is guaranteed upstream by calc_threshold_for_stars_detection,
+                    // otherwise the subtraction below underflows
                     continue;
                 }
                 let row = image.row(y);
@@ -770,8 +777,7 @@ mod tests {
 
     #[test]
     fn test_calc_threshold_narrow_image() {
-        // Image width < MAX_STAR_DIAM: no 32-pixel chunks, so `diffs` stays empty
-        // and `median` panics on the empty slice.
+        // Tiny image: graceful error, not a panic
         let image = ImageLayer::new_with_size(16, 100);
         let bad_res = StarsFinder::calc_threshold_for_stars_detection(&image, StarRecognSensitivity::Normal);
         assert!(bad_res.is_err());
