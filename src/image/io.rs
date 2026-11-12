@@ -123,6 +123,8 @@ pub fn save_image_layer_to_tif_file(
 
 // Simple image
 
+/// Loads a TIFF file (strips only, no tiles) as Gray or RGB image,
+/// chunky and planar (band per channel) configurations.
 pub fn load_image_from_tif_file(
     image:     &mut Image,
     file_name: &Path
@@ -130,17 +132,37 @@ pub fn load_image_from_tif_file(
     let stream = BufReader::new(File::open(file_name)?);
     use tiff::decoder::*;
 
+    fn assign_plane<S: Copy>(
+        dst: &mut [u16],
+        src: &[S],
+        cvt: fn (from: S) -> u16
+    ) {
+        for (d, s) in izip!(dst, src.iter()) {
+            *d = cvt(*s);
+        }
+    }
+
     fn assign_img_data<S: Copy>(
-        src:    &[S],
-        img:    &mut Image,
-        y1:     usize,
-        y2:     usize,
-        is_rgb: bool,
-        cvt:    fn (from: S) -> u16
+        src:         &[S],
+        img:         &mut Image,
+        y1:          usize,
+        y2:          usize,
+        is_rgb:      bool,
+        planar_band: Option<usize>,
+        cvt:         fn (from: S) -> u16
     ) -> eyre::Result<()> {
         let from = y1 * img.width();
         let to = y2 * img.width();
-        if is_rgb {
+        if let Some(band) = planar_band {
+            // Planar config: chunk holds a single color plane
+            let dst = match band {
+                0 => &mut img.r.as_slice_mut()[from..to],
+                1 => &mut img.g.as_slice_mut()[from..to],
+                2 => &mut img.b.as_slice_mut()[from..to],
+                _ => Err(eyre::eyre!("Invalid TIFF band {}", band))?,
+            };
+            assign_plane(dst, src, cvt);
+        } else if is_rgb {
             let r_dst = &mut img.r.as_slice_mut()[from..to];
             let g_dst = &mut img.g.as_slice_mut()[from..to];
             let b_dst = &mut img.b.as_slice_mut()[from..to];
@@ -151,10 +173,7 @@ pub fn load_image_from_tif_file(
                 *db = cvt(*sb);
             }
         } else {
-            let l_dst = &mut img.l.as_slice_mut()[from..to];
-            for (d, s) in izip!(l_dst, src.iter()) {
-                *d = cvt(*s);
-            }
+            assign_plane(&mut img.l.as_slice_mut()[from..to], src, cvt);
         }
         Ok(())
     }
@@ -175,25 +194,47 @@ pub fn load_image_from_tif_file(
         }
     };
 
+    // strip_count() works for strips only and would fail on tiles
+    if decoder.get_chunk_type() != ChunkType::Strip {
+        eyre::bail!("Tiled TIFF unsupported");
+    }
     let chunk_size_y = decoder.chunk_dimensions().1 as usize;
-    let chunks_cnt = decoder.strip_count()? as usize;
+    let strips_cnt = decoder.strip_count()? as usize;
     let height = image.height();
-    for chunk_index in 0..chunks_cnt {
-        let chunk = decoder.read_chunk(chunk_index as u32)?;
-        let y1 = chunk_index * chunk_size_y;
+    if chunk_size_y == 0 || height == 0 {
+        eyre::bail!("TIFF has zero rows per strip or zero height");
+    }
+
+    // tiff-0.9.1 has no planar config accessor, so read the raw tag (absent means Chunky).
+    // In planar config each color plane has its own band of strips, only RGB is multi-band.
+    let planar = decoder
+        .find_tag_unsigned::<u16>(tiff::tags::Tag::PlanarConfiguration)?
+        .unwrap_or(1) == 2;
+    let planar_rgb = planar && is_rgb;
+    let strips_per_band = usize::div_ceil(height, chunk_size_y);
+    let bands = if planar_rgb { 3 } else { 1 };
+    if strips_cnt != strips_per_band * bands {
+        eyre::bail!("Unexpected TIFF strip count {}", strips_cnt);
+    }
+
+    for strip_index in 0..strips_cnt {
+        let chunk = decoder.read_chunk(strip_index as u32)?;
+        // Row mapping mirrors tiff-0.9.1 Image::chunk_data_dimensions()
+        let band = planar_rgb.then_some(strip_index / strips_per_band);
+        let y1 = (strip_index % strips_per_band) * chunk_size_y;
         let y2 = (y1 + chunk_size_y).min(height);
         match chunk {
             DecodingResult::U8(data) =>
-                assign_img_data(&data, image, y1, y2, is_rgb, |v| v as u16 * 256),
+                assign_img_data(&data, image, y1, y2, is_rgb, band, |v| v as u16 * 256),
 
             DecodingResult::U16(data) =>
-                assign_img_data(&data, image, y1, y2, is_rgb, |v| v),
+                assign_img_data(&data, image, y1, y2, is_rgb, band, |v| v),
 
             DecodingResult::F32(data) =>
-                assign_img_data(&data, image, y1, y2, is_rgb, |v| (v as f64 * u16::MAX as f64) as u16),
+                assign_img_data(&data, image, y1, y2, is_rgb, band, |v| (v as f64 * u16::MAX as f64) as u16),
 
             DecodingResult::F64(data) =>
-                assign_img_data(&data, image, y1, y2, is_rgb, |v| (v * u16::MAX as f64) as u16),
+                assign_img_data(&data, image, y1, y2, is_rgb, band, |v| (v * u16::MAX as f64) as u16),
 
             _ =>
                 Err(eyre::eyre!("Format unsupported"))
