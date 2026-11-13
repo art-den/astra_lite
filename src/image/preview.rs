@@ -8,7 +8,7 @@ use crate::{
 
 use super::{cam_db::*, histogram::Histogram, image::{Image, ImageLayer}, stars::StarItems};
 
-#[derive(PartialEq, Clone)]
+#[derive(PartialEq, Clone, Default)]
 pub struct PreviewParams {
     pub dark_lvl:         f64,
     pub light_lvl:        f64,
@@ -395,26 +395,31 @@ fn calc_levels(
 
     let light_lvl = params.light_lvl.powf(0.05);
 
-    let l_levels = if let Some(hist) = &hist.l {
-        let dark_min = hist.get_percentile(DARK_MIN_PERCENTILE) as f64;
-        let dark_max = hist.get_percentile(DARK_MAX_PERCENTILE) as f64;
-        let light_min = hist.get_percentile(LIGHT_MIN_PERCENTILE) as f64;
+    // An empty channel carries no information: fall back to the neutral defaults
+    let l_levels = if let Some(hist) = hist.l.as_ref().filter(|h| !h.is_empty()) {
+        let dark_min = hist.get_percentile(DARK_MIN_PERCENTILE).unwrap_or(0) as f64;
+        let dark_max = hist.get_percentile(DARK_MAX_PERCENTILE).unwrap_or(0) as f64;
+        let light_min = hist.get_percentile(LIGHT_MIN_PERCENTILE).unwrap_or(0) as f64;
         let mut dark = linear_interpolate(params.dark_lvl, 1.0, 0.0, dark_min, dark_max);
         let mut light = linear_interpolate(light_lvl, 1.0, 0.0, light_min, light_max);
+        dark = f64::clamp(dark, 0.0, u16::MAX as f64);
+        light = f64::clamp(light, 0.0, u16::MAX as f64);
         if (light - dark) < 2.0 { light += 1.0; dark -= 1.0; }
         DarkLightLevels { dark, light }
     } else {
         DarkLightLevels::default()
     };
 
-    let (g_levels, g_wb) = if let Some(hist) = &hist.g {
-        let dark_min = hist.get_percentile(DARK_MIN_PERCENTILE) as f64;
-        let dark_max = hist.get_percentile(DARK_MAX_PERCENTILE) as f64;
-        let light_min = hist.get_percentile(LIGHT_MIN_PERCENTILE) as f64;
+    let (g_levels, g_wb) = if let Some(hist) = hist.g.as_ref().filter(|h| !h.is_empty()) {
+        let dark_min = hist.get_percentile(DARK_MIN_PERCENTILE).unwrap_or(0) as f64;
+        let dark_max = hist.get_percentile(DARK_MAX_PERCENTILE).unwrap_or(0) as f64;
+        let light_min = hist.get_percentile(LIGHT_MIN_PERCENTILE).unwrap_or(0) as f64;
         let mut dark = linear_interpolate(params.dark_lvl, 1.0, 0.0, dark_min, dark_max);
         let mut light = linear_interpolate(light_lvl, 1.0, 0.0, light_min, light_max);
+        dark = f64::clamp(dark, 0.0, u16::MAX as f64);
+        light = f64::clamp(light, 0.0, u16::MAX as f64);
         if (light - dark) < 2.0 { light += 1.0; dark -= 1.0; }
-        let wb = hist.get_percentile(WB_PERCENTILE) as f64;
+        let wb = hist.get_percentile(WB_PERCENTILE).unwrap_or(0) as f64;
         (DarkLightLevels { dark, light }, wb)
     } else {
         (DarkLightLevels::default(), 0.0)
@@ -422,20 +427,21 @@ fn calc_levels(
 
     let g_range = g_levels.light - g_levels.dark;
 
-    let r_levels = if let Some(hist) = &hist.r {
-        let wb = hist.get_percentile(WB_PERCENTILE) as f64;
+    let r_levels = if let Some(hist) = hist.r.as_ref().filter(|h| !h.is_empty()) {
+        let wb = hist.get_percentile(WB_PERCENTILE).unwrap_or(0) as f64;
         let dark = g_levels.dark + (wb - g_wb);
         DarkLightLevels { dark, light: dark + g_range }
     } else {
-        DarkLightLevels::default()
+        // Without its own WB the channel is indistinguishable from G
+        g_levels.clone()
     };
 
-    let b_levels = if let Some(hist) = &hist.b {
-        let wb = hist.get_percentile(WB_PERCENTILE) as f64;
+    let b_levels = if let Some(hist) = hist.b.as_ref().filter(|h| !h.is_empty()) {
+        let wb = hist.get_percentile(WB_PERCENTILE).unwrap_or(0) as f64;
         let dark = g_levels.dark + (wb - g_wb);
         DarkLightLevels { dark, light: dark + g_range }
     } else {
-        DarkLightLevels::default()
+        g_levels.clone()
     };
 
     PreviewLevels {
@@ -765,4 +771,61 @@ fn to_grb_bytes_reduct4_mono(
         rgb_bytes.push(l);
     }
     rgb_bytes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::image::histogram::HistogramChan;
+
+    fn chan(freq: &[u32]) -> Option<HistogramChan> {
+        Some(HistogramChan {
+            mean: 0.0,
+            std_dev: 0.0,
+            count: freq.iter().map(|&v| v as usize).sum(),
+            freq: freq.to_vec(),
+        })
+    }
+
+    // `take_from_freq` truncation of a whole channel: count == 0 while the channel is `Some`
+    fn empty_chan() -> Option<HistogramChan> {
+        chan(&[0; 8])
+    }
+
+    #[test]
+    fn calc_levels_of_empty_channels_is_neutral() {
+        let hist = Histogram {
+            max: 7,
+            r: empty_chan(),
+            g: empty_chan(),
+            b: empty_chan(),
+            l: empty_chan(),
+        };
+        let levels = calc_levels(&hist, &PreviewParams::default(), 7.0, false);
+        for lv in [&levels.l, &levels.g, &levels.r, &levels.b] {
+            assert_eq!(*lv, DarkLightLevels::default());
+        }
+    }
+
+    #[test]
+    fn calc_levels_with_empty_r_keeps_g_levels() {
+        // The driver's max_value truncated the whole R channel while G kept data
+        let hist = Histogram {
+            max: 7,
+            r: empty_chan(),
+            g: chan(&[0, 10, 10, 10, 10, 10, 10, 10]),
+            b: None,
+            l: chan(&[0, 10, 10, 10, 10, 10, 10, 10]),
+        };
+        let levels = calc_levels(&hist, &PreviewParams::default(), 7.0, false);
+        assert_eq!(levels.r, levels.g);
+        assert!(levels.r.dark >= 0.0 && levels.r.light <= 7.0 + 2.0);
+    }
+
+    #[test]
+    fn calc_levels_locked_uses_full_range() {
+        let hist = Histogram::new();
+        let levels = calc_levels(&hist, &PreviewParams::default(), 4095.0, true);
+        assert_eq!(levels.l, DarkLightLevels { dark: 0.0, light: (u16::MAX - 1) as f64 });
+    }
 }

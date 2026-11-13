@@ -315,14 +315,15 @@ impl ImageStacker {
         let idx = self.tmp_idx % 5;
 
         if self.is_color() {
-            let background_r = hist.r.as_ref().map(|chan| chan.median()).unwrap_or(0);
-            let background_g = hist.g.as_ref().map(|chan| chan.median()).unwrap_or(0);
-            let background_b = hist.b.as_ref().map(|chan| chan.median()).unwrap_or(0);
+            // An empty channel has no median: fill the rotated border with black
+            let background_r = hist.r.as_ref().and_then(|chan| chan.median()).unwrap_or(0);
+            let background_g = hist.g.as_ref().and_then(|chan| chan.median()).unwrap_or(0);
+            let background_b = hist.b.as_ref().and_then(|chan| chan.median()).unwrap_or(0);
             Self::rotate_image(idx, &mut self.r, &image.r, background_r, transl_x, transl_y, angle);
             Self::rotate_image(idx, &mut self.g, &image.g, background_g, transl_x, transl_y, angle);
             Self::rotate_image(idx, &mut self.b, &image.b, background_b, transl_x, transl_y, angle);
         } else if self.is_monochrome() {
-            let background_l = hist.l.as_ref().map(|chan| chan.median()).unwrap_or(0);
+            let background_l = hist.l.as_ref().and_then(|chan| chan.median()).unwrap_or(0);
             Self::rotate_image(idx, &mut self.l, &image.l, background_l, transl_x, transl_y, angle);
         } else {
             unreachable!();

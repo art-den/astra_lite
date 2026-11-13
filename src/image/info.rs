@@ -87,11 +87,14 @@ pub struct FlatImageInfo {
 impl FlatImageInfo {
     pub fn from_histogram(hist: &Histogram) -> Self {
         let calc = |chan: Option<&HistogramChan>| -> Option<FlatInfoChan> {
-            chan
-                .map(|c| { FlatInfoChan {
+            chan.and_then(|c| {
+                // An empty channel has no 95th percentile: show no data at all
+                let max = c.get_nth_element(95 * c.count / 100)?;
+                Some(FlatInfoChan {
                     avg: c.mean,
-                    max:  c.get_nth_element(95 * c.count / 100),
-                }})
+                    max,
+                })
+            })
         };
         Self {
             max_value: hist.max,
@@ -106,7 +109,8 @@ impl FlatImageInfo {
 pub struct RawImageStat {
     pub max_value: u16,
     pub avg: f32,
-    pub median: u16,
+    /// `None` when the histogram channel holds no samples
+    pub median: Option<u16>,
     pub std_dev: f32,
 }
 

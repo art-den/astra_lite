@@ -206,7 +206,7 @@ fn run_full_frame_processing(cfa: CfaType, expected_is_color: bool) {
                     FrameProcessEvent::RawFrameReady(info) => {
                         state.events_received.push("RawFrameInfo".to_string());
                         state.raw_frame_info_count += 1;
-                        state.raw_median = Some(info.median);
+                        state.raw_median = info.median;
                         state.raw_mean = Some(info.mean);
                         state.raw_std_dev = Some(info.std_dev);
                         state.raw_info_width = Some(info.info.width);
@@ -221,7 +221,7 @@ fn run_full_frame_processing(cfa: CfaType, expected_is_color: bool) {
                         state.raw_info_camera = Some(info.info.camera.clone());
                         state.raw_info_ccd_temp = info.info.ccd_temp;
                         println!(
-                            "  Event: RawFrameInfo (mean={}, median={}, std_dev={})",
+                            "  Event: RawFrameInfo (mean={}, median={:?}, std_dev={})",
                             info.mean, info.median, info.std_dev
                         );
                     }

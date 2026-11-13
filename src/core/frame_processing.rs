@@ -110,7 +110,8 @@ pub struct RawFrameResult {
     pub info:        RawImageInfo,
     pub ccd_temp_ok: bool,
     pub mean:        f32,
-    pub median:      u16,
+    /// `None` when the raw histogram channel holds no samples
+    pub median:      Option<u16>,
     pub std_dev:     f32,
 }
 
@@ -334,7 +335,7 @@ impl FrameProcessing {
                 tmr.log("histogram from raw image");
                 let debug_log_hist_chan = |name, chan: &Option<HistogramChan>| {
                     if let Some(chan) = chan {
-                        log::debug!("Raw {} median = {}", name, chan.median());
+                        log::debug!("Raw {} median = {:?}", name, chan.median());
                         log::debug!("Raw {} mean   = {}", name, chan.mean);
                     }
                 };

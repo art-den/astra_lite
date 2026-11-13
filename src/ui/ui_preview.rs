@@ -112,7 +112,7 @@ struct CalibrHistoryItem {
     ccd_temp:       Option<f32>,
     bad_ccd_temp:   bool,
     mean:           f32,
-    median:         u16,
+    median:         Option<u16>,
     std_dev:        f32,
     calibr_methods: CalibrMethods, // for flat files
 }
@@ -874,11 +874,12 @@ impl PreviewUi {
                             100.0 * info.avg / info.max_value as f32
                         );
                         self.widgets.info.e_aver.set_text(&avg_text);
-                        let median_text = format!(
-                            "{} ({:.1}%)",
-                            info.median,
-                            100.0 * info.median as f64 / info.max_value as f64
-                        );
+                        let median_text = info.median.map_or("-".to_string(), |median|
+                            format!(
+                                "{} ({:.1}%)",
+                                median,
+                                100.0 * median as f64 / info.max_value as f64
+                            ));
                         self.widgets.info.e_median.set_text(&median_text);
                         let dev_text = format!(
                             "{:.1} ({:.3}%)",
@@ -1670,15 +1671,20 @@ impl PreviewUi {
             l_dev:    &gtk::Label
         | {
             if let Some(chan) = chan.as_ref() {
-                let median = chan.median();
-                if ui_options.hist_percents {
-                    l_mean.set_label(&format!("{:.1}%", 100.0 * chan.mean / max));
-                    l_median.set_label(&format!("{:.1}%", 100.0 * median as f32 / max));
-                    l_dev.set_label(&format!("{:.1}%", 100.0 * chan.std_dev / max));
+                if let Some(median) = chan.median() {
+                    if ui_options.hist_percents {
+                        l_mean.set_label(&format!("{:.1}%", 100.0 * chan.mean / max));
+                        l_median.set_label(&format!("{:.1}%", 100.0 * median as f32 / max));
+                        l_dev.set_label(&format!("{:.1}%", 100.0 * chan.std_dev / max));
+                    } else {
+                        l_mean.set_label(&format!("{:.1}", chan.mean));
+                        l_median.set_label(&format!("{:.1}", median));
+                        l_dev.set_label(&format!("{:.1}", chan.std_dev));
+                    }
                 } else {
-                    l_mean.set_label(&format!("{:.1}", chan.mean));
-                    l_median.set_label(&format!("{:.1}", median));
-                    l_dev.set_label(&format!("{:.1}", chan.std_dev));
+                    l_mean.set_label("-");
+                    l_median.set_label("-");
+                    l_dev.set_label("-");
                 }
             }
             l_cap.set_visible(chan.is_some());
@@ -1969,7 +1975,7 @@ impl PreviewUi {
                 temp_str = make_bad_str(&temp_str);
             }
             let mean_str = format!("{:.1}", item.mean);
-            let median_str = format!("{}", item.median);
+            let median_str = item.median.map_or("-".to_string(), |m| format!("{m}"));
             let dev_str = format!("{:.1}", item.std_dev);
             let calibr_str = Self::calibr_method_to_str(item.calibr_methods);
 

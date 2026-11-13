@@ -995,20 +995,14 @@ impl TakingPicturesMode {
     fn process_raw_histogram(&mut self) -> eyre::Result<NotifyResult> {
         let mut result = NotifyResult::Empty;
 
-        let get_median_from_histogram = |min: bool| ->u16 {
+        let get_median_from_histogram = |min: bool| -> u16 {
             let hist = self.raw_histogram.read().unwrap();
+            // An empty channel has no median and must not participate in the min/max search
             let mut channels = Vec::new();
-            if let Some(chan) = &hist.l {
-                channels.push(chan.median());
-            }
-            if let Some(chan) = &hist.r {
-                channels.push(chan.median());
-            }
-            if let Some(chan) = &hist.g {
-                channels.push(chan.median());
-            }
-            if let Some(chan) = &hist.b {
-                channels.push(chan.median());
+            for chan in [&hist.l, &hist.r, &hist.g, &hist.b].into_iter().flatten() {
+                if let Some(med) = chan.median() {
+                    channels.push(med);
+                }
             }
             let res = if min {
                 channels.iter().min()
@@ -1082,12 +1076,13 @@ impl TakingPicturesMode {
             if let Some(offset_calc) = &mut self.cam_offset_calc => {
                 let hist = self.raw_histogram.read().unwrap();
                 let chan = if hist.g.is_some() { &hist.g } else { &hist.l };
-                // an empty channel would contribute median 65535 with std_dev 0, which wins the min-diff search below
-                if let Some(chan) = chan.as_ref().filter(|c| !c.is_empty()) {
+                // an empty channel must not enter the min-diff search: its std_dev 0 would win it
+                if let Some(chan) = chan.as_ref().filter(|c| !c.is_empty())
+                && let Some(median) = chan.median() {
                     if offset_calc.step % 2 == 0 {
-                        offset_calc.low_values.push((chan.median(), chan.std_dev));
+                        offset_calc.low_values.push((median, chan.std_dev));
                     } else {
-                        offset_calc.high_values.push((chan.median(), chan.std_dev));
+                        offset_calc.high_values.push((median, chan.std_dev));
                     }
                 }
                 drop(hist);

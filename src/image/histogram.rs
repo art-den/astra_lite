@@ -21,7 +21,7 @@ impl HistogramChan {
         }
     }
 
-    /// No samples: the moments are placeholders and the accessors return the `u16::MAX` sentinel
+    /// No samples: the moments are placeholders and the accessors return `None`
     pub fn is_empty(&self) -> bool {
         self.count == 0
     }
@@ -49,21 +49,24 @@ impl HistogramChan {
         self.std_dev = f64::sqrt(sum / total_cnt as f64) as f32;
     }
 
-    pub fn get_nth_element(&self, mut n: usize) -> u16 {
+    /// `None` iff the channel holds no samples; an out-of-range `n` is clamped to the nearest sample
+    pub fn get_nth_element(&self, n: usize) -> Option<u16> {
+        // n may fall outside the samples after rounding (percentiles 0 or 100): clamp to the nearest one
+        let mut n = usize::min(n, self.count.saturating_sub(1));
         for (idx, v) in self.freq.iter().enumerate() {
             if n < *v as usize {
-                return idx as u16;
+                return Some(idx as u16);
             }
             n -= *v as usize;
         }
-        u16::MAX
+        None
     }
 
-    pub fn median(&self) -> u16 {
+    pub fn median(&self) -> Option<u16> {
         self.get_nth_element(self.count/2)
     }
 
-    pub fn get_percentile(&self, n: f64) -> u16 {
+    pub fn get_percentile(&self, n: f64) -> Option<u16> {
         self.get_nth_element(((n * self.count as f64) as usize + 50) / 100)
     }
 }
@@ -268,12 +271,25 @@ mod tests {
         assert_eq!((chan.mean, chan.std_dev), (0.0, 0.0));
     }
 
-    // Characterization: the sentinel is still u16::MAX; revisit the consumers when it changes
     #[test]
-    fn empty_channel_accessors_return_the_sentinel() {
+    fn empty_channel_accessors_return_none() {
         let mut chan = HistogramChan::new();
         chan.take_from_freq(vec![0; 8], 7);
-        assert_eq!(chan.median(), u16::MAX);
-        assert_eq!(chan.get_percentile(95.0), u16::MAX);
+        assert_eq!(chan.median(), None);
+        assert_eq!(chan.get_percentile(95.0), None);
+        assert_eq!(chan.get_nth_element(0), None);
+    }
+
+    #[test]
+    fn non_empty_accessors_always_yield_a_value() {
+        let mut chan = HistogramChan::new();
+        chan.take_from_freq(vec![0, 3, 5], 2);
+        assert_eq!(chan.get_nth_element(0), Some(1));
+        assert_eq!(chan.get_nth_element(7), Some(2));
+        assert_eq!(chan.get_nth_element(8), Some(2)); // clamped to the last sample
+        for p in [0.0, 1.0, 45.0, 95.0, 100.0] {
+            assert!(chan.get_percentile(p).is_some());
+        }
+        assert!(chan.median().is_some());
     }
 }
