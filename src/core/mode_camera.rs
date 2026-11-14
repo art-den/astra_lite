@@ -376,6 +376,11 @@ impl TakingPicturesMode {
         )
     }
 
+    // Exact negation of the `RawCalibration` subtraction gate: it runs only when `dark_frame_en` and the master file exists
+    fn need_camera_offset_calc(dark_frame_en: bool, master_exists: bool) -> bool {
+        !(dark_frame_en && master_exists)
+    }
+
     fn start_or_continue(&mut self) -> eyre::Result<()> {
         if !self.flags.skip_frame_done && self.need_skip_first_frame() {
             // First frame must be skipped
@@ -398,6 +403,7 @@ impl TakingPicturesMode {
         && self.camera_offset.is_none()
         && self.flags.save_master_file {
             let options = self.options.read().unwrap();
+            let dark_frame_en = options.calibr.dark_frame_en;
             let (subtract_file_name, _) = self.fname_utils.get_subtract_master_fname(
                 &FileNameArg::Options(&self.cam_options),
                 &options.calibr.dark_library_path
@@ -405,8 +411,7 @@ impl TakingPicturesMode {
             drop(options);
 
             // we need to calculate real camera offset before creating master flat file
-            // if no calibration file exists
-            if !subtract_file_name.is_file() {
+            if Self::need_camera_offset_calc(dark_frame_en, subtract_file_name.is_file()) {
                 self.cam_offset_calc = Some(CamOffsetCalc {
                     step: 0,
                     low_values: Vec::new(),
