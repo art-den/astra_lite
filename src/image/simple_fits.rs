@@ -210,7 +210,6 @@ impl IntMapping {
         let pmax = f64::max(v1, v2);
 
         if mapped {
-            log::info!("FITS: applying BSCALE = {bscale:?}, BZERO = {bzero:?}");
             if pmin > ADU_MAX + ADU_ROUND_TOL || pmax < -ADU_ROUND_TOL {
                 // No pixel is representable here, so the file would decode to uniform black/white
                 return Err(Error::new(
