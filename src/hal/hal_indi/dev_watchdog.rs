@@ -65,6 +65,10 @@ enum CcdMode {
     WaitBlob(usize),
     Shutdown(usize),
     WaitExposureProp(usize),
+    /// Camera is powered back on; `CameraNeedRestartExposure` is due after the
+    /// time window, but only once the bring-up machine finished the init wave
+    /// caused by the restart (`Idle`). A bus that keeps re-queueing the
+    /// bring-up holds the event for as long as it takes
     WaitAfterRestart(usize),
 }
 
@@ -348,6 +352,14 @@ impl WatchedDevice {
                 CcdMode::WaitAfterRestart(time_ms) => {
                     let time_ms = time_ms + timer_period_ms;
                     if time_ms < MAX_SWITCHING_ON_TIME * 1000 {
+                        self.ccd_modes.set(ccd, CcdMode::WaitAfterRestart(time_ms));
+                        continue;
+                    }
+                    // The power cycle re-queues the bring-up machine, and its
+                    // init wave must be reported before the exposure restarts
+                    // (the `CONNECTION=true` of the cycle always arrives on the
+                    // indi event bus before the re-announced properties)
+                    if self.state != DevState::Idle {
                         self.ccd_modes.set(ccd, CcdMode::WaitAfterRestart(time_ms));
                         continue;
                     }
@@ -1336,6 +1348,47 @@ mod tests {
         // already resolvable), so this must be a harmless no-op
         watchdog.notify_device_announced("ghost", DeviceType::CAMERA);
         assert!(watchdog.devices.is_empty());
+    }
+
+    #[test]
+    fn restart_event_waits_for_the_init_wave() {
+        let stub = Stub::new();
+        let mut dev = camera_entry("cam", DevState::Idle);
+        dev.ccd_modes.main = CcdMode::WaitBlob(MAX_WAIT_BLOB_TIME * 1000 - PERIOD_MS);
+
+        // The blob timeout powers the camera off and back on; the slow server
+        // re-announces the exposure property before the `CONNECTION` event
+        for _ in 0..9 {
+            dev.process(PERIOD_MS, &mut stub.command(), &mut |_| {}).unwrap();
+        }
+        assert!(matches!(dev.ccd_modes.main, CcdMode::WaitExposureProp(_)));
+        dev.notify_exposure_new_prop(indi::CamCcd::Main);
+        assert!(matches!(dev.ccd_modes.main, CcdMode::WaitAfterRestart(0)));
+
+        // The late `CONNECTION=true` of the power cycle starts the bring-up
+        // machine while the restart window is still running
+        for _ in 0..11 {
+            dev.process(PERIOD_MS, &mut stub.command(), &mut |_| {}).unwrap();
+        }
+        dev.state = DevState::WaitingForLoadOpts { wait_ms: 0 };
+
+        // CONFIG_LOAD (9th) and the init wave (18th) come first, the restart
+        // event is held back until the wave is over
+        let mut events: Vec<HalEvent> = Vec::new();
+        let mut calls = 0;
+        loop {
+            calls += 1;
+            dev.process(PERIOD_MS, &mut stub.command(), &mut |e| events.push(e)).unwrap();
+            assert_eq!(events.len(), if events.is_empty() { 0 } else { 1 });
+            if !events.is_empty() {
+                break;
+            }
+            assert!(calls < 30, "restart event must arrive after the init wave");
+        }
+        assert_eq!(calls, 19);
+        assert_eq!(event_kind_and_id(&events[0]), ("restart", "cam".to_string()));
+        assert_eq!(dev.ccd_modes.main, CcdMode::Waiting);
+        assert_eq!(dev.state, DevState::Idle);
     }
 
     #[test]
