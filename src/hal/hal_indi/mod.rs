@@ -1,10 +1,7 @@
 use std::{io::Cursor, ops::RangeInclusive, sync::{Arc, Mutex}};
 use itertools::Itertools;
 use crate::{
-    hal::{
-        events::*, hal_indi::{camera_watchdog::CamWatchdog, dev_watchdog::DevicesWatchdog},
-        *,
-    },
+    hal::{events::*, hal_indi::dev_watchdog::DevicesWatchdog, *},
     image::{
         io::{find_color_image_hdu_in_fits, find_mono_image_hdu_in_fits, load_raw_image_from_fits_reader},
         simple_fits::FitsReader,
@@ -23,12 +20,6 @@ fn ccd2_id(device_name: &str) -> String {
 }
 
 mod dev_watchdog;
-mod camera_watchdog;
-
-struct Watchdogs {
-    camera:  CamWatchdog,
-    devices: DevicesWatchdog,
-}
 
 ///////////////////////////////////////////////////////////////////////////////
 // IndiHalImpl
@@ -37,7 +28,7 @@ pub struct IndiHalImpl {
     indi:            Arc<indi::Connection>,
     event_handlers:  Arc<HalEventHandlers>,
     indi_evt_subscr: Mutex<Option<EventHandlerId>>,
-    watchdogs:       Mutex<Watchdogs>,
+    dev_watchdog:    Mutex<DevicesWatchdog>,
     indi_drivers:    indi::Drivers,
 }
 
@@ -57,16 +48,13 @@ impl IndiHalImpl {
 
         let indi = Arc::new(indi::Connection::new());
 
-        let watchdogs = Watchdogs {
-            camera:  CamWatchdog::new(&indi, event_handlers),
-            devices: DevicesWatchdog::new(&indi),
-        };
+        let dev_watchdog = DevicesWatchdog::new(&indi, event_handlers);
 
         let result = Arc::new(Self {
             indi:            Arc::clone(&indi),
             event_handlers:  Arc::clone(event_handlers),
             indi_evt_subscr: Mutex::new(None),
-            watchdogs:       Mutex::new(watchdogs),
+            dev_watchdog:    Mutex::new(dev_watchdog),
             indi_drivers:    drivers,
         });
 
@@ -160,14 +148,12 @@ impl IndiHalImpl {
             match event {
                 indi::Event::ConnChange(state) => {
                     if state == indi::ConnState::Disconnected {
-                        let mut watchdogs = self.watchdogs.lock().unwrap();
-                        watchdogs.camera.reset();
-                        watchdogs.devices.reset();
-                        drop(watchdogs);
+                        self.dev_watchdog.lock().unwrap().reset_all();
                     } else if matches!(state, indi::ConnState::Error(_)) {
-                        // Reconnect can go Error -> Connecting -> Connected, so these
-                        // actions can never succeed (camera state is kept on purpose)
-                        self.watchdogs.lock().unwrap().devices.reset();
+                        // Reconnect can go Error -> Connecting -> Connected, so the
+                        // pending bring-up actions can never succeed. Camera
+                        // recovery state is kept on purpose
+                        self.dev_watchdog.lock().unwrap().reset_device_states();
                     }
                     let hal_state = match state {
                         indi::ConnState::Disconnected   => HalState::Disconnected,
@@ -188,10 +174,14 @@ impl IndiHalImpl {
                     self.process_device_connect_evt(&evt.device_name, evt.interface, false);
                 }
                 indi::Event::PropChange(prop_change) => {
-                    let mut watchdogs = self.watchdogs.lock().unwrap();
-                    _ = watchdogs.camera.notify_indi_prop_change(&prop_change);
-                    _ = watchdogs.devices.notify_indi_prop_change(&prop_change);
-                    drop(watchdogs);
+                    // A malformed property must not skip the HAL processing below
+                    let notify_result = {
+                        let mut watchdog = self.dev_watchdog.lock().unwrap();
+                        watchdog.notify_indi_prop_change(&prop_change)
+                    };
+                    if let Err(err) = notify_result {
+                        log::error!("Device watchdog failed on a property change: {err:#}");
+                    }
                     self.process_indi_prop_change_event(&prop_change)?;
                 }
                 indi::Event::BlobStart(blob_start) => {
@@ -416,14 +406,17 @@ impl IndiHalImpl {
             return;
         }
 
+        // The `CONNECTION` property event can precede `DRIVER_INFO`, so the
+        // interface known from these events refreshes the entry type and arms
+        // CCD watching (disarming happens on disconnect or device removal)
         if interface.contains(indi::DriverInterface::CCD) {
-            let mut watchdogs = self.watchdogs.lock().unwrap();
+            let mut watchdog = self.dev_watchdog.lock().unwrap();
             if connected {
-                watchdogs.camera.notify_device_added(device_name);
+                watchdog.notify_device_announced(device_name, device_type);
             } else {
-                watchdogs.camera.notify_device_deleted(device_name);
+                watchdog.notify_device_deleted(device_name);
             }
-            drop(watchdogs);
+            drop(watchdog);
         }
 
         let make_event = |id: String, name: String| -> HalEvent {
@@ -507,19 +500,12 @@ impl HalImpl for IndiHalImpl {
 
     fn timer_tick(&self, timer_period_ms: usize) -> eyre::Result<()> {
         // Lock order convention: state -> watchdogs, never the reverse.
-        // Read the state before locking `watchdogs` to keep it.
+        // Read the state before locking `dev_watchdog` to keep it.
         let conn_state = self.indi.state();
 
-        let mut watchdogs = self.watchdogs.lock().unwrap();
-        // A camera error may still abort the active mode, device actions never do.
-        // Devices are ticked unconditionally, so a camera failure cannot starve them.
-        let camera_result = watchdogs.camera.timer_tick(timer_period_ms, &conn_state);
-        watchdogs.devices.timer_tick(timer_period_ms, &conn_state);
-        drop(watchdogs);
-
-        camera_result?;
-
-        Ok(())
+        // A camera error may still abort the active mode, device bring-up
+        // actions never do
+        self.dev_watchdog.lock().unwrap().timer_tick(timer_period_ms, &conn_state)
     }
 
     fn devices(&self, type_filter: DeviceType) -> eyre::Result<Vec<DeviceInfo>> {
