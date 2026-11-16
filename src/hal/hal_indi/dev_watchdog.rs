@@ -13,6 +13,7 @@ const MAX_SHUTDOWN_TIME: usize = 2; // in seconds
 const WAIT_EXPOSURE_TIME: usize = 10; // in seconds
 const MAX_SWITCHING_ON_TIME: usize = 5; // in seconds after exposure property appeared
 const INIT_DELAY: usize = 2; // in seconds
+const RESTART_EXPOSURE_DELAY: usize = 3; // in seconds after the camera init wave
 
 const ALL_CCDS: [indi::CamCcd; 2] = [indi::CamCcd::Main, indi::CamCcd::Guider];
 
@@ -67,8 +68,9 @@ enum CcdMode {
     WaitExposureProp(usize),
     /// Camera is powered back on; `CameraNeedRestartExposure` is due after the
     /// time window, but only once the bring-up machine finished the init wave
-    /// caused by the restart (`Idle`). A bus that keeps re-queueing the
-    /// bring-up holds the event for as long as it takes
+    /// caused by the restart and the wave had `RESTART_EXPOSURE_DELAY` to
+    /// settle. A bus that keeps re-queueing the bring-up holds the event for as
+    /// long as it takes
     WaitAfterRestart(usize),
 }
 
@@ -123,6 +125,9 @@ struct WatchedDevice {
     name:      String,
     type_:     DeviceType,
     state:     DevState,
+    /// Time since `state` became `Idle`; for a camera that reached `Idle`
+    /// through `WaitingCameraInit` it is the time since its init wave
+    idle_ms:   usize,
     /// Lives outside `state`: the feature properties are announced long before
     /// `WaitingCameraInit` is reached
     cam_init:  CameraInitFlags,
@@ -142,14 +147,21 @@ impl WatchedDevice {
         }
     }
 
-    /// Advances both machines. Recovery errors are reported before init ones:
-    /// they are the severe ones
+    /// Ticks the `Idle` dwell time and advances both machines. Recovery errors
+    /// are reported before init ones: they are the severe ones
     fn process(
         &mut self,
         timer_period_ms: usize,
         command:         &mut impl FnMut(&str, Command) -> eyre::Result<()>,
         send_event:      &mut impl FnMut(HalEvent),
     ) -> eyre::Result<()> {
+        // The recovery machine needs to know how long the bring-up machine has
+        // been settled, so the counter is ticked before it runs
+        self.idle_ms = match self.state {
+            DevState::Idle => usize::saturating_add(self.idle_ms, timer_period_ms),
+            _ => 0,
+        };
+
         let recovery_result = self.process_ccd_recovery(timer_period_ms, command, send_event);
         let state_result    = self.process_state(timer_period_ms, command, send_event);
         if recovery_result.is_err()
@@ -355,11 +367,11 @@ impl WatchedDevice {
                         self.ccd_modes.set(ccd, CcdMode::WaitAfterRestart(time_ms));
                         continue;
                     }
-                    // The power cycle re-queues the bring-up machine, and its
-                    // init wave must be reported before the exposure restarts
-                    // (the `CONNECTION=true` of the cycle always arrives on the
-                    // indi event bus before the re-announced properties)
-                    if self.state != DevState::Idle {
+                    // The power cycle re-queues the bring-up machine, so its
+                    // init wave is reported first and then gets time to settle:
+                    // `idle_ms` counts only while the bring-up machine is
+                    // `Idle`, which a camera reaches only through its wave
+                    if self.idle_ms < RESTART_EXPOSURE_DELAY * 1000 {
                         self.ccd_modes.set(ccd, CcdMode::WaitAfterRestart(time_ms));
                         continue;
                     }
@@ -490,7 +502,8 @@ impl DevicesWatchdog {
     /// kept on purpose: the reconnect can restore the devices in flight
     pub fn reset_device_states(&mut self) {
         for dev in &mut self.devices {
-            dev.state = DevState::Idle;
+            dev.state   = DevState::Idle;
+            dev.idle_ms = 0;
         }
     }
 
@@ -637,6 +650,7 @@ impl DevicesWatchdog {
                 name:      device_name.to_string(),
                 type_:     device_type,
                 state,
+                idle_ms:   0,
                 cam_init:  CameraInitFlags::default(),
                 ccd_modes: CcdModes::inactive(),
             }),
@@ -784,6 +798,7 @@ mod tests {
             name:      name.to_string(),
             type_,
             state,
+            idle_ms:   0,
             cam_init:  CameraInitFlags::default(),
             ccd_modes: CcdModes::inactive(),
         }
@@ -1127,6 +1142,8 @@ mod tests {
     fn hung_blob_restarts_the_camera() {
         let stub = Stub::new();
         let mut dev = camera_entry("cam", DevState::Idle);
+        // No `CONNECTION` event is simulated here, so the camera stays Idle
+        dev.idle_ms = RESTART_EXPOSURE_DELAY * 1000;
 
         // The exposure starts and its BLOB never arrives
         dev.notify_exposure_prop_changed(
@@ -1201,6 +1218,8 @@ mod tests {
     fn second_ccd_joins_the_ongoing_restart() {
         let stub = Stub::new();
         let mut dev = camera_entry("cam", DevState::Idle);
+        // No `CONNECTION` event is simulated here, so the camera stays Idle
+        dev.idle_ms = RESTART_EXPOSURE_DELAY * 1000;
 
         // Both CCDs hang at the same time
         dev.notify_exposure_prop_changed(
@@ -1371,24 +1390,52 @@ mod tests {
             dev.process(PERIOD_MS, &mut stub.command(), &mut |_| {}).unwrap();
         }
         dev.state = DevState::WaitingForLoadOpts { wait_ms: 0 };
+        dev.cam_init.cooler = true;
 
-        // CONFIG_LOAD (9th) and the init wave (18th) come first, the restart
-        // event is held back until the wave is over
+        // CONFIG_LOAD (9th) and the init wave (18th) come first; the restart
+        // event is held back until the wave is over and has settled
         let mut events: Vec<HalEvent> = Vec::new();
-        let mut calls = 0;
-        loop {
-            calls += 1;
+        for _ in 0..(18 + RESTART_EXPOSURE_DELAY * 1000 / PERIOD_MS - 1) {
             dev.process(PERIOD_MS, &mut stub.command(), &mut |e| events.push(e)).unwrap();
-            assert_eq!(events.len(), if events.is_empty() { 0 } else { 1 });
-            if !events.is_empty() {
-                break;
-            }
-            assert!(calls < 30, "restart event must arrive after the init wave");
         }
-        assert_eq!(calls, 19);
-        assert_eq!(event_kind_and_id(&events[0]), ("restart", "cam".to_string()));
+        assert_eq!(
+            events.iter().map(event_kind_and_id).collect::<Vec<_>>(),
+            vec![
+                ("cooling", "cam".to_string()),
+                ("cooling", "cam_CCD2".to_string()),
+            ]
+        );
+
+        dev.process(PERIOD_MS, &mut stub.command(), &mut |e| events.push(e)).unwrap();
+        assert_eq!(
+            events.iter().map(event_kind_and_id).collect::<Vec<_>>(),
+            vec![
+                ("cooling", "cam".to_string()),
+                ("cooling", "cam_CCD2".to_string()),
+                ("restart", "cam".to_string()),
+            ]
+        );
         assert_eq!(dev.ccd_modes.main, CcdMode::Waiting);
         assert_eq!(dev.state, DevState::Idle);
+    }
+
+    #[test]
+    fn restart_event_waits_for_the_settle_window() {
+        let stub = Stub::new();
+        let mut dev = camera_entry("cam", DevState::Idle);
+        dev.ccd_modes.main = CcdMode::WaitAfterRestart(MAX_SWITCHING_ON_TIME * 1000 - PERIOD_MS);
+
+        // The switching-on window is over, but the init wave that brought the
+        // camera up has only just been reported
+        let mut events: Vec<HalEvent> = Vec::new();
+        for _ in 0..(RESTART_EXPOSURE_DELAY * 1000 / PERIOD_MS - 1) {
+            dev.process(PERIOD_MS, &mut stub.command(), &mut |e| events.push(e)).unwrap();
+            assert!(events.is_empty());
+        }
+        dev.process(PERIOD_MS, &mut stub.command(), &mut |e| events.push(e)).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(event_kind_and_id(&events[0]), ("restart", "cam".to_string()));
+        assert_eq!(dev.ccd_modes.main, CcdMode::Waiting);
     }
 
     #[test]
@@ -1512,6 +1559,7 @@ mod tests {
         watchdog.reset_device_states();
 
         assert_eq!(watchdog.devices[0].state, DevState::Idle);
+        assert_eq!(watchdog.devices[0].idle_ms, 0);
         assert_eq!(watchdog.devices[0].ccd_modes.main, CcdMode::WaitBlob(1000));
 
         watchdog.reset_all();
