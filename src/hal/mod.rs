@@ -106,7 +106,9 @@ bitflags! {
 
 #[derive(Debug, Clone)]
 pub struct DeviceInfo {
+    /// Unique backend key, stable and safe to persist; used to look the device up
     pub id:    String,
+    /// Human-readable label for display; not guaranteed to be unique
     pub name:  String,
     pub type_: DeviceType,
 }
@@ -120,9 +122,11 @@ pub enum CcdPurpose {
 }
 
 pub struct CameraInfo {
-    pub id:    String,
-    pub name:  String,
-    pub ccd:   CcdPurpose,
+    /// See `DeviceInfo::id`
+    pub id:   String,
+    /// See `DeviceInfo::name`
+    pub name: String,
+    pub ccd:  CcdPurpose,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -356,8 +360,12 @@ pub trait HalImpl {
 // Device
 
 pub trait Device {
+    /// Unique backend key, stable and safe to persist; see `DeviceInfo::id`
     fn id(&self) -> &str;
+
+    /// Human-readable label for display and logs; see `DeviceInfo::name`
     fn name(&self) -> &str;
+
     fn is_active(&self) -> eyre::Result<bool>;
 
     /// Connects the device. Must be idempotent. Called outside of any locks
