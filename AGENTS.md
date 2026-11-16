@@ -76,6 +76,7 @@ Temporary files (debug screenshots, logs, scripts) must be saved in the project'
 
 - One commit should contain only one task
 - Commit comments should be as short as possible
+- Don't commit unstaged *.md-files unless the user explicitly tells you to commit them
 
 ## UI debug
 
