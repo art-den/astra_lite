@@ -81,7 +81,7 @@ pub fn control_camera_cooling(
 ) -> eyre::Result<()> {
     if camera.is_cooler_supported()? {
         if options.enable_cooler {
-            log::info!("Setting camera temperature = {}", options.temperature);
+            log::info!("Setting temperature = {} for camera '{}'", options.temperature, camera.name());
             camera.set_temperature(Some(options.temperature))?;
         } else {
             camera.set_temperature(None)?;
@@ -96,7 +96,7 @@ pub fn control_camera_fan(
 ) -> eyre::Result<()> {
     if camera.is_fan_ctrl_supported()? {
         let fan_enabled = options.enable_fan || options.enable_cooler;
-        log::info!("Setting camera fan = {}", fan_enabled);
+        log::info!("Setting fan = {} for camera '{}'", fan_enabled, camera.name());
         camera.enable_fan(fan_enabled)?;
     }
     Ok(())
@@ -108,7 +108,7 @@ pub fn control_camera_heater(
 ) -> eyre::Result<()> {
     if camera.is_heater_supported()?
     && let Some(heater_str) = &options.heater_str {
-        log::info!("Setting camera heater = {}", heater_str);
+        log::info!("Setting heater = {} for camera '{}'", heater_str, camera.name());
         camera.control_heater(heater_str)?;
     }
     Ok(())
@@ -120,12 +120,12 @@ pub fn restart_camera_exposure(
     frame_opts: &FrameOptions,
     ctrl_opts:  &CamCtrlOptions,
 ) -> eyre::Result<()> {
-    log::info!("Restarting camera exposure {}...", camera.id());
+    log::info!("Restarting camera exposure {}...", camera.name());
 
     // Try to restart exposure by current mode
     let restarted_by_mode = mode.active.restart_cam_exposure()?;
     if restarted_by_mode {
-        log::info!("Exposure of camera {} restarted by mode!", camera.id());
+        log::info!("Exposure of camera {} restarted by mode!", camera.name());
         return Ok(());
     }
 
@@ -140,7 +140,7 @@ pub fn restart_camera_exposure(
 
     take_shot(camera, mode_cam_opts, ctrl_opts)?;
 
-    log::info!("Exposure of camera {} restarted!", camera.id());
+    log::info!("Exposure of camera {} restarted!", camera.name());
     Ok(())
 }
 
