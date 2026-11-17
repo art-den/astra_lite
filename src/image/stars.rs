@@ -9,6 +9,14 @@ const MAX_STARS_POINTS_CNT: usize = MAX_STAR_DIAM * MAX_STAR_DIAM;
 const MAX_STARS_CNT: usize = 500;
 const MAX_STARS_CNT_FOR_STAR_IMAGE: usize = 100;
 
+// Saturation plateau detector: a clean Gaussian core has <= ~0.2 of its
+// flood-fill area within 10 % of the own peak; a clipped star has >= ~0.45
+const PLATEAU_BORDER_DIV: u16 = 10;
+const PLATEAU_MIN_CORE_AREA: usize = 5;  // smaller cores are too discrete for the fraction
+const PLATEAU_MIN_CNT: usize = 5;
+const PLATEAU_FRACTION_NUM: usize = 7;   // flag if plateau fraction > 7/20
+const PLATEAU_FRACTION_DEN: usize = 20;
+
 #[derive(Clone, Default)]
 pub struct Star {
     pub x:           f64,
@@ -38,19 +46,15 @@ pub struct Stars {
     pub info:  StarsInfo,
 }
 
-pub struct StarsFinder {
-    overexp_buffer: Vec<u16>
-}
+pub struct StarsFinder;
 
 impl StarsFinder {
     pub fn new() -> Self {
-        Self {
-            overexp_buffer: Vec::new(),
-        }
+        Self
     }
 
     pub fn find_stars_and_get_info(
-        &mut self,
+        &self,
         image:            &ImageLayer<u16>,
         raw_info:         &Option<RawImageInfo>,
         sensitivity:      StarRecognSensitivity,
@@ -80,7 +84,7 @@ impl StarsFinder {
         log::debug!("Stars star_centers.len() = {}", star_centers.len());
 
         let tm = TimeLogger::start();
-        let stars = self.get_stars(&star_centers, image, threshold, ignore_3px_stars);
+        let stars = Self::get_stars(&star_centers, image, threshold, ignore_3px_stars);
         tm.log("Stars::get_stars");
         log::debug!("Stars stars.len() = {}", stars.len());
 
@@ -320,7 +324,6 @@ impl StarsFinder {
     }
 
     fn get_stars(
-        &mut self,
         star_centers:     &Vec<(isize, isize, u16)>,
         image:            &ImageLayer<u16>,
         threshold:        u16,
@@ -413,6 +416,9 @@ impl StarsFinder {
                 continue;
             }
 
+            // Detect the saturation plateau on the flood-fill core, before halo inflation
+            let overexposed = Self::is_core_overexposed(&star_points, bg);
+
             for (x, y) in star_points.keys() {
                 all_star_coords.insert((*x, *y));
             }
@@ -442,14 +448,6 @@ impl StarsFinder {
                 let height = 3 * isize::max(y-min_y+1, max_y-y+1);
                 let center_x = x_summ / crd_cnt;
                 let center_y = y_summ / crd_cnt;
-                let overexposed = self.check_is_star_overexposed(
-                    &star_points,
-                    center_x.round() as isize,
-                    center_y.round() as isize,
-                    min_x, min_y,
-                    max_x, max_y,
-                    bg,
-                );
                 let points = star_points.keys()
                     .filter(|(x, y)|
                         *x >= 0 && *y >= 0 &&
@@ -515,50 +513,24 @@ impl StarsFinder {
         real_perimeter < 3.0 * possible_perimeter
     }
 
-    fn check_is_star_overexposed(
-        &mut self,
-        star_points: &HashMap<(isize, isize), u16>,
-        center_x:    isize,
-        center_y:    isize,
-        min_x:       isize,
-        min_y:       isize,
-        max_x:       isize,
-        max_y:       isize,
-        bg:          u16,
-    ) -> bool {
-        fn is_overexposed_values(values: &[u16], bg: u16) -> bool {
-            let points_count = values.len();
-            if points_count < 4 {
-                return false;
-            }
-            let max = values.iter().max().copied().unwrap_or_default();
-            let range = max - bg;
-            let plateau_border = max - range / 10;
-            let under_plateau_cnt = values.iter().filter(|v| **v > plateau_border).count();
-            under_plateau_cnt > points_count/4
-        }
-
-        // check horizontally
-
-        self.overexp_buffer.clear();
-        for x in min_x..=max_x {
-            if let Some(v) = star_points.get(&(x, center_y)) {
-                self.overexp_buffer.push(*v);
-            }
-        }
-        if !is_overexposed_values(&self.overexp_buffer, bg) {
+    /// Detects a saturation plateau as a large fraction of the flood-fill core
+    /// within 10 % of the star's own peak (amplitude independent).
+    /// Known misses: tiny cores of undersampled stars and mild clips
+    /// (true peak below ~2x the clipping level) have no separable plateau
+    fn is_core_overexposed(core: &HashMap<(isize, isize), u16>, bg: u16) -> bool {
+        let area = core.len();
+        if area < PLATEAU_MIN_CORE_AREA {
             return false;
         }
-
-        // check vertically
-
-        self.overexp_buffer.clear();
-        for y in min_y..=max_y {
-            if let Some(v) = star_points.get(&(center_x, y)) {
-                self.overexp_buffer.push(*v);
-            }
+        let max = *core.values().max().unwrap_or(&0);
+        if max <= bg {
+            return false;
         }
-        is_overexposed_values(&self.overexp_buffer, bg)
+        let range = max - bg;
+        let plateau_border = max - range / PLATEAU_BORDER_DIV;
+        let plateau_cnt = core.values().filter(|v| **v > plateau_border).count();
+        plateau_cnt >= PLATEAU_MIN_CNT
+            && plateau_cnt * PLATEAU_FRACTION_DEN > area * PLATEAU_FRACTION_NUM
     }
 
     fn calc_common_star_image(
@@ -781,5 +753,107 @@ mod tests {
         let image = ImageLayer::new_with_size(16, 100);
         let bad_res = StarsFinder::calc_threshold_for_stars_detection(&image, StarRecognSensitivity::Normal);
         assert!(bad_res.is_err());
+    }
+
+    // Flood-fill core of a Gaussian star (optionally clipped at `clip` amplitude),
+    // cut at the 1/3-of-observed-max border like the pipeline does
+    fn make_core(sigma: f64, amp: f64, clip: Option<f64>, bg: u16) -> HashMap<(isize, isize), u16> {
+        let observed_amp = match clip { Some(c) => f64::min(amp, c), None => amp };
+        let border = bg + ((observed_amp + 1.0) / 3.0) as u16;
+        let mut core = HashMap::new();
+        for dy in -8_isize..=8 {
+            for dx in -8_isize..=8 {
+                let r2 = (dx * dx + dy * dy) as f64;
+                let mut v = amp * f64::exp(-r2 / (2.0 * sigma * sigma));
+                if let Some(c) = clip { v = f64::min(v, c); }
+                let v = bg + v.round() as u16;
+                if v >= border {
+                    core.insert((dx, dy), v);
+                }
+            }
+        }
+        core
+    }
+
+    #[test]
+    fn test_overexposure_clean_stars_not_flagged() {
+        // FWHM 2.4 .. 9.4 px: the regime where the old row-based test flagged
+        // nearly all stars regardless of brightness
+        for sigma in [1.0, 1.5, 2.0, 2.5, 3.0, 4.0] {
+            let core = make_core(sigma, 5000.0, None, 1000);
+            assert!(
+                !StarsFinder::is_core_overexposed(&core, 1000),
+                "clean star sigma={} flagged", sigma
+            );
+            let core = make_core(sigma, 30000.0, None, 1000);
+            assert!(
+                !StarsFinder::is_core_overexposed(&core, 1000),
+                "bright clean star sigma={} flagged", sigma
+            );
+        }
+    }
+
+    #[test]
+    fn test_overexposure_clipped_stars_flagged() {
+        // True peak >= 2x the clipping level: a substantial plateau
+        for sigma in [1.5, 2.0, 2.5, 3.0, 4.0] {
+            let core = make_core(sigma, 50000.0, Some(20000.0), 1000);
+            assert!(
+                StarsFinder::is_core_overexposed(&core, 1000),
+                "clipped star sigma={} not flagged", sigma
+            );
+        }
+    }
+
+    #[test]
+    fn test_overexposure_tiny_clipped_core_not_flagged() {
+        // Known limitation: a hard-clipped star with a core of a few pixels
+        // has no statistically separable plateau (needs the sensor ceiling test)
+        let core = make_core(0.6, 50000.0, Some(20000.0), 1000);
+        assert!(!StarsFinder::is_core_overexposed(&core, 1000));
+    }
+
+    #[test]
+    fn test_overexposure_real_frames() {
+        // Smoke test on captured frames (untracked tmp_frames corpus, skipped when
+        // absent). Strict false-positive/false-negative coverage is in the tests above
+        // (the old row-based detector would fail those). Here: detection works on
+        // real frames, saturated stars exist but do not dominate
+        let frames_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tmp_frames");
+        if !frames_dir.is_dir() {
+            eprintln!("tmp_frames/ not found, skipping");
+            return;
+        }
+        let mut paths: Vec<_> = std::fs::read_dir(&frames_dir).unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|e| e == "fits"))
+            .collect();
+        paths.sort();
+        let mut total = 0; let mut oexp = 0; let mut frames_with_sat = 0;
+        for p in paths {
+            let raw = crate::image::io::load_raw_image_from_fits_file(&p).unwrap();
+            // Bayer frames are detected by the app only after demosaicing, skip them here
+            if raw.info().cfa != crate::image::raw::CfaType::None {
+                eprintln!("{}: CFA frame, skipped", p.file_name().unwrap().to_string_lossy());
+                continue;
+            }
+            let (w, h) = (raw.info().width, raw.info().height);
+            let mut image = ImageLayer::new_with_size(w, h);
+            image.as_slice_mut().copy_from_slice(raw.as_slice());
+            let finder = StarsFinder::new();
+            let stars = finder.find_stars_and_get_info(
+                &image, &None, StarRecognSensitivity::Normal, false, true).unwrap();
+            let items = &stars.items;
+            let n = items.len(); let k = items.iter().filter(|s| s.overexposed).count();
+            if k > 0 { frames_with_sat += 1; }
+            total += n; oexp += k;
+            eprintln!("{}: {} stars, {} overexposed ({}%)",
+                p.file_name().unwrap().to_string_lossy(), n, k,
+                if n>0 {100*k/n} else {0});
+        }
+        assert!(total > 0, "no stars found");
+        assert!(frames_with_sat >= 4, "expected saturated stars in >=4 frames, got {}", frames_with_sat);
+        assert!(oexp < total / 2, "too many overexposed: {}/{}", oexp, total);
     }
 }

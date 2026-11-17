@@ -57,40 +57,25 @@ fn create_synthetic_raw_image(cfa: CfaType) -> RawImage {
 
     for (cx, cy) in EXPECTED_STARS {
         let peak = (4500 + (cx.wrapping_mul(cy)) % 2000) as f32;
-        // sigma=1.0 keeps stars sharp enough after Bayer demosaic interpolation
-        // so they aren't flagged as overexposed by the plateau detector.
-        let radius = 3;
-        for dy in 0..=radius {
-            for dx in 0..=radius {
-                let dist_sq = (dx * dx + dy * dy) as f32;
+        // Stars are sampled with a sub-pixel offset: an exactly pixel-centered star
+        // is symmetric relative to the Bayer sites, and linear demosaic then makes
+        // several equal G pixels around it - a numeric plateau that does not occur
+        // in real captures.
+        let (ox, oy) = (0.37_f32, 0.21_f32);
+        let radius = 3_isize;
+        for dy in -radius..=radius {
+            for dx in -radius..=radius {
+                let xx = cx as isize + dx;
+                let yy = cy as isize + dy;
+                if xx < 0 || yy < 0 || xx >= IMG_WIDTH as isize || yy >= IMG_HEIGHT as isize {
+                    continue;
+                }
+                let dist_sq = (dx as f32 - ox).powi(2) + (dy as f32 - oy).powi(2);
                 let sigma = 1.0_f32;
                 let value = peak * (-dist_sq / (2.0 * sigma * sigma)).exp();
                 let v = value as u16;
-
-                let y = cy - dy;
-                if y < IMG_HEIGHT {
-                    let base = y * IMG_WIDTH;
-                    if cx >= dx && cx - dx < IMG_WIDTH {
-                        let idx = base + cx - dx;
-                        data[idx] = data[idx].saturating_add(v);
-                    }
-                    if cx + dx < IMG_WIDTH {
-                        let idx = base + cx + dx;
-                        data[idx] = data[idx].saturating_add(v);
-                    }
-                }
-                let y2 = cy + dy;
-                if y2 < IMG_HEIGHT {
-                    let base = y2 * IMG_WIDTH;
-                    if cx >= dx && cx - dx < IMG_WIDTH {
-                        let idx = base + cx - dx;
-                        data[idx] = data[idx].saturating_add(v);
-                    }
-                    if cx + dx < IMG_WIDTH {
-                        let idx = base + cx + dx;
-                        data[idx] = data[idx].saturating_add(v);
-                    }
-                }
+                let idx = (yy as usize) * IMG_WIDTH + xx as usize;
+                data[idx] = data[idx].saturating_add(v);
             }
         }
     }

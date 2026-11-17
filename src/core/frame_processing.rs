@@ -531,7 +531,7 @@ impl FrameProcessing {
                     .unwrap_or_default();
 
                 let mono_layer = if image.is_color() { &image.g } else { &image.l };
-                let mut stars_finder = StarsFinder::new();
+                let stars_finder = StarsFinder::new();
                 let ignore_3px_stars = command.quality_options
                     .as_ref()
                     .map(|opts| opts.ignore_3px_stars)
@@ -743,7 +743,7 @@ impl FrameProcessing {
                     .as_ref().map(|qo| qo.star_recogn_sens)
                     .unwrap_or_default();
 
-                let mut stars_finder = StarsFinder::new();
+                let stars_finder = StarsFinder::new();
                 let ls_stars = stars_finder.find_stars_and_get_info(
                     ls_mono_layer,
                     &raw_info,
