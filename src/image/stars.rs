@@ -46,6 +46,19 @@ pub struct Stars {
     pub info:  StarsInfo,
 }
 
+#[derive(Clone, Copy)]
+struct Extremum {
+    peak: u16,
+    // Coarse row-median background at scan time, not the star's true background
+    coarse_bg: u16,
+}
+
+impl Extremum {
+    fn contrast(&self) -> i32 {
+        self.peak as i32 - self.coarse_bg as i32
+    }
+}
+
 pub struct StarsFinder;
 
 impl StarsFinder {
@@ -74,12 +87,7 @@ impl StarsFinder {
         log::debug!("Stars detection threshold = {}", threshold);
 
         let tm = TimeLogger::start();
-        let extrema = Self::find_extremums(image, &mut threshold, mt);
-        tm.log("StarsFinder::find_extremums");
-        log::debug!("Stars extrema.len() = {}", extrema.len());
-
-        let star_centers = Self::find_possible_stars_centers(&extrema);
-        let tm = TimeLogger::start();
+        let star_centers = Self::find_possible_stars_centers(image, &mut threshold, mt);
         tm.log("StarsFinder::find_possible_stars_centers");
         log::debug!("Stars star_centers.len() = {}", star_centers.len());
 
@@ -164,16 +172,16 @@ impl StarsFinder {
     fn find_extremums_try(
         image:     &ImageLayer<u16>,
         threshold: u16,
-        max_size:  usize,
+        limit:     usize,
         mt:        bool,
-    ) -> HashMap<(isize, isize), u16> {
+    ) -> Option<HashMap<(isize, isize), Extremum>> {
         let process_rows =
             |image: &ImageLayer<u16>, threshold: u16, y1: usize, y2: usize,
-             out: &mut Vec<((isize, isize), u16)>, cnt: &AtomicUsize| {
+             out: &mut Vec<((isize, isize), Extremum)>, cnt: &AtomicUsize| {
             let mut filtered = vec![0; image.width()];
             for y in y1..y2 {
-                if cnt.load(Ordering::Relaxed) >= max_size {
-                    break;
+                if cnt.load(Ordering::Relaxed) >= limit {
+                    return;
                 }
 
                 if y < MAX_STAR_DIAM/2 || y > image.height()-MAX_STAR_DIAM/2 {
@@ -222,17 +230,17 @@ impl StarsFinder {
                     let r = median4_u16(*r1, *r2, *r3, *r4);
                     if r >= s { continue; }
 
-                    if cnt.fetch_add(1, Ordering::Relaxed) >= max_size {
+                    if cnt.fetch_add(1, Ordering::Relaxed) >= limit {
                         break;
                     }
-                    out.push(((star_x, star_y), s));
+                    out.push(((star_x, star_y), Extremum {peak: s, coarse_bg: *f}));
                 }
             }
         };
 
         let counter = AtomicUsize::new(0);
         let image_height = image.height();
-        let results: Vec<((isize, isize), u16)> = if !mt {
+        let results: Vec<((isize, isize), Extremum)> = if !mt {
             let mut out = Vec::new();
             process_rows(image, threshold, 0, image_height, &mut out, &counter);
             out
@@ -253,47 +261,73 @@ impl StarsFinder {
                 .collect()
         };
 
-        results.into_iter().collect()
+        if counter.load(Ordering::Relaxed) >= limit {
+            return None;
+        }
+
+        Some(results.into_iter().collect())
     }
 
-    pub fn find_extremums(
+    fn find_possible_stars_centers(
         image:     &ImageLayer<u16>,
         threshold: &mut u16,
         mt:        bool,
-    ) -> HashMap<(isize, isize), u16> {
-        const MAX_EXTREMUMS_CNT: usize = 10 * MAX_STARS_CNT;
+    ) -> Vec<(isize, isize, Extremum)> {
+        const MAX_WEAK_CENTERS_CNT: usize = 10 * MAX_STARS_CNT;
+        // Memory guard only: reaching it aborts the scan (None) and bumps the threshold
+        const MAX_EXTREMUMS_CNT: usize = 100 * MAX_STARS_CNT;
+        // A center is "weak" if its contrast is below 1.5 * threshold (empirical factor):
+        // a population hugging the threshold means the noise estimate collapsed
+        const WEAK_CONTRAST_NUM: i32 = 3;
+        const WEAK_CONTRAST_DEN: i32 = 2;
+        const MAX_CENTERS_CNT: usize = 5 * MAX_STARS_CNT;
 
+        let mut result = Vec::new();
         loop {
-            let current_result = Self::find_extremums_try(
+            let extrema = Self::find_extremums_try(
                 image,
                 *threshold,
                 MAX_EXTREMUMS_CNT,
                 mt
             );
 
-            if current_result.len() < MAX_EXTREMUMS_CNT {
-                break current_result;
+            if let Some(extrema) = extrema {
+                Self::cluster_extrema(&extrema, &mut result);
+
+                let weak_border = WEAK_CONTRAST_NUM * (*threshold as i32) / WEAK_CONTRAST_DEN;
+                let weak_centers_count = result.iter()
+                    .filter(|(_, _, extr)| extr.contrast() < weak_border)
+                    .count();
+
+                if weak_centers_count < MAX_WEAK_CENTERS_CNT {
+                    break;
+                }
             }
 
-            // if too many points (noise detected as stars),
-            // increase threshold and repeat
+            // Too many weak centers (or the extrema cap was hit): the threshold
+            // is likely underestimated, increase it and repeat
 
             let new_threshold =  3 * (*threshold as u32 + 1) / 2;
             if new_threshold > u16::MAX as u32 {
-                break current_result;
+                break;
             }
             *threshold = new_threshold as u16;
         }
+        result.sort_by_key(|(_, _, extr)| -extr.contrast());
+        if result.len() > MAX_CENTERS_CNT {
+            result.drain(MAX_CENTERS_CNT..);
+        }
+        result
     }
 
-    fn find_possible_stars_centers(
-        extrema: &HashMap<(isize, isize), u16>,
-    ) -> Vec<(isize, isize, u16)> {
+    fn cluster_extrema(
+        extrema: &HashMap<(isize, isize), Extremum>,
+        result:  &mut Vec<(isize, isize, Extremum)>,
+    ) {
         let mut processed_points = HashSet::<(isize, isize)>::new();
         let mut cluster_filler = FloodFiller::new();
         let mut cluster = Vec::new();
-        let mut possible_star_centers = Vec::new();
-
+        result.clear();
         for crd in extrema.keys() {
             if processed_points.contains(crd) { continue; }
             let (x, y) = crd;
@@ -310,21 +344,16 @@ impl StarsFinder {
                 FillPtSetResult::Miss
             });
 
-            cluster.sort_by_key(|(_, _, br)| *br);
+            cluster.sort_by_key(|(_, _, extr)| extr.peak);
 
             if let Some(last) = cluster.last() {
-                possible_star_centers.push(*last);
+                result.push(*last);
             }
         }
-        possible_star_centers.sort_by_key(|(_, _, v)| -(*v as i32));
-        if possible_star_centers.len() >  MAX_STARS_CNT {
-            possible_star_centers.drain(MAX_STARS_CNT..);
-        }
-        possible_star_centers
     }
 
     fn get_stars(
-        star_centers:     &Vec<(isize, isize, u16)>,
+        star_centers:     &Vec<(isize, isize, Extremum)>,
         image:            &ImageLayer<u16>,
         threshold:        u16,
         ignore_3px_stars: bool,
@@ -337,12 +366,13 @@ impl StarsFinder {
         let mut wrong_cnt = 0_usize;
         let mut star_points = HashMap::new();
         let mut star_extra_points = HashMap::new();
-        for &(x, y, max_v) in star_centers {
+        for &(x, y, extr) in star_centers {
             if all_star_coords.contains(&(x, y)) { continue; }
-            if all_star_coords.len() > max_all_stars_points
-            || wrong_cnt > 1000 {
+            if all_star_coords.len() > max_all_stars_points {
                 return StarItems::new();
             }
+            // Too many malformed candidates: stop, keep what was already found
+            if wrong_cnt > 1000 { break; }
             star_bg_values.clear();
             // (2 * MAX_STAR_DIAM + 1) square centered at the star, clipped to the image borders
             for v in image.rect_iter(
@@ -356,8 +386,8 @@ impl StarsFinder {
             let bg_pos = star_bg_values.len() / 3;
             let bg = *star_bg_values.select_nth_unstable(bg_pos).1;
 
-            if max_v <= bg || max_v-bg < threshold { continue; }
-            let border = (bg as u32 + (max_v as u32 - bg as u32 + 1) / 3) as u16;
+            if extr.peak <= bg || extr.peak - bg < threshold { continue; }
+            let border = (bg as u32 + (extr.peak as u32 - bg as u32 + 1) / 3) as u16;
             if border == 0 { continue; }
             let mut x_summ = 0_f64;
             let mut y_summ = 0_f64;
@@ -396,7 +426,7 @@ impl StarsFinder {
                         }
 
                         star_points.insert((x, y), v);
-                        let v_part = linear_interpolate(v as f64, bg as f64, max_v as f64, 0.0, 1.0);
+                        let v_part = linear_interpolate(v as f64, bg as f64, extr.peak as f64, 0.0, 1.0);
                         x_summ += v_part * x as f64;
                         y_summ += v_part * y as f64;
                         crd_cnt += v_part;
@@ -460,7 +490,7 @@ impl StarsFinder {
                     x: center_x,
                     y: center_y,
                     background: bg,
-                    max_value: max_v,
+                    max_value: extr.peak,
                     brightness: brightness as u32,
                     width: width as usize,
                     height: height as usize,
@@ -486,11 +516,26 @@ impl StarsFinder {
             stars.retain(|s| s.overexposed || s.points.len() < border);
         }
 
-        if stars.len() > MAX_STARS_CNT {
-            stars.drain(MAX_STARS_CNT..);
-        }
+        Self::cap_star_count(&mut stars);
 
         stars
+    }
+
+    // Keep <= MAX_STARS_CNT stars, capping overexposed ones so saturated stars
+    // cannot crowd clean ones out. The list must be brightness-sorted
+    fn cap_star_count(stars: &mut Vec<Star>) {
+        const MAX_OVEREXPOSED_STARS_CNT: usize = MAX_STARS_CNT / 2;
+        let mut total_cnt = 0;
+        let mut over_cnt = 0;
+        stars.retain(|s| {
+            if total_cnt >= MAX_STARS_CNT { return false; }
+            if s.overexposed {
+                if over_cnt >= MAX_OVEREXPOSED_STARS_CNT { return false; }
+                over_cnt += 1;
+            }
+            total_cnt += 1;
+            true
+        });
     }
 
     fn check_is_star_ok(star_points: &HashMap<(isize, isize), u16>) -> bool {
@@ -811,6 +856,26 @@ mod tests {
         // has no statistically separable plateau (needs the sensor ceiling test)
         let core = make_core(0.6, 50000.0, Some(20000.0), 1000);
         assert!(!StarsFinder::is_core_overexposed(&core, 1000));
+    }
+
+    #[test]
+    fn test_star_count_cap_limits_overexposed() {
+        let mut stars: Vec<_> = (0..400u32)
+            .map(|i| Star { brightness: i * 2 + 1, overexposed: true, ..Default::default() })
+            .chain((0..400u32).map(|i| Star { brightness: i * 2, ..Default::default() }))
+            .collect();
+        stars.sort_by_key(|s| -(s.brightness as i32));
+        StarsFinder::cap_star_count(&mut stars);
+        assert_eq!(stars.len(), MAX_STARS_CNT);
+        assert_eq!(stars.iter().filter(|s| s.overexposed).count(), MAX_STARS_CNT / 2);
+
+        // Few clean stars: the list shrinks instead of being padded with overexposed
+        let mut stars: Vec<_> = (0..300)
+            .map(|_| Star { overexposed: true, ..Default::default() })
+            .chain((0..100).map(|_| Star::default()))
+            .collect();
+        StarsFinder::cap_star_count(&mut stars);
+        assert_eq!(stars.len(), 100 + MAX_STARS_CNT / 2);
     }
 
     #[test]

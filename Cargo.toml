@@ -72,10 +72,6 @@ codegen-units = 1
 panic = "abort"
 
 [[bench]]
-name = "stars_find_extremums"
-harness = false
-
-[[bench]]
 name = "image_div_iter"
 harness = false
 
