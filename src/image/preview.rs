@@ -10,9 +10,12 @@ use super::{cam_db::*, histogram::Histogram, image::{Image, ImageLayer}, stars::
 
 #[derive(PartialEq, Clone, Default)]
 pub struct PreviewParams {
+    /// Levels sliders, normalized to 0..1
     pub dark_lvl:         f64,
     pub light_lvl:        f64,
     pub gamma:            f64,
+    /// Preview area in display pixels: widget allocation in the UI (0 before the first
+    /// configure event); offscreen previews (platesolve) set it synthetically
     pub pr_area_width:    usize,
     pub pr_area_height:   usize,
     pub scale:            PreviewScale,
@@ -23,6 +26,8 @@ pub struct PreviewParams {
 }
 
 impl PreviewParams {
+    /// Target preview size in display pixels. Intentionally != `orig / calc_reduct_ratio`
+    /// for P75/P15/P10/P5/FitWindow: the caller rescales the pixbuf to this size.
     pub fn get_preview_img_size_for_scale(
         &self,
         scale:       PreviewScale,
@@ -67,6 +72,7 @@ impl PreviewParams {
         self.get_preview_img_size_for_scale(self.scale, orig_width, orig_height)
     }
 
+    /// Integer source->grid divisor: grid size = orig / ratio (see `get_preview_img_size`).
     pub fn calc_reduct_ratio(&self, img_width: usize, img_height: usize) -> usize {
         match self.scale {
             PreviewScale::FitWindow => {

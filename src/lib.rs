@@ -7,7 +7,6 @@
     clippy::single_match,
     clippy::manual_div_ceil,
     clippy::if_same_then_else,
-    clippy::module_inception,
     clippy::manual_map,
     clippy::type_complexity,
     clippy::collapsible_else_if,

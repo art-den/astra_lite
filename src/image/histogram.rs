@@ -85,7 +85,7 @@ impl Histogram {
         Self { max: 0, r: None, g: None, b: None, l: None }
     }
 
-    pub fn from_raw_image(
+    pub fn update_from_raw_image(
         &mut self,
         img:        &RawImage,
         monochrome: bool,
@@ -112,10 +112,10 @@ impl Histogram {
                     let row_data = img.row(y);
                     for (v, c) in izip!(row_data, cfa.iter().cycle()) {
                         match *c {
-                            CfaColor::R => r[*v as usize] += 1,
-                            CfaColor::G => g[*v as usize] += 1,
-                            CfaColor::B => b[*v as usize] += 1,
-                            _           => {},
+                            CfaColor::R    => r[*v as usize] += 1,
+                            CfaColor::G    => g[*v as usize] += 1,
+                            CfaColor::B    => b[*v as usize] += 1,
+                            CfaColor::None => {},
                         }
                     }
                 }
@@ -201,7 +201,7 @@ impl Histogram {
         res
     }
 
-    pub fn from_image(&mut self, img: &Image) {
+    pub fn update_from_image(&mut self, img: &Image) {
         let from_image_layer = |
             chan:  Option<HistogramChan>,
             layer: &ImageLayer<u16>,

@@ -328,7 +328,7 @@ impl FrameProcessing {
 
                 let mut raw_hist = command.preview.raw_hist.write().unwrap();
                 let tmr = TimeLogger::start();
-                raw_hist.from_raw_image(
+                raw_hist.update_from_raw_image(
                     &raw_image,
                     is_monochrome_img
                 );
@@ -495,7 +495,7 @@ impl FrameProcessing {
 
         let mut hist = command.preview.img_hist.write().unwrap();
         let tmr = TimeLogger::start();
-        hist.from_image(&image);
+        hist.update_from_image(&image);
         tmr.log("histogram for result image");
         if command.img_source.get_type() == CameraShotType::ReadyImage {
             *command.preview.raw_hist.write().unwrap() = hist.clone();
@@ -717,7 +717,7 @@ impl FrameProcessing {
 
                 let mut hist = live_stacking.data.hist.write().unwrap();
                 let tmr = TimeLogger::start();
-                hist.from_image(&res_image);
+                hist.update_from_image(&res_image);
                 tmr.log("histogram from live view image");
                 drop(hist);
 

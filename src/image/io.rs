@@ -9,7 +9,7 @@ use crate::{hal::{CameraShot, CameraShotType}, ui::gtk_utils::*};
 use super::{image::{Image, ImageLayer}, raw::*, simple_fits::{FitsReader, FitsWriter, Header, SeekNRead}};
 
 /// Gamma used to linearize display-referred pixels on load
-pub const READY_IMAGE_GAMMUT: f32 = 2.4;
+pub const READY_IMAGE_GAMMA: f32 = 2.4;
 
 /// Max allowed length of one side of a FITS image loaded by this module
 const MAX_FITS_SIDE: usize = 16384;
@@ -102,8 +102,8 @@ pub fn save_image_layer_to_tif_file(
 ) -> eyre::Result<()> {
     use tiff::encoder::*;
     let mut file = BufWriter::new(File::create(file_name)?);
-    let mut decoder = TiffEncoder::new(&mut file)?;
-    let mut tiff = decoder.new_image::<colortype::Gray16>(
+    let mut encoder = TiffEncoder::new(&mut file)?;
+    let mut tiff = encoder.new_image::<colortype::Gray16>(
         image_layer.width() as u32,
         image_layer.height() as u32
     )?;
@@ -341,7 +341,7 @@ pub fn load_image_using_pixbuf(
 
     let u8_to_u16 = |value: u8| -> u16 {
         let f32_v = value as f32 / 255.0;
-        let linear = f32_v.powf(READY_IMAGE_GAMMUT);
+        let linear = f32_v.powf(READY_IMAGE_GAMMA);
         (linear * 65535.0) as u16
     };
 

@@ -7,6 +7,9 @@ use crate::utils::math::*;
 
 use super::{histogram::*, image::*, raw::RawImageInfo};
 
+/// Sliding median window: number of `tmp` slots kept per channel
+const MEDIAN_WINDOW: usize = 5;
+
 /// Channel of rotated image
 #[derive(Default)]
 struct ImageStackerTempChan {
@@ -101,7 +104,6 @@ pub struct ImageStacker {
     height:     usize,
     max_value:  u16,
     total_exp:  f64,
-    frames_cnt: u32,
     raw_info:   Option<RawImageInfo>,
 }
 
@@ -119,7 +121,6 @@ impl ImageStacker {
             height: 0,
             max_value: 0,
             total_exp: 0.0,
-            frames_cnt: 0,
             raw_info: None,
         }
     }
@@ -155,7 +156,6 @@ impl ImageStacker {
         self.height = 0;
         self.max_value = 0;
         self.total_exp = 0.0;
-        self.frames_cnt = 0;
     }
 
     pub fn add(
@@ -204,7 +204,6 @@ impl ImageStacker {
             _ => panic!("self.mode is not initialized"),
         }
         self.total_exp += exposure;
-        self.frames_cnt += 1;
     }
 
     fn add_simple(
@@ -312,10 +311,12 @@ impl ImageStacker {
         // for low-power devices.
 
 
-        let idx = self.tmp_idx % 5;
+        let idx = self.tmp_idx % MEDIAN_WINDOW;
 
         if self.is_color() {
-            // An empty channel has no median: fill the rotated border with black
+            // Per-frame sky level (channel median): `add_median` subtracts it per slot
+            // and adds the slots' common median back. No histogram samples -> 0 -> no
+            // subtraction for that slot.
             let background_r = hist.r.as_ref().and_then(|chan| chan.median()).unwrap_or(0);
             let background_g = hist.g.as_ref().and_then(|chan| chan.median()).unwrap_or(0);
             let background_b = hist.b.as_ref().and_then(|chan| chan.median()).unwrap_or(0);
@@ -331,7 +332,7 @@ impl ImageStacker {
 
         self.tmp_idx += 1;
 
-        if self.tmp_idx >= 5 {
+        if self.tmp_idx >= MEDIAN_WINDOW {
             if self.is_color() {
                 Self::add_median(&mut self.r, &mut self.cnt, false);
                 Self::add_median(&mut self.g, &mut self.cnt, false);
@@ -353,6 +354,8 @@ impl ImageStacker {
         transl_y:   f64,
         angle:      f64,
     ) {
+        // `Image::is_color()` is all-or-nothing and `add()` asserts the mode on every
+        // frame, so all channels' `tmp` vectors stay in lockstep.
         if src.is_empty() { return; }
         while dst_chan.tmp.len() <= idx {
             dst_chan.tmp.push(ImageStackerTempChan::default());
@@ -409,6 +412,7 @@ impl ImageStacker {
         update_cnt: bool,
     ) {
         if chan.tmp.is_empty() { return; }
+        debug_assert_eq!(chan.tmp.len(), MEDIAN_WINDOW);
         let src1 = &chan.tmp[0];
         let src2 = &chan.tmp[1];
         let src3 = &chan.tmp[2];
@@ -435,6 +439,7 @@ impl ImageStacker {
             .zip(chan.data.par_iter_mut())
             .zip(cnt.par_iter_mut())
             .for_each(|((((((r1, r2), r3), r4), r5), d), c)| {
+                // 0 is the inactive-pixel sentinel written by `rotate_image` for the rotated-out border
                 let mut result =
                     if *r1 != 0 && *r2 != 0 && *r3 != 0 && *r4 != 0 && *r5 != 0 {
                         // Fast branch. Pixels in all 5 frames are active
@@ -446,7 +451,8 @@ impl ImageStacker {
                             *r5 as i32 - src5.background as i32,
                         )
                     } else {
-                        let mut tmp = [0_i32; 4];
+                        // at most MEDIAN_WINDOW - 1 values: the fast branch covers the all-active case
+                        let mut tmp = [0_i32; MEDIAN_WINDOW];
                         let mut idx = 0;
                         if *r1 != 0 { tmp[idx] = *r1 as i32 - src1.background as i32; idx += 1; }
                         if *r2 != 0 { tmp[idx] = *r2 as i32 - src2.background as i32; idx += 1; }
@@ -475,9 +481,9 @@ impl ImageStacker {
     pub fn save_to_tiff(&self, file_name: &Path) -> eyre::Result<()> {
         use tiff::encoder::*;
         let mut file = BufWriter::new(File::create(file_name)?);
-        let mut decoder = TiffEncoder::new(&mut file)?;
+        let mut encoder = TiffEncoder::new(&mut file)?;
         if !self.l.data.is_empty() {
-            let mut tiff = decoder.new_image::<colortype::Gray16>(
+            let mut tiff = encoder.new_image::<colortype::Gray16>(
                 self.width as u32,
                 self.height as u32
             )?;
@@ -499,7 +505,7 @@ impl ImageStacker {
             }
             tiff.finish()?;
         } else {
-            let mut tiff = decoder.new_image::<colortype::RGB16>(
+            let mut tiff = encoder.new_image::<colortype::RGB16>(
                 self.width as u32,
                 self.height as u32
             )?;

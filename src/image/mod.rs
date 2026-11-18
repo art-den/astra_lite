@@ -1,5 +1,6 @@
 pub mod raw;
 pub mod raw_stacker;
+#[allow(clippy::module_inception)]
 pub mod image;
 pub mod image_stacker;
 pub mod info;
@@ -10,4 +11,4 @@ pub mod histogram;
 pub mod io;
 pub mod cam_db;
 pub mod preview;
-pub mod utils;
+mod utils;

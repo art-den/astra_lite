@@ -93,6 +93,8 @@ impl<T: Copy + Default> ImageLayer<T> {
         &self.data[pos..pos+self.width]
     }
 
+    /// Panics on out-of-range coords by design: a silently dropped write would
+    /// corrupt photometry data; bulk writes use `as_slice_mut()`.
     #[inline(always)]
     pub fn set(&mut self, x: isize, y: isize, value: T) {
         if x < 0
@@ -482,11 +484,11 @@ fn advance_rows<const N: usize>(rows: &mut [*const u16; N], count: isize) {
 }
 
 // pixels left in the reduced rect, including the one the pointers are at
-fn div_remaining(width: usize, height: usize, x: usize, y: usize) -> usize {
+fn div_remaining(width: usize, height: usize, left_in_row: usize, y: usize) -> usize {
     if width == 0 || y >= height {
         0
     } else {
-        (height - y - 1) * width + x
+        (height - y - 1) * width + left_in_row
     }
 }
 
@@ -495,15 +497,15 @@ fn div_remaining(width: usize, height: usize, x: usize, y: usize) -> usize {
 // Uses raw pointers to avoid bounds checks and per-pixel address calculations;
 // N is a const generic, so the block loops are unrolled at compile time.
 pub struct DivNLIterator<'a, const N: usize> {
-    layer:    &'a ImageLayer<u16>,
+    layer:       &'a ImageLayer<u16>,
     // pointers to the left pixel of the current NxN block, one per its row
-    rows:     [*const u16; N],
-    advance:  isize,
-    // remaining pixels in the current reduced row
-    x:        usize,
-    y:        usize,
-    width:    usize,
-    height:   usize,
+    rows:        [*const u16; N],
+    advance:     isize,
+    // pixels left to emit in the current reduced row, including the block at the pointers
+    left_in_row: usize,
+    y:           usize,
+    width:       usize,
+    height:      usize,
 }
 
 impl<'a, const N: usize> DivNLIterator<'a, N> {
@@ -532,7 +534,7 @@ impl<'a, const N: usize> DivNLIterator<'a, N> {
             // pointer jump from the last block of the reduced row to the first block
             // of the next one; the row stride is the full layer width, not src_w
             advance: N as isize * (src_width - width) as isize,
-            x: width,
+            left_in_row: width,
             y: 0,
             width,
             height: src_h / N,
@@ -559,9 +561,9 @@ impl<const N: usize> Iterator for DivNLIterator<'_, N> {
         let v = block_avg(&self.rows);
         // needs no guard: the last block of a row ends at most at x1 + width*N <= src_width
         advance_rows(&mut self.rows, N as isize);
-        self.x -= 1;
-        if self.x == 0 {
-            self.x = self.width;
+        self.left_in_row -= 1;
+        if self.left_in_row == 0 {
+            self.left_in_row = self.width;
             self.y += 1;
             // no jump after the last row: it would leave the data allocation (UB)
             if self.y < self.height {
@@ -573,7 +575,7 @@ impl<const N: usize> Iterator for DivNLIterator<'_, N> {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let remaining = div_remaining(self.width, self.height, self.x, self.y);
+        let remaining = div_remaining(self.width, self.height, self.left_in_row, self.y);
         (remaining, Some(remaining))
     }
 }
@@ -586,16 +588,16 @@ impl<const N: usize> FusedIterator for DivNLIterator<'_, N> {}
 // layers of a color image and yields (r, g, b) tuples.
 // Shares block_avg() and advance_rows() with DivNLIterator.
 pub struct DivNRGBIterator<'a, const N: usize> {
-    image:    &'a Image,
-    r_rows:   [*const u16; N],
-    g_rows:   [*const u16; N],
-    b_rows:   [*const u16; N],
-    advance:  isize,
-    // remaining pixels in the current reduced row
-    x:        usize,
-    y:        usize,
-    width:    usize,
-    height:   usize,
+    image:       &'a Image,
+    r_rows:      [*const u16; N],
+    g_rows:      [*const u16; N],
+    b_rows:      [*const u16; N],
+    advance:     isize,
+    // pixels left to emit in the current reduced row, including the block at the pointers
+    left_in_row: usize,
+    y:           usize,
+    width:       usize,
+    height:      usize,
 }
 
 impl<'a, const N: usize> DivNRGBIterator<'a, N> {
@@ -635,7 +637,7 @@ impl<'a, const N: usize> DivNRGBIterator<'a, N> {
             // pointer jump from the last block of the reduced row to the first block
             // of the next one; the row stride is the full layer width, not src_w
             advance: N as isize * (src_width - width) as isize,
-            x: width,
+            left_in_row: width,
             y: 0,
             width,
             height: src_h / N,
@@ -669,9 +671,9 @@ impl<const N: usize> Iterator for DivNRGBIterator<'_, N> {
         advance_rows(&mut self.r_rows, N as isize);
         advance_rows(&mut self.g_rows, N as isize);
         advance_rows(&mut self.b_rows, N as isize);
-        self.x -= 1;
-        if self.x == 0 {
-            self.x = self.width;
+        self.left_in_row -= 1;
+        if self.left_in_row == 0 {
+            self.left_in_row = self.width;
             self.y += 1;
             // no jump after the last row: it would leave the layers data (UB)
             if self.y < self.height {
@@ -685,7 +687,7 @@ impl<const N: usize> Iterator for DivNRGBIterator<'_, N> {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let remaining = div_remaining(self.width, self.height, self.x, self.y);
+        let remaining = div_remaining(self.width, self.height, self.left_in_row, self.y);
         (remaining, Some(remaining))
     }
 }
@@ -845,6 +847,7 @@ impl Image {
 trait GradientCalcSource {
     fn image_width(&self) -> usize;
     fn image_height(&self) -> usize;
+    /// `(x1, y1, x2, y2)` are inclusive and must lie inside the image (no clipping).
     fn get_rect_values(&self, x1: usize, y1: usize, x2: usize, y2: usize, result: &mut Vec<u16>);
 }
 

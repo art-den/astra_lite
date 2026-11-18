@@ -4,7 +4,7 @@ use gtk::{cairo, gdk, glib::{self, clone}, prelude::*};
 use macros::FromBuilder;
 use serde::{Serialize, Deserialize};
 use crate::{
-    core::{engine::*, events::*, frame_processing::*, preview::ResultImageInfo}, hal::FrameType, image::{cam_db::get_cam_info, histogram::*, image::{Image, ImageLayer}, info::*, io::{READY_IMAGE_GAMMUT, save_image_to_tif_file}, preview::*, raw::CalibrMethods, stars::Stars, stars_offset::Offset}, options::*, sky_math::math::radian_to_degree, utils::{io_utils::*, log_utils::*}
+    core::{engine::*, events::*, frame_processing::*, preview::ResultImageInfo}, hal::FrameType, image::{cam_db::get_cam_info, histogram::*, image::{Image, ImageLayer}, info::*, io::{READY_IMAGE_GAMMA, save_image_to_tif_file}, preview::*, raw::CalibrMethods, stars::Stars, stars_offset::Offset}, options::*, sky_math::math::radian_to_degree, utils::{io_utils::*, log_utils::*}
 };
 use super::{gtk_utils::*, module::*, ui_main::*, utils::*};
 
@@ -787,7 +787,7 @@ impl PreviewUi {
         self.widgets.ctrl.scl_wb_blue.set_sensitive(rgb_enabled);
     }
 
-    /// Marks READY_IMAGE_GAMMUT: the gamma that undoes the load-time
+    /// Marks READY_IMAGE_GAMMA: the gamma that undoes the load-time
     /// linearization of a display-referred image (see `Image::levels_locked`)
     fn update_gamma_mark(&self) {
         let show_mark = self.levels_locked.get();
@@ -802,10 +802,10 @@ impl PreviewUi {
         if show_mark {
             // Bottom: the scale shows its value at the right, so the mark is put below the trough
             let mark = format!(
-                r##"<span color="{}"><b>{READY_IMAGE_GAMMUT:.1}</b></span>"##,
+                r##"<span color="{}"><b>{READY_IMAGE_GAMMA:.1}</b></span>"##,
                 get_warn_color_str()
             );
-            scl.add_mark(READY_IMAGE_GAMMUT as f64, gtk::PositionType::Bottom, Some(&mark));
+            scl.add_mark(READY_IMAGE_GAMMA as f64, gtk::PositionType::Bottom, Some(&mark));
         }
     }
 

@@ -1,7 +1,10 @@
 #[derive(Clone)]
 pub struct CamInfo {
+    /// Lowercase name fragments matched against the FITS `INSTRUME` value.
+    /// Same-sensor models intentionally share one entry (one coefficient set).
     pub names:  &'static [&'static str],
     pub sensor: &'static str,
+    /// Display WB multipliers, R/G/B. In the data below G is the 1.000 reference.
     pub wb:     [f32; 3],
 }
 
@@ -37,6 +40,8 @@ const CAM_INFO: &[CamInfo] = &[
     },
 ];
 
+/// Case-insensitive substring match of `cam_name` against `names`.
+/// Only the query is lowercased, so DB literals must stay lowercase.
 pub fn get_cam_info(cam_name: &str) -> Option<CamInfo> {
     let cam_name_lc = cam_name.to_lowercase();
     CAM_INFO.iter()
