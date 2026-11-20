@@ -2,7 +2,7 @@ use std::{rc::Rc, sync::Arc, cell::RefCell};
 use gtk::{cairo, glib::{self, clone}, prelude::*};
 use macros::FromBuilder;
 use crate::{
-    core::{cur_devices::CurDevices, engine::*, events::*, frame_processing::*, utils::{FileNameArg, FileNameUtils}}, hal::{DeviceType, FrameType, HalState, events::HalEvent}, image::{info::*, raw::CalibrMethods}, options::*,
+    core::{api::Command, cur_devices::CurDevices, engine::*, events::*, frame_processing::*, utils::{FileNameArg, FileNameUtils}}, hal::{DeviceType, FrameType, HalState, events::HalEvent}, image::{info::*, raw::CalibrMethods}, options::*, utils::log_utils::log_if_error,
 };
 use super::{gtk_utils::*, module::*, ui_main::*, ui_start_dialog::StartDialog, utils::*};
 
@@ -611,7 +611,12 @@ impl CameraUi {
             clone!(@weak self as self_ => move |cb| {
                 let Some(cur_id) = cb.active_id() else { return; };
                 self_.excl.exec(|| {
-                    self_.engine.cur_devices.change_camera(&cur_id);
+                    log_if_error(
+                        &self_.engine.exec_command(
+                            Command::SetCameraDevice { device_id: cur_id.to_string() }
+                        ),
+                        "Select camera device"
+                    );
                 });
             })
         );
@@ -1293,8 +1298,12 @@ impl CameraUi {
             &self.widgets.common.cb_cam_list,
             if !cur_cam_device.is_empty() { Some(&cur_cam_device) } else { None },
             |id| {
-                let Ok(mut options) = self.engine.options.try_write() else { return; };
-                options.cam.device_id = id.to_string()
+                log_if_error(
+                    &self.engine.exec_command(
+                        Command::SetCameraDevice { device_id: id.to_string() }
+                    ),
+                    "Select camera device"
+                );
             }
         );
     }

@@ -37,6 +37,10 @@ pub enum MountCommand {
 pub enum Command {
     Mode(ModeCommand),
     Mount(MountCommand),
+    SetCameraDevice      { device_id: String },
+    SetMountDevice       { device_id: String },
+    SetFocuserDevice     { device_id: String },
+    SetFilterWheelDevice { device_id: String },
 }
 
 /// Reply to a `Command`.
@@ -53,6 +57,22 @@ impl Engine {
         log::debug!("Engine command: {:?}", cmd);
         match cmd {
             Command::Mode(mode_cmd) => Ok(Reply::Mode(self.exec_mode_command(mode_cmd)?)),
+            Command::SetCameraDevice { device_id } => {
+                self.cur_devices.change_camera(&device_id);
+                Ok(Reply::Empty)
+            }
+            Command::SetMountDevice { device_id } => {
+                self.cur_devices.change_telescope(&device_id);
+                Ok(Reply::Empty)
+            }
+            Command::SetFocuserDevice { device_id } => {
+                self.cur_devices.change_focuser(&device_id);
+                Ok(Reply::Empty)
+            }
+            Command::SetFilterWheelDevice { device_id } => {
+                self.cur_devices.change_filter_wheel(&device_id);
+                Ok(Reply::Empty)
+            }
             Command::Mount(mount_cmd) => {
                 let telescope = self.cur_devices.telescope_or_err()?;
                 match mount_cmd {
@@ -99,6 +119,10 @@ mod tests {
         }
 
         for cmd in [
+            Command::SetCameraDevice { device_id: "cam1".to_string() },
+            Command::SetMountDevice { device_id: "mnt1".to_string() },
+            Command::SetFocuserDevice { device_id: "foc1".to_string() },
+            Command::SetFilterWheelDevice { device_id: "fw1".to_string() },
             Command::Mount(MountCommand::Track(true)),
             Command::Mount(MountCommand::Park),
             Command::Mount(MountCommand::Unpark),

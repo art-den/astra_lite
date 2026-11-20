@@ -5,10 +5,11 @@ use gtk::{prelude::*, glib, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
-    core::{engine::Engine, events::Event},
+    core::{api::Command, engine::Engine, events::Event},
     hal::{DeviceType, HalState, events::HalEvent},
     options::Options,
-    ui::{gtk_utils, module::*, utils::{DelayedActions, ExclusiveCaller, fill_devices_list_into_combobox}}
+    ui::{gtk_utils, module::*, utils::{DelayedActions, ExclusiveCaller, fill_devices_list_into_combobox}},
+    utils::log_utils::log_if_error,
 };
 
 pub fn init_ui(
@@ -145,7 +146,12 @@ impl FltWheelUi {
         self.widgets.cb_device.connect_active_notify(clone!(@weak self as self_ => move |cb| {
             let Some(new_device_name) = cb.active_id() else { return; };
             self_.excl_caller.exec(|| {
-                self_.engine.cur_devices.change_filter_wheel(&new_device_name);
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetFilterWheelDevice { device_id: new_device_name.to_string() }
+                    ),
+                    "Select filter wheel device"
+                );
             });
         }));
 
@@ -205,8 +211,12 @@ impl FltWheelUi {
             &self.widgets.cb_device,
             if !cur_filter_wheel.is_empty() { Some(cur_filter_wheel.as_str()) } else { None },
             |id| {
-                let mut options = self.engine.options.write().unwrap();
-                options.filter_wheel.device = id.to_string();
+                log_if_error(
+                    &self.engine.exec_command(
+                        Command::SetFilterWheelDevice { device_id: id.to_string() }
+                    ),
+                    "Select filter wheel device"
+                );
             }
         );
     }

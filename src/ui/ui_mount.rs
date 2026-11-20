@@ -7,6 +7,7 @@ use crate::{
     hal::{DeviceType, HalState, TelescopeMoveDir, TelescopeState, events::HalEvent},
     options::*,
     ui::ui_main::MainUi,
+    utils::log_utils::log_if_error,
 };
 use ::indi::{degree_to_str, hour_to_str};
 
@@ -283,7 +284,12 @@ impl MountUi {
         self.widgets.cb_list.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| { self_.excl.exec(|| {
                 let Some(new_device_name) = cb.active_id() else { return; };
-                self_.engine.cur_devices.change_telescope(&new_device_name);
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetMountDevice { device_id: new_device_name.to_string() }
+                    ),
+                    "Select mount device"
+                );
             });})
         );
 
@@ -414,8 +420,12 @@ impl MountUi {
             &self.widgets.cb_list,
             if !cur_mount.is_empty() { Some(cur_mount.as_str()) } else { None },
             |id| {
-                let Ok(mut options) = self.engine.options.try_write() else { return; };
-                options.mount.device = id.to_string();
+                log_if_error(
+                    &self.engine.exec_command(
+                        Command::SetMountDevice { device_id: id.to_string() }
+                    ),
+                    "Select mount device"
+                );
             }
         );
     }

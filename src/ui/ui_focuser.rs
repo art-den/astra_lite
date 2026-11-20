@@ -3,11 +3,11 @@ use gtk::{glib, gdk, prelude::*, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
-    core::{engine::{Engine, ModeKind}, events::*, mode_focusing::*},
+    core::{api::Command, engine::{Engine, ModeKind}, events::*, mode_focusing::*},
     hal::{DeviceType, FocuserState, HalState, events::HalEvent},
     options::*,
     ui::plots::*,
-    utils::math::{cmp_f64, linear_interpolate},
+    utils::{log_utils::log_if_error, math::{cmp_f64, linear_interpolate}},
 };
 
 use super::{gtk_utils::*, module::*, ui_main::*, utils::*};
@@ -313,7 +313,12 @@ impl FocuserUi {
         self.widgets.cb_list.connect_active_notify(clone!(@weak self as self_ => move |cb| {
             let Some(new_device_name) = cb.active_id() else { return; };
             self_.excl.exec(|| {
-                self_.engine.cur_devices.change_focuser(&new_device_name);
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetFocuserDevice { device_id: new_device_name.to_string() }
+                    ),
+                    "Select focuser device"
+                );
             });
         }));
 
@@ -435,8 +440,12 @@ impl FocuserUi {
             &self.widgets.cb_list,
             if !cur_focuser.is_empty() { Some(cur_focuser.as_str()) } else { None },
             |id| {
-                let mut options = self.engine.options.write().unwrap();
-                options.focuser.device = id.to_string();
+                log_if_error(
+                    &self.engine.exec_command(
+                        Command::SetFocuserDevice { device_id: id.to_string() }
+                    ),
+                    "Select focuser device"
+                );
             }
         );
     }
