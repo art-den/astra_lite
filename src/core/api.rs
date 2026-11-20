@@ -188,6 +188,7 @@ pub enum Command {
     Preview(PreviewCommand),
     SetFocuserOptions { exposure: f64, gain: Gain },
     SetPlateSolverOptions { exposure: f64, gain: Gain, bin: Binning },
+    SetGuidingOptions { calibr_exposure: f64, calibr_gain: Gain },
     OpenImageFile { path: String },
 }
 
@@ -427,6 +428,12 @@ impl Engine {
                 options.plate_solver.exposure = exposure;
                 options.plate_solver.gain = gain;
                 options.plate_solver.bin = bin;
+                Ok(Reply::Empty)
+            }
+            Command::SetGuidingOptions { calibr_exposure, calibr_gain } => {
+                let mut options = self.options.write().unwrap();
+                options.guiding.main_cam.calibr_exposure = calibr_exposure;
+                options.guiding.main_cam.calibr_gain = calibr_gain;
                 Ok(Reply::Empty)
             }
             Command::OpenImageFile { path } => {
@@ -725,6 +732,7 @@ mod tests {
             Command::Preview(PreviewCommand::SetStars { stars: true }),
             Command::SetFocuserOptions { exposure: 2.5, gain: Gain::P50 },
             Command::SetPlateSolverOptions { exposure: 5.0, gain: Gain::Same, bin: Binning::Bin2 },
+            Command::SetGuidingOptions { calibr_exposure: 3.5, calibr_gain: Gain::Max },
             Command::OpenImageFile { path: "/tmp/test.fits".to_string() },
         ] {
             roundtrip(cmd);
