@@ -3,7 +3,7 @@ use gtk::{glib, gdk, prelude::*, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
-    core::{api::Command, engine::{Engine, ModeKind}, events::*, mode_focusing::*},
+    core::{api::{Command, FocuserCommand, Reply}, engine::{Engine, ModeKind}, events::*, mode_focusing::*},
     hal::{DeviceType, FocuserState, HalState, events::HalEvent},
     options::*,
     ui::plots::*,
@@ -324,9 +324,10 @@ impl FocuserUi {
 
         self.widgets.spb_val.connect_value_changed(clone!(@weak self as self_ => move |sb| {
             self_.excl.exec(|| {
-                let Some(focuser) = self_.engine.cur_devices.focuser() else { return; };
                 exec_and_show_error(Some(&self_.window), || {
-                    focuser.set_abs_position(sb.value())?;
+                    self_.engine.exec_command(
+                        Command::Focuser(FocuserCommand::SetAbs(sb.value()))
+                    )?;
                     Ok(())
                 });
             });
@@ -639,16 +640,14 @@ impl FocuserUi {
     fn update_focuser_value(&self, offset: i32) {
         self.excl.exec(|| {
             exec_and_show_error(Some(&self.window), || {
-                let Some(focuser) = self.engine.cur_devices.focuser() else { return Ok(()); };
-                let mut value = focuser.abs_position()?;
-                let range = focuser.abs_position_range()?;
-                value += offset as f64;
-                let clamped_value = value.clamp(*range.start(), *range.end());
-                if clamped_value == value {
-                    return Ok(());
+                match self.engine.exec_command(
+                    Command::Focuser(FocuserCommand::MoveBy(offset as f64))
+                )? {
+                    Reply::FocuserMove { new_position: Some(value) } => {
+                        self.widgets.spb_val.set_value(value);
+                    }
+                    _ => {}
                 }
-                focuser.set_abs_position(value)?;
-                self.widgets.spb_val.set_value(value);
                 Ok(())
             });
         });

@@ -21,6 +21,13 @@ pub enum MountCommand {
     AbortMotion,
 }
 
+/// Focuser control commands.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum FocuserCommand {
+    MoveBy(f64),
+    SetAbs(f64),
+}
+
 /// Single serializable entry point for engine state mutations issued by the UI
 /// (and later by a future web server).
 ///
@@ -37,6 +44,7 @@ pub enum MountCommand {
 pub enum Command {
     Mode(ModeCommand),
     Mount(MountCommand),
+    Focuser(FocuserCommand),
     SetCameraDevice      { device_id: String },
     SetMountDevice       { device_id: String },
     SetFocuserDevice     { device_id: String },
@@ -48,6 +56,9 @@ pub enum Command {
 pub enum Reply {
     Empty,
     Mode(ModeCommandReply),
+    /// New absolute position after `FocuserCommand::MoveBy`;
+    /// `None` when the move was skipped.
+    FocuserMove { new_position: Option<f64> },
 }
 
 impl Engine {
@@ -72,6 +83,25 @@ impl Engine {
             Command::SetFilterWheelDevice { device_id } => {
                 self.cur_devices.change_filter_wheel(&device_id);
                 Ok(Reply::Empty)
+            }
+            Command::Focuser(focuser_cmd) => {
+                let focuser = self.cur_devices.focuser_or_err()?;
+                match focuser_cmd {
+                    FocuserCommand::MoveBy(offset) => {
+                        let mut value = focuser.abs_position()?;
+                        let range = focuser.abs_position_range()?;
+                        value += offset;
+                        if f64::clamp(value, *range.start(), *range.end()) == value {
+                            return Ok(Reply::FocuserMove { new_position: None });
+                        }
+                        focuser.set_abs_position(value)?;
+                        Ok(Reply::FocuserMove { new_position: Some(value) })
+                    }
+                    FocuserCommand::SetAbs(value) => {
+                        focuser.set_abs_position(value)?;
+                        Ok(Reply::Empty)
+                    }
+                }
             }
             Command::Mount(mount_cmd) => {
                 let telescope = self.cur_devices.telescope_or_err()?;
@@ -139,6 +169,8 @@ mod tests {
                 speed_id: None,
             }),
             Command::Mount(MountCommand::AbortMotion),
+            Command::Focuser(FocuserCommand::MoveBy(-25.5)),
+            Command::Focuser(FocuserCommand::SetAbs(1000.0)),
         ] {
             roundtrip(cmd);
         }
@@ -155,6 +187,8 @@ mod tests {
             Reply::Mode(ModeCommandReply::PolarAlignState(PolarAlignState::Capture)),
             Reply::Mode(ModeCommandReply::PolarAlignState(PolarAlignState::PlateSolve)),
             Reply::Mode(ModeCommandReply::PolarAlignState(PolarAlignState::WaitForManualRefresh)),
+            Reply::FocuserMove { new_position: None },
+            Reply::FocuserMove { new_position: Some(123.5) },
         ] {
             roundtrip(reply);
         }
