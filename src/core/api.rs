@@ -3,6 +3,23 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use super::{commands::{ModeCommand, ModeCommandReply}, engine::Engine};
+use crate::hal::TelescopeMoveDir;
+
+/// Telescope (mount) control commands.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum MountCommand {
+    Track(bool),
+    Park,
+    Unpark,
+    /// Facade order: `revert_motion` -> `set_slew_speed` (if `speed_id`) -> `move_`.
+    MoveStart {
+        dir:      TelescopeMoveDir,
+        inv_ns:   bool,
+        inv_we:   bool,
+        speed_id: Option<String>,
+    },
+    AbortMotion,
+}
 
 /// Single serializable entry point for engine state mutations issued by the UI
 /// (and later by a future web server).
@@ -19,6 +36,7 @@ use super::{commands::{ModeCommand, ModeCommandReply}, engine::Engine};
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Command {
     Mode(ModeCommand),
+    Mount(MountCommand),
 }
 
 /// Reply to a `Command`.
@@ -35,6 +53,23 @@ impl Engine {
         log::debug!("Engine command: {:?}", cmd);
         match cmd {
             Command::Mode(mode_cmd) => Ok(Reply::Mode(self.exec_mode_command(mode_cmd)?)),
+            Command::Mount(mount_cmd) => {
+                let telescope = self.cur_devices.telescope_or_err()?;
+                match mount_cmd {
+                    MountCommand::Track(enabled) => telescope.track(enabled)?,
+                    MountCommand::Park => telescope.park()?,
+                    MountCommand::Unpark => telescope.unpark()?,
+                    MountCommand::MoveStart { dir, inv_ns, inv_we, speed_id } => {
+                        telescope.revert_motion(inv_ns, inv_we)?;
+                        if let Some(speed_id) = speed_id {
+                            telescope.set_slew_speed(&speed_id)?;
+                        }
+                        telescope.move_(dir)?;
+                    }
+                    MountCommand::AbortMotion => telescope.abort_motion()?,
+                }
+                Ok(Reply::Empty)
+            }
         }
     }
 }
@@ -59,6 +94,27 @@ mod tests {
             Command::Mode(ModeCommand::PolarAlign(PolarAlignCommand::Restart)),
             Command::Mode(ModeCommand::PolarAlign(PolarAlignCommand::ManualRefresh)),
             Command::Mode(ModeCommand::PolarAlign(PolarAlignCommand::GetState)),
+        ] {
+            roundtrip(cmd);
+        }
+
+        for cmd in [
+            Command::Mount(MountCommand::Track(true)),
+            Command::Mount(MountCommand::Park),
+            Command::Mount(MountCommand::Unpark),
+            Command::Mount(MountCommand::MoveStart {
+                dir:      TelescopeMoveDir::NorthWest,
+                inv_ns:   true,
+                inv_we:   false,
+                speed_id: Some("2".to_string()),
+            }),
+            Command::Mount(MountCommand::MoveStart {
+                dir:      TelescopeMoveDir::SouthEast,
+                inv_ns:   false,
+                inv_we:   false,
+                speed_id: None,
+            }),
+            Command::Mount(MountCommand::AbortMotion),
         ] {
             roundtrip(cmd);
         }

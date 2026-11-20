@@ -579,7 +579,7 @@ mod tests {
 ///////////////////////////////////////////////////////////////////////////////
 // Telescope (mount)
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum TelescopeMoveDir {
     North, South, West, East,
     NorthWest, NorthEast, SouthWest, SouthEast,
