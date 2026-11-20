@@ -1,4 +1,4 @@
-use std::{rc::Rc, sync::Arc};
+use std::{cell::Cell, rc::Rc, sync::Arc};
 use gtk::{glib, prelude::*, glib::clone};
 use macros::FromBuilder;
 
@@ -6,6 +6,7 @@ use crate::{
     core::{api::{Command, StartMode}, engine::{Engine, ModeKind}, events::*},
     hal::{DeviceType, events::HalEvent},
     options::*,
+    utils::log_utils::log_if_error,
 };
 
 use super::{gtk_utils::*, module::*, ui_main::*, utils::*};
@@ -23,6 +24,7 @@ pub fn init_ui(
         main_ui:         Rc::clone(main_ui),
         engine:          Arc::clone(engine),
         delayed_actions: DelayedActions::new(200),
+        opts_syncing:    Cell::new(false),
     });
 
     obj.init_widgets();
@@ -69,6 +71,7 @@ struct PlateSolveUi {
     window:          gtk::ApplicationWindow,
     engine:          Arc<Engine>,
     delayed_actions: DelayedActions<DelayedAction>,
+    opts_syncing:    Cell<bool>,
 }
 
 impl Drop for PlateSolveUi {
@@ -79,12 +82,14 @@ impl Drop for PlateSolveUi {
 
 impl UiModule for PlateSolveUi {
     fn show_options(&self, options: &Options) {
-        self.widgets.cbx_gain.set_active_id(Some(options.plate_solver.gain.to_active_id()));
-        self.widgets.cbx_bin.set_active_id(options.plate_solver.bin.to_active_id());
-        self.widgets.cbx_solver.set_active_id(options.plate_solver.solver.to_active_id());
-        self.widgets.spb_timeout.set_value(options.plate_solver.timeout as f64);
-        self.widgets.spb_blind_timeout.set_value(options.plate_solver.blind_timeout as f64);
-        set_spb_value(&self.widgets.spb_exp, options.plate_solver.exposure);
+        self.sync_suppress(|| {
+            self.widgets.cbx_gain.set_active_id(Some(options.plate_solver.gain.to_active_id()));
+            self.widgets.cbx_bin.set_active_id(options.plate_solver.bin.to_active_id());
+            self.widgets.cbx_solver.set_active_id(options.plate_solver.solver.to_active_id());
+            self.widgets.spb_timeout.set_value(options.plate_solver.timeout as f64);
+            self.widgets.spb_blind_timeout.set_value(options.plate_solver.blind_timeout as f64);
+            set_spb_value(&self.widgets.spb_exp, options.plate_solver.exposure);
+        });
     }
 
     fn get_options(&self, options: &mut Options) {
@@ -144,6 +149,12 @@ impl UiModule for PlateSolveUi {
 }
 
 impl PlateSolveUi {
+    fn sync_suppress(&self, sync: impl FnOnce()) {
+        let prev = self.opts_syncing.replace(true);
+        sync();
+        self.opts_syncing.set(prev);
+    }
+
     fn init_widgets(&self) {
         self.widgets.spb_exp.set_range(0.5, 30.0);
         self.widgets.spb_exp.set_digits(1);
@@ -164,22 +175,58 @@ impl PlateSolveUi {
 
         self.widgets.spb_exp.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.plate_solver.exposure = sb.value();
+                if self_.opts_syncing.get() { return; }
+                let (gain, bin) = {
+                    let options = self_.engine.options.read().unwrap();
+                    (options.plate_solver.gain, options.plate_solver.bin)
+                };
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetPlateSolverOptions {
+                            exposure: sb.value(), gain, bin,
+                        }
+                    ),
+                    "Set plate solver options"
+                );
             })
         );
 
         self.widgets.cbx_gain.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.plate_solver.gain = Gain::from_active_id(cb.active_id().as_deref());
+                if self_.opts_syncing.get() { return; }
+                let (exposure, bin) = {
+                    let options = self_.engine.options.read().unwrap();
+                    (options.plate_solver.exposure, options.plate_solver.bin)
+                };
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetPlateSolverOptions {
+                            exposure,
+                            gain: Gain::from_active_id(cb.active_id().as_deref()),
+                            bin,
+                        }
+                    ),
+                    "Set plate solver options"
+                );
             })
         );
 
         self.widgets.cbx_bin.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.plate_solver.bin = Binning::from_active_id(cb.active_id().as_deref());
+                if self_.opts_syncing.get() { return; }
+                let (exposure, gain) = {
+                    let options = self_.engine.options.read().unwrap();
+                    (options.plate_solver.exposure, options.plate_solver.gain)
+                };
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetPlateSolverOptions {
+                            exposure, gain,
+                            bin: Binning::from_active_id(cb.active_id().as_deref()),
+                        }
+                    ),
+                    "Set plate solver options"
+                );
             })
         );
     }

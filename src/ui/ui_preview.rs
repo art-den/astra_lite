@@ -4,7 +4,7 @@ use gtk::{cairo, gdk, glib::{self, clone}, prelude::*};
 use macros::FromBuilder;
 use serde::{Serialize, Deserialize};
 use crate::{
-    core::{engine::*, events::*, frame_processing::*, preview::ResultImageInfo}, hal::FrameType, image::{cam_db::get_cam_info, histogram::*, image::{Image, ImageLayer}, info::*, io::{READY_IMAGE_GAMMA, save_image_to_tif_file}, preview::*, raw::CalibrMethods, stars::Stars, stars_offset::Offset}, options::*, sky_math::math::radian_to_degree, utils::{io_utils::*, log_utils::*}
+    core::{api::{Command, PreviewCommand}, engine::*, events::*, frame_processing::*, preview::ResultImageInfo}, hal::FrameType, image::{cam_db::get_cam_info, histogram::*, image::{Image, ImageLayer}, info::*, io::{READY_IMAGE_GAMMA, save_image_to_tif_file}, preview::*, raw::CalibrMethods, stars::Stars, stars_offset::Offset}, options::*, sky_math::math::radian_to_degree, utils::{io_utils::*, log_utils::*}
 };
 use super::{gtk_utils::*, module::*, ui_main::*, utils::*};
 
@@ -47,6 +47,7 @@ pub fn init_ui(
         gamma_mark:         Cell::new(false),
         size_adj_pair:      Cell::new(None),
         image_size:         Cell::new((0, 0)),
+        opts_syncing:       Cell::new(false),
     });
 
     obj.init_widgets();
@@ -357,6 +358,7 @@ struct PreviewUi {
     gamma_mark:         Cell<bool>,
     size_adj_pair:      Cell<Option<(f64, f64)>>,
     image_size:         Cell<(usize, usize)>,
+    opts_syncing:       Cell<bool>,
 }
 
 impl Drop for PreviewUi {
@@ -367,19 +369,21 @@ impl Drop for PreviewUi {
 
 impl UiModule for PreviewUi {
     fn show_options(&self, options: &Options) {
-        let widgets = &self.widgets;
-        widgets.ctrl.cb_src.set_active_id(options.preview.source.to_active_id());
-        widgets.ctrl.cb_scale.set_active_id(options.preview.scale.to_active_id());
-        widgets.ctrl.cb_color.set_active_id(options.preview.color.to_active_id());
-        widgets.ctrl.scl_dark.set_value(options.preview.dark_lvl);
-        widgets.ctrl.scl_highlight.set_value(options.preview.light_lvl);
-        widgets.ctrl.scl_gamma.set_value(options.preview.gamma);
-        widgets.ctrl.chb_rem_grad.set_active(options.preview.remove_grad);
-        widgets.ctrl.chb_wb_auto.set_active(options.preview.wb_auto);
-        widgets.ctrl.scl_wb_red.set_value(options.preview.wb_red);
-        widgets.ctrl.scl_wb_green.set_value(options.preview.wb_green);
-        widgets.ctrl.scl_wb_blue.set_value(options.preview.wb_blue);
-        widgets.ctrl.chb_stars.set_active(options.preview.stars);
+        self.sync_suppress(|| {
+            let widgets = &self.widgets;
+            widgets.ctrl.cb_src.set_active_id(options.preview.source.to_active_id());
+            widgets.ctrl.cb_scale.set_active_id(options.preview.scale.to_active_id());
+            widgets.ctrl.cb_color.set_active_id(options.preview.color.to_active_id());
+            widgets.ctrl.scl_dark.set_value(options.preview.dark_lvl);
+            widgets.ctrl.scl_highlight.set_value(options.preview.light_lvl);
+            widgets.ctrl.scl_gamma.set_value(options.preview.gamma);
+            widgets.ctrl.chb_rem_grad.set_active(options.preview.remove_grad);
+            widgets.ctrl.chb_wb_auto.set_active(options.preview.wb_auto);
+            widgets.ctrl.scl_wb_red.set_value(options.preview.wb_red);
+            widgets.ctrl.scl_wb_green.set_value(options.preview.wb_green);
+            widgets.ctrl.scl_wb_blue.set_value(options.preview.wb_blue);
+            widgets.ctrl.chb_stars.set_active(options.preview.stars);
+        });
     }
 
     fn get_options(&self, options: &mut Options) {
@@ -467,6 +471,12 @@ impl UiModule for PreviewUi {
 impl PreviewUi {
     const CONF_FN: &'static str = "ui_preview";
 
+    fn sync_suppress(&self, sync: impl FnOnce()) {
+        let prev = self.opts_syncing.replace(true);
+        sync();
+        self.opts_syncing.set(prev);
+    }
+
     fn init_widgets(&self) {
         self.widgets.ctrl.l_wb_sensor.set_label("");
 
@@ -538,10 +548,14 @@ impl PreviewUi {
 
         self.widgets.ctrl.cb_src.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                if self_.opts_syncing.get() { return; }
                 let source = PreviewSource::from_active_id(cb.active_id().as_deref());
-                options.preview.source = source;
-                drop(options);
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::Preview(PreviewCommand::SetSource { source })
+                    ),
+                    "Set preview source"
+                );
                 self_.update_preview(None);
                 self_.repaint_histogram();
                 self_.show_histogram_stat();
@@ -559,56 +573,80 @@ impl PreviewUi {
 
         self.widgets.ctrl.cb_scale.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                if self_.opts_syncing.get() { return; }
                 let scale = PreviewScale::from_active_id(cb.active_id().as_deref());
-                options.preview.scale = scale;
-                drop(options);
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::Preview(PreviewCommand::SetScale { scale })
+                    ),
+                    "Set preview scale"
+                );
                 self_.update_preview(None);
             })
         );
 
         self.widgets.ctrl.cb_color.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                if self_.opts_syncing.get() { return; }
                 let color = PreviewColorMode::from_active_id(cb.active_id().as_deref());
-                options.preview.color = color;
-                drop(options);
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::Preview(PreviewCommand::SetColor { color })
+                    ),
+                    "Set preview color mode"
+                );
                 self_.update_preview(None);
             })
         );
 
         self.widgets.ctrl.scl_dark.connect_value_changed(
             clone!(@weak self as self_ => move |scl| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.preview.dark_lvl = scl.value();
-                drop(options);
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::Preview(PreviewCommand::SetDarkLvl { dark_lvl: scl.value() })
+                    ),
+                    "Set preview dark level"
+                );
                 self_.update_preview(None);
             })
         );
 
         self.widgets.ctrl.scl_highlight.connect_value_changed(
             clone!(@weak self as self_ => move |scl| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.preview.light_lvl = scl.value();
-                drop(options);
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::Preview(PreviewCommand::SetLightLvl { light_lvl: scl.value() })
+                    ),
+                    "Set preview light level"
+                );
                 self_.update_preview(None);
             })
         );
 
         self.widgets.ctrl.scl_gamma.connect_value_changed(
             clone!(@weak self as self_ => move |scl| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.preview.gamma = scl.value();
-                drop(options);
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::Preview(PreviewCommand::SetGamma { gamma: scl.value() })
+                    ),
+                    "Set preview gamma"
+                );
                 self_.update_preview(None);
             })
         );
 
         self.widgets.ctrl.chb_rem_grad.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.preview.remove_grad = chb.is_active();
-                drop(options);
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::Preview(PreviewCommand::SetRemoveGrad { remove_grad: chb.is_active() })
+                    ),
+                    "Set preview remove gradient"
+                );
                 self_.update_preview(None);
             })
         );
@@ -626,44 +664,64 @@ impl PreviewUi {
 
         self.widgets.ctrl.chb_wb_auto.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.preview.wb_auto = chb.is_active();
-                drop(options);
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::Preview(PreviewCommand::SetWbAuto { wb_auto: chb.is_active() })
+                    ),
+                    "Set preview auto WB"
+                );
                 self_.update_preview(None);
             })
         );
 
         self.widgets.ctrl.scl_wb_red.connect_value_changed(
             clone!(@weak self as self_ => move |scl| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.preview.wb_red = scl.value();
-                drop(options);
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::Preview(PreviewCommand::SetWbRed { wb_red: scl.value() })
+                    ),
+                    "Set preview WB red"
+                );
                 self_.update_preview(None);
             })
         );
 
         self.widgets.ctrl.scl_wb_green.connect_value_changed(
             clone!(@weak self as self_ => move |scl| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.preview.wb_green = scl.value();
-                drop(options);
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::Preview(PreviewCommand::SetWbGreen { wb_green: scl.value() })
+                    ),
+                    "Set preview WB green"
+                );
                 self_.update_preview(None);
             })
         );
 
         self.widgets.ctrl.scl_wb_blue.connect_value_changed(
             clone!(@weak self as self_ => move |scl| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.preview.wb_blue = scl.value();
-                drop(options);
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::Preview(PreviewCommand::SetWbBlue { wb_blue: scl.value() })
+                    ),
+                    "Set preview WB blue"
+                );
                 self_.update_preview(None);
             })
         );
 
         self.widgets.ctrl.chb_stars.connect_active_notify(clone!(@weak self as self_ => move |chb| {
-            let Ok(mut options) = self_.engine.options.try_write() else { return; };
-            options.preview.stars = chb.is_active();
-            drop(options);
+            if self_.opts_syncing.get() { return; }
+            log_if_error(
+                &self_.engine.exec_command(
+                    Command::Preview(PreviewCommand::SetStars { stars: chb.is_active() })
+                ),
+                "Set preview stars"
+            );
             self_.update_preview(None);
         }));
     }
@@ -1446,7 +1504,10 @@ impl PreviewUi {
 
         let new_scale = scale_and_width[new_scale_index].0;
         options.preview.scale = new_scale;
-        self.widgets.ctrl.cb_scale.set_active_id(options.preview.scale.to_active_id());
+        // The options write guard above is still held: suppress the combo handler
+        self.sync_suppress(|| {
+            self.widgets.ctrl.cb_scale.set_active_id(options.preview.scale.to_active_id());
+        });
         drop(options);
 
         self.update_preview(Some((image_x as _, image_y as _)));
@@ -2037,7 +2098,9 @@ impl PreviewUi {
                     let Some(file_name) = file_chooser.file() else { return Ok(()); };
                     let Some(file_name) = file_name.path() else { return Ok(()); };
                     self_.main_ui.get_all_options();
-                    self_.engine.open_image_from_file(&file_name)?;
+                    self_.engine.exec_command(Command::OpenImageFile {
+                        path: file_name.to_string_lossy().into_owned()
+                    })?;
                     Ok(())
                 });
             }

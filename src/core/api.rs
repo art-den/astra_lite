@@ -8,7 +8,10 @@ use super::{commands::{ModeCommand, ModeCommandReply}, engine::Engine, events::E
 use crate::{
     guiding::external_guider::ExtGuiderType,
     hal::{FrameType, TelescopeMoveDir},
-    options::{Binning, Crop, StarRecognSensitivity},
+    options::{
+        Binning, Crop, Gain, PreviewColorMode, PreviewScale, PreviewSource,
+        StarRecognSensitivity,
+    },
     sky_math::math::EqCoord,
 };
 #[cfg(windows)]
@@ -58,6 +61,23 @@ pub enum IndiCommand {
 pub enum GuiderCommand {
     ConnectPhd2,
     DisconnectPhd2,
+}
+
+/// Image preview display options (one command per independent control).
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum PreviewCommand {
+    SetSource     { source: PreviewSource },
+    SetScale      { scale: PreviewScale },
+    SetColor      { color: PreviewColorMode },
+    SetDarkLvl    { dark_lvl: f64 },
+    SetLightLvl   { light_lvl: f64 },
+    SetGamma      { gamma: f64 },
+    SetRemoveGrad { remove_grad: bool },
+    SetWbAuto     { wb_auto: bool },
+    SetWbRed      { wb_red: f64 },
+    SetWbGreen    { wb_green: f64 },
+    SetWbBlue     { wb_blue: f64 },
+    SetStars      { stars: bool },
 }
 
 /// Working modes that can be started via `Command::Start`.
@@ -164,6 +184,11 @@ pub enum Command {
     SetTelescopeFocalLen { focal_len: f64 },
     SetBarlow { barlow: f64 },
     SetGuidingFocalLen { foc_len: f64 },
+    // Preview and misc options
+    Preview(PreviewCommand),
+    SetFocuserOptions { exposure: f64, gain: Gain },
+    SetPlateSolverOptions { exposure: f64, gain: Gain, bin: Binning },
+    OpenImageFile { path: String },
 }
 
 /// Reply to a `Command`.
@@ -371,6 +396,41 @@ impl Engine {
                 options.guiding.foc_len = foc_len;
                 drop(options);
                 self.events.send(Event::GuiderFocalLenChanged(foc_len));
+                Ok(Reply::Empty)
+            }
+            Command::Preview(preview_cmd) => {
+                let mut options = self.options.write().unwrap();
+                match preview_cmd {
+                    PreviewCommand::SetSource { source }          => options.preview.source = source,
+                    PreviewCommand::SetScale { scale }            => options.preview.scale = scale,
+                    PreviewCommand::SetColor { color }            => options.preview.color = color,
+                    PreviewCommand::SetDarkLvl { dark_lvl }       => options.preview.dark_lvl = dark_lvl,
+                    PreviewCommand::SetLightLvl { light_lvl }     => options.preview.light_lvl = light_lvl,
+                    PreviewCommand::SetGamma { gamma }            => options.preview.gamma = gamma,
+                    PreviewCommand::SetRemoveGrad { remove_grad } => options.preview.remove_grad = remove_grad,
+                    PreviewCommand::SetWbAuto { wb_auto }         => options.preview.wb_auto = wb_auto,
+                    PreviewCommand::SetWbRed { wb_red }           => options.preview.wb_red = wb_red,
+                    PreviewCommand::SetWbGreen { wb_green }       => options.preview.wb_green = wb_green,
+                    PreviewCommand::SetWbBlue { wb_blue }         => options.preview.wb_blue = wb_blue,
+                    PreviewCommand::SetStars { stars }            => options.preview.stars = stars,
+                }
+                Ok(Reply::Empty)
+            }
+            Command::SetFocuserOptions { exposure, gain } => {
+                let mut options = self.options.write().unwrap();
+                options.focuser.exposure = exposure;
+                options.focuser.gain = gain;
+                Ok(Reply::Empty)
+            }
+            Command::SetPlateSolverOptions { exposure, gain, bin } => {
+                let mut options = self.options.write().unwrap();
+                options.plate_solver.exposure = exposure;
+                options.plate_solver.gain = gain;
+                options.plate_solver.bin = bin;
+                Ok(Reply::Empty)
+            }
+            Command::OpenImageFile { path } => {
+                self.open_image_from_file(&PathBuf::from(path))?;
                 Ok(Reply::Empty)
             }
             Command::SetCameraDevice { device_id } => {
@@ -651,6 +711,21 @@ mod tests {
             Command::SetTelescopeFocalLen { focal_len: 550.0 },
             Command::SetBarlow { barlow: 1.5 },
             Command::SetGuidingFocalLen { foc_len: 240.0 },
+            Command::Preview(PreviewCommand::SetSource { source: PreviewSource::LiveStacking }),
+            Command::Preview(PreviewCommand::SetScale { scale: PreviewScale::P200 }),
+            Command::Preview(PreviewCommand::SetColor { color: PreviewColorMode::Blue }),
+            Command::Preview(PreviewCommand::SetDarkLvl { dark_lvl: 0.1 }),
+            Command::Preview(PreviewCommand::SetLightLvl { light_lvl: 0.9 }),
+            Command::Preview(PreviewCommand::SetGamma { gamma: 2.2 }),
+            Command::Preview(PreviewCommand::SetRemoveGrad { remove_grad: true }),
+            Command::Preview(PreviewCommand::SetWbAuto { wb_auto: false }),
+            Command::Preview(PreviewCommand::SetWbRed { wb_red: 1.0 }),
+            Command::Preview(PreviewCommand::SetWbGreen { wb_green: 1.5 }),
+            Command::Preview(PreviewCommand::SetWbBlue { wb_blue: 0.5 }),
+            Command::Preview(PreviewCommand::SetStars { stars: true }),
+            Command::SetFocuserOptions { exposure: 2.5, gain: Gain::P50 },
+            Command::SetPlateSolverOptions { exposure: 5.0, gain: Gain::Same, bin: Binning::Bin2 },
+            Command::OpenImageFile { path: "/tmp/test.fits".to_string() },
         ] {
             roundtrip(cmd);
         }

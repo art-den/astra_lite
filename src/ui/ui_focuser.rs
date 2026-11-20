@@ -33,6 +33,7 @@ pub fn init_ui(
         step:            Cell::new(10),
         step_large:      Cell::new(100),
         prev_pos_state:  Cell::new(None),
+        opts_syncing:    Cell::new(false),
     });
 
     obj.init_widgets();
@@ -109,6 +110,7 @@ struct FocuserUi {
     step:            Cell<i32>,
     step_large:      Cell<i32>,
     prev_pos_state:  Cell<Option<FocuserState>>,
+    opts_syncing:    Cell<bool>,
 }
 
 #[derive(Hash, Eq, PartialEq)]
@@ -127,19 +129,21 @@ impl Drop for FocuserUi {
 
 impl UiModule for FocuserUi {
     fn show_options(&self, options: &Options) {
-        let widgets = &self.widgets;
-        widgets.chb_temp       .set_active   (options.focuser.on_temp_change);
-        widgets.spb_temp       .set_value    (options.focuser.max_temp_change);
-        widgets.chb_fwhm       .set_active   (options.focuser.on_fwhm_change);
-        widgets.cb_fwhm        .set_active_id(Some(options.focuser.max_fwhm_change.to_string()).as_deref());
-        widgets.chb_period     .set_active   (options.focuser.periodically);
-        widgets.cb_period      .set_active_id(Some(options.focuser.period_minutes.to_string()).as_deref());
-        widgets.spb_measures   .set_value    (options.focuser.measures as f64);
-        widgets.spb_auto_step  .set_value    (options.focuser.step);
-        widgets.cbx_gain       .set_active_id(Some(options.focuser.gain.to_active_id()));
-        widgets.spb_extra_steps.set_value    (options.focuser.anti_backlash_steps as f64);
+        self.sync_suppress(|| {
+            let widgets = &self.widgets;
+            widgets.chb_temp       .set_active   (options.focuser.on_temp_change);
+            widgets.spb_temp       .set_value    (options.focuser.max_temp_change);
+            widgets.chb_fwhm       .set_active   (options.focuser.on_fwhm_change);
+            widgets.cb_fwhm        .set_active_id(Some(options.focuser.max_fwhm_change.to_string()).as_deref());
+            widgets.chb_period     .set_active   (options.focuser.periodically);
+            widgets.cb_period      .set_active_id(Some(options.focuser.period_minutes.to_string()).as_deref());
+            widgets.spb_measures   .set_value    (options.focuser.measures as f64);
+            widgets.spb_auto_step  .set_value    (options.focuser.step);
+            widgets.cbx_gain       .set_active_id(Some(options.focuser.gain.to_active_id()));
+            widgets.spb_extra_steps.set_value    (options.focuser.anti_backlash_steps as f64);
 
-        set_spb_value(&widgets.spb_exp, options.focuser.exposure);
+            set_spb_value(&widgets.spb_exp, options.focuser.exposure);
+        });
     }
 
     fn get_options(&self, options: &mut Options) {
@@ -284,6 +288,12 @@ impl UiModule for FocuserUi {
 }
 
 impl FocuserUi {
+    fn sync_suppress(&self, sync: impl FnOnce()) {
+        let prev = self.opts_syncing.replace(true);
+        sync();
+        self.opts_syncing.set(prev);
+    }
+
     fn init_widgets(&self) {
         self.widgets.spb_temp.set_range(0.1, 10.0);
         self.widgets.spb_temp.set_digits(1);
@@ -334,13 +344,28 @@ impl FocuserUi {
         }));
 
         self.widgets.spb_exp.connect_value_changed(clone!(@weak self as self_ => move |sb| {
-            let Ok(mut options) = self_.engine.options.try_write() else { return; };
-            options.focuser.exposure = sb.value();
+            if self_.opts_syncing.get() { return; }
+            let gain = self_.engine.options.read().unwrap().focuser.gain;
+            log_if_error(
+                &self_.engine.exec_command(
+                    Command::SetFocuserOptions { exposure: sb.value(), gain }
+                ),
+                "Set focuser options"
+            );
         }));
 
         self.widgets.cbx_gain.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
-            let Ok(mut options) = self_.engine.options.try_write() else { return; };
-            options.focuser.gain = Gain::from_active_id(cb.active_id().as_deref());
+            if self_.opts_syncing.get() { return; }
+            let exposure = self_.engine.options.read().unwrap().focuser.exposure;
+            log_if_error(
+                &self_.engine.exec_command(
+                    Command::SetFocuserOptions {
+                        exposure,
+                        gain: Gain::from_active_id(cb.active_id().as_deref()),
+                    }
+                ),
+                "Set focuser options"
+            );
         }));
 
         self.widgets.btn_dec_large.connect_clicked(clone!(@weak self as self_ => move |_| {
