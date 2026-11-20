@@ -93,6 +93,10 @@ pub enum Command {
         flat_frame_fname: String,
         hot_pixels:       bool,
     },
+    // Optics
+    SetTelescopeFocalLen { focal_len: f64 },
+    SetBarlow { barlow: f64 },
+    SetGuidingFocalLen { foc_len: f64 },
 }
 
 /// Reply to a `Command`.
@@ -252,6 +256,31 @@ impl Engine {
                 options.calibr.hot_pixels       = hot_pixels;
                 Ok(Reply::Empty)
             }
+            Command::SetTelescopeFocalLen { focal_len } => {
+                let mut options = self.options.write().unwrap();
+                if f64::abs(options.telescope.focal_len - focal_len) < 0.1 {
+                    return Ok(Reply::Empty);
+                }
+                options.telescope.focal_len = focal_len;
+                drop(options);
+                self.events.send(Event::TelescopeFocalLenChanged(focal_len));
+                Ok(Reply::Empty)
+            }
+            Command::SetBarlow { barlow } => {
+                self.options.write().unwrap().telescope.barlow = barlow;
+                self.events.send(Event::TelescopeBarlowChanged);
+                Ok(Reply::Empty)
+            }
+            Command::SetGuidingFocalLen { foc_len } => {
+                let mut options = self.options.write().unwrap();
+                if f64::abs(options.guiding.foc_len - foc_len) < 0.1 {
+                    return Ok(Reply::Empty);
+                }
+                options.guiding.foc_len = foc_len;
+                drop(options);
+                self.events.send(Event::GuiderFocalLenChanged(foc_len));
+                Ok(Reply::Empty)
+            }
             Command::SetCameraDevice { device_id } => {
                 self.cur_devices.change_camera(&device_id);
                 Ok(Reply::Empty)
@@ -390,6 +419,9 @@ mod tests {
                 dark_frame_en: true, flat_frame_en: false,
                 flat_frame_fname: "/tmp/flat.fits".to_string(), hot_pixels: true,
             },
+            Command::SetTelescopeFocalLen { focal_len: 550.0 },
+            Command::SetBarlow { barlow: 1.5 },
+            Command::SetGuidingFocalLen { foc_len: 240.0 },
         ] {
             roundtrip(cmd);
         }

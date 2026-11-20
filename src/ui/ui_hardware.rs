@@ -12,7 +12,7 @@ use itertools::Itertools;
 use chrono::prelude::*;
 use macros::FromBuilder;
 use crate::{
-    core::{engine::Engine, events::Event}, guiding::{external_guider::ExtGuiderType, phd2}, hal::{DeviceType, HalImpl, HalState, events::HalEvent}, options::*,
+    core::{api::Command, engine::Engine, events::Event}, guiding::{external_guider::ExtGuiderType, phd2}, hal::{DeviceType, HalImpl, HalState, events::HalEvent}, options::*, utils::log_utils::log_if_error,
 };
 use ::indi::{self, sexagesimal_to_value, value_to_sexagesimal};
 use super::{gtk_utils::*, indi_panel_widget::*, module::*, ui_main::*};
@@ -49,6 +49,7 @@ pub fn init_ui(
         indi_state:   RefCell::new(HalState::Disconnected),
         aa_state:     RefCell::new(HalState::Disconnected),
         is_remote:    Cell::new(false),
+        opts_syncing: Cell::new(false),
         main_ui:      Rc::clone(main_ui),
         window:       window.clone(),
         widgets,
@@ -173,6 +174,9 @@ struct HardwareUi {
     aa_state:     RefCell<HalState>,
     indi_widget:  IndiPanelWidget,
     is_remote:    Cell<bool>,
+    /// Set while widgets are programmatically synced from `Options`: option
+    /// write handlers must not run (callers hold the `options` read guard).
+    opts_syncing: Cell<bool>,
 }
 
 impl Drop for HardwareUi {
@@ -183,9 +187,11 @@ impl Drop for HardwareUi {
 
 impl UiModule for HardwareUi {
     fn show_options(&self, options: &Options) {
+        let prev = self.opts_syncing.replace(true);
         self.show_connection_options(options);
         self.show_telescope_options(options);
         self.show_site_options(options);
+        self.opts_syncing.set(prev);
     }
 
     fn get_options(&self, options: &mut Options) {
@@ -391,32 +397,37 @@ impl HardwareUi {
 
         self.widgets.telescope.spb_foc_len.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                let value = sb.value();
-                if f64::abs(options.telescope.focal_len - value) < 0.1 { return; }
-                options.telescope.focal_len = value;
-                drop(options);
-                self_.engine.events.send(Event::TelescopeFocalLenChanged(value));
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetTelescopeFocalLen { focal_len: sb.value() }
+                    ),
+                    "Set telescope focal length"
+                );
             })
         );
 
         self.widgets.telescope.spb_barlow.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.telescope.barlow = sb.value();
-                drop(options);
-                self_.engine.events.send(Event::TelescopeBarlowChanged);
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetBarlow { barlow: sb.value() }
+                    ),
+                    "Set Barlow"
+                );
             })
         );
 
         self.widgets.telescope.spb_guid_foc_len.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                let value = sb.value();
-                if f64::abs(options.guiding.foc_len - value) < 0.1 { return; }
-                options.guiding.foc_len = value;
-                drop(options);
-                self_.engine.events.send(Event::GuiderFocalLenChanged(value));
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetGuidingFocalLen { foc_len: sb.value() }
+                    ),
+                    "Set guiding focal length"
+                );
             })
         );
 
