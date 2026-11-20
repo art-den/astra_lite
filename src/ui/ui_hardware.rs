@@ -12,7 +12,7 @@ use itertools::Itertools;
 use chrono::prelude::*;
 use macros::FromBuilder;
 use crate::{
-    core::{api::{Command, ConnectCommand, GuiderCommand}, engine::Engine, events::Event}, guiding::phd2, hal::{DeviceType, HalImpl, HalState, events::HalEvent}, options::*, utils::log_utils::log_if_error,
+    core::{api::{Command, ConnectCommand, GuiderCommand, IndiCommand}, engine::Engine, events::Event}, guiding::phd2, hal::{DeviceType, HalImpl, HalState, events::HalEvent}, options::*, utils::log_utils::log_if_error,
 };
 use ::indi::{self, sexagesimal_to_value, value_to_sexagesimal};
 use super::{gtk_utils::*, indi_panel_widget::*, module::*, ui_main::*};
@@ -30,7 +30,7 @@ pub fn init_ui(
         options.indi.remote = true; // force remote mode if no devices info
     }
 
-    let indi_widget = IndiPanelWidget::new(indi_hal.indi());
+    let indi_widget = IndiPanelWidget::new(indi_hal.indi(), engine);
 
     let widgets = Widgets {
         telescope: TelescopeWidgets     ::from_builder_str(include_str!(r"resources/hw_telescope.ui")),
@@ -992,15 +992,12 @@ impl HardwareUi {
 
     fn set_switch_property_for_all_device(&self, prop_name: &str, elem_name: &str) {
         exec_and_show_error(Some(&self.window), || {
-            let indi = self.engine.hal.indi_impl().indi();
-            let devices = indi.get_devices_list();
-            for device in devices {
-                indi.command_set_switch_property(
-                    &device.name,
-                    prop_name,
-                    &[(elem_name, true)]
-                )?;
-            }
+            self.engine.exec_command(Command::Indi(
+                IndiCommand::SetSwitchElementForAllDevices {
+                    prop: prop_name.to_string(),
+                    element: elem_name.to_string(),
+                }
+            ))?;
             Ok(())
         });
     }

@@ -42,6 +42,16 @@ pub enum FilterWheelCommand {
     SetSlot { slot: usize },
 }
 
+/// Raw INDI property commands (device control panel and device-wide actions).
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum IndiCommand {
+    SetSwitchProperty { device: String, prop: String, elements: Vec<(String, bool)> },
+    SetNumberProperty { device: String, prop: String, elements: Vec<(String, f64)> },
+    SetTextProperty   { device: String, prop: String, elements: Vec<(String, String)> },
+    /// Fan-out: set one switch element on all connected INDI devices.
+    SetSwitchElementForAllDevices { prop: String, element: String },
+}
+
 /// External auto-guider control commands.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum GuiderCommand {
@@ -90,6 +100,7 @@ pub enum Command {
     FilterWheel(FilterWheelCommand),
     Connect(ConnectCommand),
     Guider(GuiderCommand),
+    Indi(IndiCommand),
     SetCameraDevice      { device_id: String },
     SetMountDevice       { device_id: String },
     SetFocuserDevice     { device_id: String },
@@ -330,6 +341,34 @@ impl Engine {
                 self.cur_devices.change_filter_wheel(&device_id);
                 Ok(Reply::Empty)
             }
+            Command::Indi(indi_cmd) => {
+                let indi = self.hal.indi_impl().indi();
+                match indi_cmd {
+                    IndiCommand::SetSwitchProperty { device, prop, elements } => {
+                        let elements: Vec<(&str, bool)> = elements
+                            .iter().map(|(n, v)| (n.as_str(), *v)).collect();
+                        indi.command_set_switch_property(&device, &prop, &elements)?;
+                    }
+                    IndiCommand::SetNumberProperty { device, prop, elements } => {
+                        let elements: Vec<(&str, f64)> = elements
+                            .iter().map(|(n, v)| (n.as_str(), *v)).collect();
+                        indi.command_set_num_property(&device, &prop, &elements)?;
+                    }
+                    IndiCommand::SetTextProperty { device, prop, elements } => {
+                        let elements: Vec<(&str, &str)> = elements
+                            .iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
+                        indi.command_set_text_property(&device, &prop, &elements)?;
+                    }
+                    IndiCommand::SetSwitchElementForAllDevices { prop, element } => {
+                        for device in indi.get_devices_list() {
+                            indi.command_set_switch_property(
+                                &device.name, &prop, &[(&element, true)]
+                            )?;
+                        }
+                    }
+                }
+                Ok(Reply::Empty)
+            }
             Command::Guider(guider_cmd) => {
                 match guider_cmd {
                     GuiderCommand::ConnectPhd2 => {
@@ -503,6 +542,21 @@ mod tests {
             }),
             Command::Connect(ConnectCommand::DisconnectIndi { disable_all: true }),
             Command::Connect(ConnectCommand::DisconnectIndi { disable_all: false }),
+            Command::Indi(IndiCommand::SetSwitchProperty {
+                device: "dev".to_string(), prop: "CONNECTION".to_string(),
+                elements: vec![("CONNECT".to_string(), true)],
+            }),
+            Command::Indi(IndiCommand::SetNumberProperty {
+                device: "dev".to_string(), prop: "GAIN".to_string(),
+                elements: vec![("GAIN".to_string(), 5.5)],
+            }),
+            Command::Indi(IndiCommand::SetTextProperty {
+                device: "dev".to_string(), prop: "ACTIVE_SETTINGS".to_string(),
+                elements: vec![("SETTING_NAME".to_string(), "x".to_string())],
+            }),
+            Command::Indi(IndiCommand::SetSwitchElementForAllDevices {
+                prop: "CONFIG_PROCESS".to_string(), element: "CONFIG_SAVE".to_string(),
+            }),
             Command::Guider(GuiderCommand::ConnectPhd2),
             Command::Guider(GuiderCommand::DisconnectPhd2),
             #[cfg(windows)]

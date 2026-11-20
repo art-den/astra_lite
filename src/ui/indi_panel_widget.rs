@@ -4,9 +4,11 @@ use std::{collections::HashMap, sync::Arc, time::Duration, cell::RefCell, rc::Rc
 use gtk::{prelude::*, glib, glib::clone};
 use itertools::{Itertools, izip};
 use ::indi;
+use crate::core::{api::{Command, IndiCommand}, engine::Engine};
 
 pub struct IndiPanelWidget {
     indi:      Arc<indi::Connection>,
+    engine:    Arc<Engine>,
     indi_conn: indi::EventHandlerId,
     data:      Rc<RefCell<UiIndiGuiData>>,
     layout:    gtk::Box,
@@ -29,7 +31,7 @@ impl IndiPanelWidget {
         }
         ";
 
-    pub fn new(indi: &Arc<indi::Connection>) -> Self {
+    pub fn new(indi: &Arc<indi::Connection>, engine: &Arc<Engine>) -> Self {
         let css_provider = gtk::CssProvider::new();
         css_provider.load_from_data(Self::CSS).unwrap();
         gtk::StyleContext::add_provider_for_screen(
@@ -100,6 +102,7 @@ impl IndiPanelWidget {
         });
 
         let stack_for_handler = stack.clone();
+        let engine_for_timer = Arc::clone(engine);
         glib::timeout_add_local(
             Duration::from_millis(200),
             clone!(@weak data, @weak indi => @default-return glib::ControlFlow::Break,
@@ -109,7 +112,7 @@ impl IndiPanelWidget {
                     let list_changed = data.list_changed;
                     data.prop_changed = false;
                     data.list_changed = false;
-                    Self::show_all_props(&indi, &stack_for_handler, &mut data, list_changed);
+                    Self::show_all_props(&indi, &engine_for_timer, &stack_for_handler, &mut data, list_changed);
                 }
                 glib::ControlFlow::Continue
             })
@@ -118,6 +121,7 @@ impl IndiPanelWidget {
         Self {
             data, indi_conn,
             indi: Arc::clone(indi),
+            engine: Arc::clone(engine),
             layout,
             stack,
         }
@@ -134,7 +138,7 @@ impl IndiPanelWidget {
             let list_changed = data.list_changed;
             data.list_changed = false;
             data.prop_changed = false;
-            Self::show_all_props(&self.indi, &self.stack, &mut data, list_changed);
+            Self::show_all_props(&self.indi, &self.engine, &self.stack, &mut data, list_changed);
         }
     }
 
@@ -167,6 +171,7 @@ impl IndiPanelWidget {
     /// The opened page is kept if that device still exists.
     fn show_all_props(
         indi:        &Arc<indi::Connection>,
+        engine:      &Arc<Engine>,
         stack:       &gtk::Stack,
         data:        &mut UiIndiGuiData,
         update_list: bool
@@ -308,7 +313,7 @@ impl IndiPanelWidget {
 
         // build device UI
         for ui_device in &mut data.devices {
-            Self::show_device_props(indi, ui_device, &indi_props, update_list);
+            Self::show_device_props(indi, engine, ui_device, &indi_props, update_list);
         }
 
         let max_change_id = indi_props
@@ -322,6 +327,7 @@ impl IndiPanelWidget {
 
     fn show_device_props(
         indi:        &Arc<indi::Connection>,
+        engine:      &Arc<Engine>,
         ui_device:   &mut UiIndiDevice,
         indi_props:  &[indi::Property],
         update_list: bool
@@ -385,7 +391,7 @@ impl IndiPanelWidget {
             let Some(ui_group) = ui_device.groups.iter_mut().find(|g| g.name == *indi_group) else {
                 continue;
             };
-            Self::show_device_prop_group(indi, &ui_device.name, ui_group, indi_props, update_list);
+            Self::show_device_prop_group(indi, engine, &ui_device.name, ui_group, indi_props, update_list);
         }
     }
 
@@ -415,6 +421,7 @@ impl IndiPanelWidget {
 
     fn show_device_prop_group(
         indi:        &Arc<indi::Connection>,
+        engine:      &Arc<Engine>,
         device_name: &str,
         ui_group:    &mut UiIndiPropsGroup,
         indi_props:  &[indi::Property],
@@ -445,6 +452,7 @@ impl IndiPanelWidget {
                     widgets.push(prop_label.into());
                     let prop_ui_elements = Self::create_property_ui(
                         indi,
+                        engine,
                         indi_prop,
                         &ui_group.grid,
                         &mut widgets,
@@ -514,6 +522,7 @@ impl IndiPanelWidget {
 
     fn create_property_ui(
         indi:      &Arc<indi::Connection>,
+        engine:    &Arc<Engine>,
         prop:      &indi::Property,
         grid:      &gtk::Grid,
         widgets:   &mut Vec<gtk::Widget>,
@@ -523,6 +532,7 @@ impl IndiPanelWidget {
             indi::PropType::Text =>
                 Self::create_text_property_ui(
                     indi,
+                    engine,
                     prop,
                     widgets,
                     grid,
@@ -531,6 +541,7 @@ impl IndiPanelWidget {
             indi::PropType::Num =>
                 Self::create_num_property_ui(
                     indi,
+                    engine,
                     prop,
                     widgets,
                     grid,
@@ -539,6 +550,7 @@ impl IndiPanelWidget {
             indi::PropType::Switch(rule) =>
                 Self::create_switch_property_ui(
                     indi,
+                    engine,
                     prop,
                     rule,
                     widgets,
@@ -565,7 +577,8 @@ impl IndiPanelWidget {
     }
 
     fn create_text_property_ui(
-        indi:     &Arc<indi::Connection>,
+        _indi:    &Arc<indi::Connection>,
+        engine:   &Arc<Engine>,
         property: &indi::Property,
         widgets:  &mut Vec<gtk::Widget>,
         grid:     &gtk::Grid,
@@ -616,23 +629,19 @@ impl IndiPanelWidget {
                 .build();
             grid.attach(&set_button, 4, start_row, 1, property.elements.len() as i32);
 
-            let indi = Arc::clone(indi);
+            let engine = Arc::clone(engine);
             let device_string = property.device.to_string();
             let prop_name_string = property.name.to_string();
             set_button.connect_clicked(move |_| {
-                let elements_tmp: Vec<_> = btn_click_data
+                let elements: Vec<(String, String)> = btn_click_data
                     .iter()
-                    .map(|(name, entry)| (name.as_str(), entry.text().to_string()))
+                    .map(|(name, entry)| (name.to_string(), entry.text().to_string()))
                     .collect();
-                let elements: Vec<_> = elements_tmp
-                    .iter()
-                    .map(|(elem, value)| (*elem, value.as_str()))
-                    .collect();
-                _ = indi.command_set_text_property(
-                    &device_string,
-                    &prop_name_string,
-                    &elements
-                );
+                _ = engine.exec_command(Command::Indi(IndiCommand::SetTextProperty {
+                    device: device_string.clone(),
+                    prop: prop_name_string.clone(),
+                    elements,
+                }));
             });
             widgets.push(set_button.into());
         }
@@ -640,7 +649,8 @@ impl IndiPanelWidget {
     }
 
     fn create_num_property_ui(
-        indi:     &Arc<indi::Connection>,
+        _indi:    &Arc<indi::Connection>,
+        engine:   &Arc<Engine>,
         property: &indi::Property,
         widgets:  &mut Vec<gtk::Widget>,
         grid:     &gtk::Grid,
@@ -744,19 +754,19 @@ impl IndiPanelWidget {
                 .label("Set")
                 .build();
             grid.attach(&set_button, 4, start_row, 1, property.elements.len() as i32);
-            let indi = Arc::clone(indi);
+            let engine = Arc::clone(engine);
             let device_string = property.device.to_string();
             let prop_name_string = property.name.to_string();
             set_button.connect_clicked(move |_| {
-                let elements: Vec<_> = btn_click_data
+                let elements: Vec<(String, f64)> = btn_click_data
                     .iter()
-                    .map(|(name, spin)| (name.as_str(), spin.value()))
+                    .map(|(name, spin)| (name.to_string(), spin.value()))
                     .collect();
-                _ = indi.command_set_num_property(
-                    &device_string,
-                    &prop_name_string,
-                    &elements
-                );
+                _ = engine.exec_command(Command::Indi(IndiCommand::SetNumberProperty {
+                    device: device_string.clone(),
+                    prop: prop_name_string.clone(),
+                    elements,
+                }));
             });
             widgets.push(set_button.into());
         }
@@ -764,7 +774,8 @@ impl IndiPanelWidget {
     }
 
     fn create_switch_property_ui(
-        indi:     &Arc<indi::Connection>,
+        _indi:    &Arc<indi::Connection>,
+        engine:   &Arc<Engine>,
         property: &indi::Property,
         rule:     &indi::SwitchRule,
         widgets:  &mut Vec<gtk::Widget>,
@@ -791,7 +802,7 @@ impl IndiPanelWidget {
             };
         grid.attach(&bx, 1, *next_row, 5, 1);
         for elem in &property.elements {
-            let indi = Arc::clone(indi);
+            let engine = Arc::clone(engine);
             let device_string = property.device.to_string();
             let prop_name_string = property.name.to_string();
             let elem_name = elem.name.clone();
@@ -805,11 +816,11 @@ impl IndiPanelWidget {
                 let one_btn = property.elements.len() == 1;
                 button.connect_clicked(move |btn| {
                     if !btn.is_sensitive() { return; }
-                    _ = indi.command_set_switch_property(
-                        &device_string,
-                        &prop_name_string,
-                        &[(&elem_name, true)]
-                    );
+                    _ = engine.exec_command(Command::Indi(IndiCommand::SetSwitchProperty {
+                        device: device_string.clone(),
+                        prop: prop_name_string.clone(),
+                        elements: vec![(elem_name.to_string(), true)],
+                    }));
                     if one_btn {
                         // GTK3: set_active() re-emits `clicked`, re-entering this closure;
                         // the bracket makes that re-entry hit the `is_sensitive` guard above.
@@ -831,11 +842,11 @@ impl IndiPanelWidget {
                 bx.add(&button);
                 button.connect_active_notify(move |btn| {
                     if !btn.is_sensitive() { return; }
-                    _ = indi.command_set_switch_property(
-                        &device_string,
-                        &prop_name_string,
-                        &[(&elem_name, btn.is_active())]
-                    );
+                    _ = engine.exec_command(Command::Indi(IndiCommand::SetSwitchProperty {
+                        device: device_string.clone(),
+                        prop: prop_name_string.clone(),
+                        elements: vec![(elem_name.to_string(), btn.is_active())],
+                    }));
                 });
                 UiIndiPropElemData::Switch(UiIndiPropSwitchElem::Check(button))
             };
