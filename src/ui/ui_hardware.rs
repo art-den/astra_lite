@@ -12,7 +12,7 @@ use itertools::Itertools;
 use chrono::prelude::*;
 use macros::FromBuilder;
 use crate::{
-    core::{api::{Command, ConnectCommand}, engine::Engine, events::Event}, guiding::{external_guider::ExtGuiderType, phd2}, hal::{DeviceType, HalImpl, HalState, events::HalEvent}, options::*, utils::log_utils::log_if_error,
+    core::{api::{Command, ConnectCommand, GuiderCommand}, engine::Engine, events::Event}, guiding::phd2, hal::{DeviceType, HalImpl, HalState, events::HalEvent}, options::*, utils::log_utils::log_if_error,
 };
 use ::indi::{self, sexagesimal_to_value, value_to_sexagesimal};
 use super::{gtk_utils::*, indi_panel_widget::*, module::*, ui_main::*};
@@ -752,7 +752,9 @@ impl HardwareUi {
     fn handler_action_conn_phd2(&self) {
         exec_and_show_error(Some(&self.window), || {
             self.sync_options_from_widgets();
-            self.engine.ext_guider.create_and_connect(ExtGuiderType::Phd2)?;
+            self.engine.exec_command(
+                Command::Guider(GuiderCommand::ConnectPhd2)
+            )?;
             self.correct_widgets_by_cur_state();
             Ok(())
         });
@@ -760,7 +762,9 @@ impl HardwareUi {
 
     fn handler_action_disconn_phd2(&self) {
         exec_and_show_error(Some(&self.window), || {
-            self.engine.ext_guider.disconnect()?;
+            self.engine.exec_command(
+                Command::Guider(GuiderCommand::DisconnectPhd2)
+            )?;
             self.correct_widgets_by_cur_state();
             Ok(())
         });

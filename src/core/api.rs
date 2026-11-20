@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use super::{commands::{ModeCommand, ModeCommandReply}, engine::Engine, events::Event};
 use crate::{
+    guiding::external_guider::ExtGuiderType,
     hal::{FrameType, TelescopeMoveDir},
     options::{Binning, Crop, StarRecognSensitivity},
 };
@@ -39,6 +40,13 @@ pub enum FocuserCommand {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum FilterWheelCommand {
     SetSlot { slot: usize },
+}
+
+/// External auto-guider control commands.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum GuiderCommand {
+    ConnectPhd2,
+    DisconnectPhd2,
 }
 
 /// Hardware connection management commands.
@@ -81,6 +89,7 @@ pub enum Command {
     Focuser(FocuserCommand),
     FilterWheel(FilterWheelCommand),
     Connect(ConnectCommand),
+    Guider(GuiderCommand),
     SetCameraDevice      { device_id: String },
     SetMountDevice       { device_id: String },
     SetFocuserDevice     { device_id: String },
@@ -321,6 +330,17 @@ impl Engine {
                 self.cur_devices.change_filter_wheel(&device_id);
                 Ok(Reply::Empty)
             }
+            Command::Guider(guider_cmd) => {
+                match guider_cmd {
+                    GuiderCommand::ConnectPhd2 => {
+                        self.ext_guider.create_and_connect(ExtGuiderType::Phd2)?;
+                    }
+                    GuiderCommand::DisconnectPhd2 => {
+                        self.ext_guider.disconnect()?;
+                    }
+                }
+                Ok(Reply::Empty)
+            }
             Command::Connect(connect_cmd) => {
                 match connect_cmd {
                     ConnectCommand::ConnectIndi {
@@ -483,6 +503,8 @@ mod tests {
             }),
             Command::Connect(ConnectCommand::DisconnectIndi { disable_all: true }),
             Command::Connect(ConnectCommand::DisconnectIndi { disable_all: false }),
+            Command::Guider(GuiderCommand::ConnectPhd2),
+            Command::Guider(GuiderCommand::DisconnectPhd2),
             #[cfg(windows)]
             Command::Connect(ConnectCommand::ConnectAlpaca {
                 address: "http://localhost:11111".to_string(),
