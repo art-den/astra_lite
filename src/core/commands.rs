@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::core::mode_polar_align::{PolarAlignCommand, PolarAlignState};
 
@@ -7,13 +7,13 @@ use crate::core::mode_polar_align::{PolarAlignCommand, PolarAlignState};
 /// Rule: the command, its reply and every type they reference must be plain
 /// data (no Arc<dyn ...>, Rc, closures, locks or references). This keeps them
 /// serializable for the future web UI.
-#[derive(Serialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum ModeCommand {
     PolarAlign(PolarAlignCommand),
 }
 
 /// Reply to a mode command.
-#[derive(Serialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum ModeCommandReply {
     Empty,
     PolarAlignState(PolarAlignState),
