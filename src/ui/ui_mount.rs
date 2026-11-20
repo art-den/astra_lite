@@ -1,4 +1,4 @@
-use std::{cell::Cell, rc::Rc, sync::Arc};
+use std::{cell::{Cell, RefCell}, collections::HashSet, rc::Rc, sync::Arc};
 use gtk::{glib, prelude::*, glib::clone};
 use macros::FromBuilder;
 
@@ -33,6 +33,8 @@ pub fn init_ui(
         prev_info_state: Cell::new(None),
         prev_info_ra:    Cell::new(0.0),
         prev_info_dec:   Cell::new(0.0),
+        state_syncing:   Cell::new(false),
+        pending_cmds:    RefCell::new(HashSet::new()),
     });
 
     obj.init_widgets();
@@ -124,6 +126,9 @@ struct MountUi {
     prev_info_state: Cell<Option<TelescopeState>>,
     prev_info_ra:    Cell<f64>,
     prev_info_dec:   Cell<f64>,
+    // Suppresses command handlers while widgets mirror the device state
+    state_syncing: Cell<bool>,
+    pending_cmds:  RefCell<HashSet<u64>>,
 }
 
 impl Drop for MountUi {
@@ -176,6 +181,14 @@ impl UiModule for MountUi {
         match event {
             Event::ModeChanged => {
                 self.correct_widgets_props();
+            }
+            Event::CommandReply { id, result } => {
+                if !self.pending_cmds.borrow_mut().remove(id) {
+                    return;
+                }
+                if let Err(err_msg) = result {
+                    show_error_message(Some(&self.window), "Error", err_msg);
+                }
             }
             Event::MountDeviceChanged(new_device_name) => {
                 if self.widgets.cb_list.active_id().as_deref() != Some(new_device_name.as_str()) {
@@ -295,33 +308,30 @@ impl MountUi {
 
         self.widgets.chb_tracking.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                self_.excl.exec(|| {
-                    exec_and_show_error(Some(&self_.window), || {
-                        self_.engine.exec_command(
-                            Command::Mount(MountCommand::Track(chb.is_active()))
-                        )?;
-                        Ok(())
-                    });
-                });
+                if self_.state_syncing.get() { return; }
+                self_.submit_mount_cmd(MountCommand::Track(chb.is_active()));
             })
         );
 
         self.widgets.chb_parked.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                self_.excl.exec(|| {
-                    exec_and_show_error(Some(&self_.window), || {
-                        let cmd = if chb.is_active() {
-                            MountCommand::Park
-                        } else {
-                            MountCommand::Unpark
-                        };
-                        self_.engine.exec_command(Command::Mount(cmd))?;
-                        Ok(())
-                    });
-                    self_.correct_widgets_props();
-                });
+                if self_.state_syncing.get() { return; }
+                let cmd = if chb.is_active() {
+                    MountCommand::Park
+                } else {
+                    MountCommand::Unpark
+                };
+                self_.submit_mount_cmd(cmd);
+                self_.correct_widgets_props();
             })
         );
+    }
+
+    fn submit_mount_cmd(&self, cmd: MountCommand) {
+        match self.engine.submit_command(Command::Mount(cmd)) {
+            Ok(id) => { _ = self.pending_cmds.borrow_mut().insert(id); }
+            Err(err) => show_error_message(Some(&self.window), "Error", &err.to_string()),
+        }
     }
 
     fn correct_widgets_props(&self) {
@@ -385,20 +395,14 @@ impl MountUi {
                 speed_id: self.widgets.cb_speed.active_id().map(|id| id.to_string()),
             }
         };
-        exec_and_show_error(Some(&self.window), || {
-            self.engine.exec_command(Command::Mount(cmd))?;
-            Ok(())
-        });
+        self.submit_mount_cmd(cmd);
     }
 
     fn handler_nav_mount_btn_released(&self, button: &gtk::Button) {
         if button == &self.widgets.btn_stop {
             return;
         }
-        exec_and_show_error(Some(&self.window), || {
-            self.engine.exec_command(Command::Mount(MountCommand::AbortMotion))?;
-            Ok(())
-        });
+        self.submit_mount_cmd(MountCommand::AbortMotion);
     }
 
     fn fill_devices_list(&self) {
@@ -451,15 +455,15 @@ impl MountUi {
     }
 
     fn show_mount_tracking_state(&self, tracking: bool) {
-        self.excl.exec(|| {
-            self.widgets.chb_tracking.set_active(tracking);
-        });
+        let prev = self.state_syncing.replace(true);
+        self.widgets.chb_tracking.set_active(tracking);
+        self.state_syncing.set(prev);
     }
 
     fn show_mount_parked_state(&self, parked: bool) {
-        self.excl.exec(|| {
-            self.widgets.chb_parked.set_active(parked);
-        });
+        let prev = self.state_syncing.replace(true);
+        self.widgets.chb_parked.set_active(parked);
+        self.state_syncing.set(prev);
     }
 
     fn show_cur_mount_state(&self) {
