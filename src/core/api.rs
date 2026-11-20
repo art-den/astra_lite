@@ -9,6 +9,8 @@ use crate::{
     hal::{FrameType, TelescopeMoveDir},
     options::{Binning, Crop, StarRecognSensitivity},
 };
+#[cfg(windows)]
+use crate::hal::HalImpl;
 
 /// Telescope (mount) control commands.
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -39,6 +41,27 @@ pub enum FilterWheelCommand {
     SetSlot { slot: usize },
 }
 
+/// Hardware connection management commands.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum ConnectCommand {
+    ConnectIndi {
+        remote:    bool,
+        address:   String,
+        mount:     Option<String>,
+        camera:    Option<String>,
+        guid_cam:  Option<String>,
+        focuser:   Option<String>,
+        flt_wheel: Option<String>,
+        aux1:      Option<String>,
+        aux2:      Option<String>,
+    },
+    DisconnectIndi { disable_all: bool },
+    #[cfg(windows)]
+    ConnectAlpaca { address: String },
+    #[cfg(windows)]
+    DisconnectAlpaca,
+}
+
 /// Single serializable entry point for engine state mutations issued by the UI
 /// (and later by a future web server).
 ///
@@ -57,6 +80,7 @@ pub enum Command {
     Mount(MountCommand),
     Focuser(FocuserCommand),
     FilterWheel(FilterWheelCommand),
+    Connect(ConnectCommand),
     SetCameraDevice      { device_id: String },
     SetMountDevice       { device_id: String },
     SetFocuserDevice     { device_id: String },
@@ -297,6 +321,38 @@ impl Engine {
                 self.cur_devices.change_filter_wheel(&device_id);
                 Ok(Reply::Empty)
             }
+            Command::Connect(connect_cmd) => {
+                match connect_cmd {
+                    ConnectCommand::ConnectIndi {
+                        remote, address, mount, camera, guid_cam, focuser, flt_wheel, aux1, aux2,
+                    } => {
+                        self.hal.indi_impl().connect(
+                            remote, &address, &mount, &camera, &guid_cam,
+                            &focuser, &flt_wheel, &aux1, &aux2,
+                        )?;
+                    }
+                    ConnectCommand::DisconnectIndi { disable_all } => {
+                        let indi = self.hal.indi_impl().indi();
+                        if disable_all {
+                            log::info!("Disabling all INDI devices before disconnect...");
+                            indi.command_enable_all_devices(false, true, Some(2000))?;
+                            log::info!("Done");
+                        }
+                        log::info!("Disconnecting INDI...");
+                        indi.disconnect_and_wait()?;
+                        log::info!("Done");
+                    }
+                    #[cfg(windows)]
+                    ConnectCommand::ConnectAlpaca { address } => {
+                        self.hal.ascom_alpaca_impl().connect(&address)?;
+                    }
+                    #[cfg(windows)]
+                    ConnectCommand::DisconnectAlpaca => {
+                        self.hal.ascom_alpaca_impl().disconnect()?;
+                    }
+                }
+                Ok(Reply::Empty)
+            }
             Command::FilterWheel(filter_wheel_cmd) => {
                 let filter_wheel = self.cur_devices.filter_wheel_or_err()?;
                 match filter_wheel_cmd {
@@ -419,6 +475,20 @@ mod tests {
                 dark_frame_en: true, flat_frame_en: false,
                 flat_frame_fname: "/tmp/flat.fits".to_string(), hot_pixels: true,
             },
+            Command::Connect(ConnectCommand::ConnectIndi {
+                remote: true, address: "localhost".to_string(),
+                mount: Some(" monta".to_string()), camera: None, guid_cam: None,
+                focuser: Some("foc".to_string()), flt_wheel: None,
+                aux1: None, aux2: None,
+            }),
+            Command::Connect(ConnectCommand::DisconnectIndi { disable_all: true }),
+            Command::Connect(ConnectCommand::DisconnectIndi { disable_all: false }),
+            #[cfg(windows)]
+            Command::Connect(ConnectCommand::ConnectAlpaca {
+                address: "http://localhost:11111".to_string(),
+            }),
+            #[cfg(windows)]
+            Command::Connect(ConnectCommand::DisconnectAlpaca),
             Command::SetTelescopeFocalLen { focal_len: 550.0 },
             Command::SetBarlow { barlow: 1.5 },
             Command::SetGuidingFocalLen { foc_len: 240.0 },

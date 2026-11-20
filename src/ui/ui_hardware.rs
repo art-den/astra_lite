@@ -12,7 +12,7 @@ use itertools::Itertools;
 use chrono::prelude::*;
 use macros::FromBuilder;
 use crate::{
-    core::{api::Command, engine::Engine, events::Event}, guiding::{external_guider::ExtGuiderType, phd2}, hal::{DeviceType, HalImpl, HalState, events::HalEvent}, options::*, utils::log_utils::log_if_error,
+    core::{api::{Command, ConnectCommand}, engine::Engine, events::Event}, guiding::{external_guider::ExtGuiderType, phd2}, hal::{DeviceType, HalImpl, HalState, events::HalEvent}, options::*, utils::log_utils::log_if_error,
 };
 use ::indi::{self, sexagesimal_to_value, value_to_sexagesimal};
 use super::{gtk_utils::*, indi_panel_widget::*, module::*, ui_main::*};
@@ -695,35 +695,34 @@ impl HardwareUi {
     fn handler_action_conn_indi(&self) {
         self.sync_options_from_widgets();
         exec_and_show_error(Some(&self.window), || {
-            let indi_hal = self.engine.hal.indi_impl();
-            let options = self.engine.options.read().unwrap();
-            indi_hal.connect(
-                options.indi.remote,
-                &options.indi.address,
-                &options.indi.mount,
-                &options.indi.camera,
-                &options.indi.guid_cam,
-                &options.indi.focuser,
-                &options.indi.flt_wheel,
-                &options.indi.aux1,
-                &options.indi.aux2,
-            )?;
-            self.is_remote.set(options.indi.remote);
+            let cmd = {
+                let options = self.engine.options.read().unwrap();
+                ConnectCommand::ConnectIndi {
+                    remote:    options.indi.remote,
+                    address:   options.indi.address.clone(),
+                    mount:     options.indi.mount.clone(),
+                    camera:    options.indi.camera.clone(),
+                    guid_cam:  options.indi.guid_cam.clone(),
+                    focuser:   options.indi.focuser.clone(),
+                    flt_wheel: options.indi.flt_wheel.clone(),
+                    aux1:      options.indi.aux1.clone(),
+                    aux2:      options.indi.aux2.clone(),
+                }
+            };
+            self.engine.exec_command(Command::Connect(cmd))?;
+            let remote = self.engine.options.read().unwrap().indi.remote;
+            self.is_remote.set(remote);
             Ok(())
         });
     }
 
     fn handler_action_disconn_indi(&self) {
         exec_and_show_error(Some(&self.window), || {
-            let indi = self.engine.hal.indi_impl().indi();
-            if !self.is_remote.get() {
-                log::info!("Disabling all INDI devices before disconnect...");
-                indi.command_enable_all_devices(false, true, Some(2000))?;
-                log::info!("Done");
-            }
-            log::info!("Disconnecting INDI...");
-            indi.disconnect_and_wait()?;
-            log::info!("Done");
+            self.engine.exec_command(
+                Command::Connect(ConnectCommand::DisconnectIndi {
+                    disable_all: !self.is_remote.get(),
+                })
+            )?;
             Ok(())
         });
     }
@@ -732,9 +731,10 @@ impl HardwareUi {
     fn handler_action_conn_aa(&self) {
         self.sync_options_from_widgets();
         exec_and_show_error(Some(&self.window), || {
-            let aa_hal = self.engine.hal.ascom_alpaca_impl();
-            let options = self.engine.options.read().unwrap();
-            aa_hal.connect(&options.ascom_alpaca.address)?;
+            let address = self.engine.options.read().unwrap().ascom_alpaca.address.clone();
+            self.engine.exec_command(
+                Command::Connect(ConnectCommand::ConnectAlpaca { address })
+            )?;
             Ok(())
         });
     }
@@ -742,8 +742,9 @@ impl HardwareUi {
     #[cfg(windows)]
     fn handler_action_disconn_aa(&self) {
         exec_and_show_error(Some(&self.window), || {
-            let aa_hal = self.engine.hal.ascom_alpaca_impl();
-            aa_hal.disconnect()?;
+            self.engine.exec_command(
+                Command::Connect(ConnectCommand::DisconnectAlpaca)
+            )?;
             Ok(())
         });
     }
