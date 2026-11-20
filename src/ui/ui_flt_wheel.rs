@@ -1,4 +1,4 @@
-use std::{rc::Rc, sync::Arc};
+use std::{cell::{Cell, RefCell}, collections::HashSet, rc::Rc, sync::Arc};
 
 use gtk::{prelude::*, glib, glib::clone};
 
@@ -23,6 +23,8 @@ pub fn init_ui(
         window:          window.clone(),
         delayed_actions: DelayedActions::new(250),
         engine:          Arc::clone(engine),
+        state_syncing:   Cell::new(false),
+        pending_cmds:    RefCell::new(HashSet::new()),
     });
     obj.delayed_actions.set_event_handler(
         clone!(@weak obj => move |action| {
@@ -40,6 +42,9 @@ struct FltWheelUi {
     window:          gtk::ApplicationWindow,
     delayed_actions: DelayedActions<DelayedAction>,
     engine:          Arc<Engine>,
+    // Suppresses command handlers while widgets mirror the device state
+    state_syncing:   Cell<bool>,
+    pending_cmds:    RefCell<HashSet<u64>>,
 }
 
 #[derive(Hash, Eq, PartialEq)]
@@ -92,15 +97,21 @@ impl UiModule for FltWheelUi {
 
     fn on_event(&self, event: &Event) {
         match event {
+            Event::CommandReply { id, result } => {
+                if !self.pending_cmds.borrow_mut().remove(id) {
+                    return;
+                }
+                if let Err(err_msg) = result {
+                    gtk_utils::show_error_message(Some(&self.window), "Error", err_msg);
+                }
+            }
             Event::FilterWheelDeviceChanged(new_device_name) => {
                 if self.widgets.cb_device.active_id().as_deref() != Some(new_device_name.as_str()) {
                     self.excl_caller.exec(|| {
                         self.widgets.cb_device.set_active_id(Some(new_device_name.as_str()));
                     });
                 }
-                self.excl_caller.exec(|| {
-                    self.update_filters_list_and_select_active();
-                });
+                self.update_filters_list_and_select_active();
                 self.correct_widgets_props();
             }
             _ => {},
@@ -122,9 +133,9 @@ impl UiModule for FltWheelUi {
                 if options.filter_wheel.device == **device_id {
                     drop(options);
                     if let Some(slot) = slot && *slot >= 0 {
-                        self.excl_caller.exec(|| {
-                            self.widgets.cb_filter.set_active(Some(*slot as _));
-                        });
+                        let prev = self.state_syncing.replace(true);
+                        self.widgets.cb_filter.set_active(Some(*slot as _));
+                        self.state_syncing.set(prev);
                     }
                     self.widgets.cb_filter.set_sensitive(slot.is_some());
                 }
@@ -156,15 +167,16 @@ impl FltWheelUi {
         }));
 
         self.widgets.cb_filter.connect_active_notify(clone!(@weak self as self_ => move |cb| {
+            if self_.state_syncing.get() { return; }
             let Some(active) = cb.active() else { return; };
-            self_.excl_caller.exec(|| {
-                gtk_utils::exec_and_show_error(Some(&self_.window), || {
-                    self_.engine.exec_command(
-                        Command::FilterWheel(FilterWheelCommand::SetSlot { slot: active as usize })
-                    )?;
-                    Ok(())
-                });
-            });
+            match self_.engine.submit_command(
+                Command::FilterWheel(FilterWheelCommand::SetSlot { slot: active as usize })
+            ) {
+                Ok(id) => { _ = self_.pending_cmds.borrow_mut().insert(id); }
+                Err(err) => gtk_utils::show_error_message(
+                    Some(&self_.window), "Error", &err.to_string()
+                ),
+            }
         }));
     }
 
@@ -172,6 +184,7 @@ impl FltWheelUi {
         let Some(filter_wheel) = self.engine.cur_devices.filter_wheel() else { return; };
 
         let Ok((list, active_id)) = filter_wheel.list_and_active() else { return; };
+        let prev = self.state_syncing.replace(true);
         self.widgets.cb_filter.remove_all();
         for filter_name in list {
             self.widgets.cb_filter.append(Some(filter_name.as_str()), filter_name.as_str());
@@ -180,15 +193,14 @@ impl FltWheelUi {
         if self.widgets.cb_filter.active() != new_cb_active {
             self.widgets.cb_filter.set_active(new_cb_active);
         }
+        self.state_syncing.set(prev);
     }
 
     fn delayed_actions_handler(&self, action: &DelayedAction) {
         match action {
             DelayedAction::UpdateFilterList => {
-                self.excl_caller.exec(|| {
-                    self.update_filters_list_and_select_active();
-                    self.correct_widgets_props();
-                });
+                self.update_filters_list_and_select_active();
+                self.correct_widgets_props();
             }
 
             DelayedAction::UpdateDevicesList => {
