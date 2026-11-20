@@ -44,6 +44,6 @@ impl Preview {
         pp.pr_area_width = 1500;
         pp.scale = PreviewScale::FitWindow;
         // One-off preview: the gamma tables are not worth keeping between solves
-        get_preview_rgb_data(&image, &hist, &pp, None, &mut PreviewCache::default())
+        get_preview_rgb_data(&image, &hist, &pp, &mut PreviewCache::default())
     }
 }

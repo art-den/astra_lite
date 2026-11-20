@@ -18,6 +18,8 @@ impl FloodFiller {
         }
     }
 
+    /// The callback MUST mark every point it returns `Hit` for: the filler does not
+    /// dedupe (the `visited` field is just a work queue), so queue size == total `Hit`s
     pub fn fill<SetFilled: FnMut(isize, isize) -> FillPtSetResult>(
         &mut self,
         x: isize,

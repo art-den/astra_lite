@@ -251,6 +251,8 @@ impl RawImage {
         cfa_arr:     &'static CfaArray,
         data_offset: i32
     ) -> Self {
+        // `get()`'s `get_unchecked` relies on this invariant
+        debug_assert_eq!(data.len(), info.width * info.height, "RawImage::new: data length != width*height");
         Self { info, data, cfa_arr, data_offset }
     }
 

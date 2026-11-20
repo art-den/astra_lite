@@ -149,6 +149,11 @@ fn try_calculate(
             x_values.push(*x_offs);
             y_values.push(*y_offs);
         }
+        // Emptiness is guaranteed today only by a constants interaction (bin half-width
+        // vs ANGLE_ERR); `select_nth_unstable_by` on empty input aborts
+        if x_values.is_empty() {
+            return None;
+        }
         let x_median_pos = x_values.len() / 2;
         let x_median = *x_values.select_nth_unstable_by(x_median_pos, cmp_f64).1;
         let y_median_pos = y_values.len() / 2;

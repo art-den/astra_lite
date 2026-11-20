@@ -125,23 +125,20 @@ impl AsRef<[u8]> for SharedBytes {
 }
 
 pub struct PreviewRgbData {
-    pub width:          usize,
-    pub height:         usize,
-    pub orig_width:     usize,
-    pub orig_height:    usize,
-    pub bytes:          SharedBytes,
-    pub is_color_image: bool,   // originally color
-    pub sensor_name:    String, // sensor for auto WB
+    pub width:  usize,
+    pub height: usize,
+    pub bytes:  SharedBytes,
 }
 
 /// RGB data of a whole image for the preview: used by `PreviewScale::CenterAndCorners`,
 /// the "save preview as JPEG" export and the plate solve preview. Returns `None` for an
-/// empty image or an empty histogram. `cache` must live between calls to be of any use
+/// empty image or an empty histogram. `cache` must live between calls to be of any use.
+/// No stars overlay here (unsupported for the `CenterAndCorners` mosaic; the part path
+/// in `get_preview_part_rgb_bytes` draws it)
 pub fn get_preview_rgb_data(
     image:  &Image,
     hist:   &Histogram,
     params: &PreviewParams,
-    stars:  Option<&StarItems>,
     cache:  &mut PreviewCache,
 ) -> Option<PreviewRgbData> {
     if (hist.l.is_none() && hist.b.is_none()) || image.is_empty() {
@@ -151,50 +148,23 @@ pub fn get_preview_rgb_data(
     let reduct_ratio = params.calc_reduct_ratio(image.width(), image.height());
     log::debug!("preview reduct_ratio = {}", reduct_ratio);
 
-    let (tables, sensor) = prepare_tables(hist, params, image, cache);
+    let tables = prepare_tables(hist, params, image, cache);
 
-    let (mut bytes, width, height) = to_grb_bytes(
+    let (bytes, width, height) = to_grb_bytes(
         image,
         params,
         tables,
         reduct_ratio
     );
 
-    if params.stars && let Some(stars) = stars
-    && params.scale != PreviewScale::CenterAndCorners {
-        show_stars(
-            stars,
-            &mut bytes,
-            image.width(),
-            image.height(),
-            reduct_ratio
-        );
-    }
-
     Some(PreviewRgbData {
         width,
         height,
-        bytes:          SharedBytes::new(bytes),
-        orig_width:     image.width(),
-        orig_height:    image.height(),
-        is_color_image: image.is_color(),
-        sensor_name:    sensor,
+        bytes: SharedBytes::new(bytes),
     })
 }
 
-fn show_stars(
-    stars: &StarItems,
-    bytes: &mut [u8],
-    width: usize,
-    height: usize,
-    reduct_ratio: usize
-) {
-    let width = width / reduct_ratio;
-    let height = height / reduct_ratio;
-    show_part_stars(stars, bytes, width, height, reduct_ratio, 0, 0);
-}
-
-// Same as show_stars, but for a part of the reduced image: star points outside
+// Draws star points on a part of the reduced image: star points outside
 // the part (which starts at part_left/part_top reduced pixels) are skipped
 fn show_part_stars(
     stars:        &StarItems,
@@ -240,7 +210,7 @@ pub fn get_preview_part_rgb_bytes(
         return None;
     }
 
-    let (tables, _) = prepare_tables(hist, params, src, cache);
+    let tables = prepare_tables(hist, params, src, cache);
 
     // In single-channel color modes the part holds only the selected layer,
     // so take the size from that layer (Image::width/height fall back l -> r)
@@ -360,11 +330,11 @@ fn prepare_tables<'a>(
     params: &PreviewParams,
     src:    &Image,
     cache:  &'a mut PreviewCache,
-) -> (&'a mut GammaTables, String) {
+) -> &'a mut GammaTables {
     let levels = calc_levels(hist, params, src.max_value() as f64, src.levels_locked());
     log::debug!("preview levels = {:?}", levels);
 
-    let (wb, sensor) = get_wb_and_sensor(
+    let wb = get_wb(
         &params.wb,
         src.raw_info
             .as_ref()
@@ -372,9 +342,9 @@ fn prepare_tables<'a>(
             .unwrap_or_default(),
         src.levels_locked()
     );
-    log::debug!("preview wb and sensor = {:?} {}", wb, sensor);
+    log::debug!("preview wb = {:?}", wb);
 
-    (cache.tables(&levels, params.gamma, wb), sensor)
+    cache.tables(&levels, params.gamma, wb)
 }
 
 fn calc_levels(
@@ -458,29 +428,25 @@ fn calc_levels(
     }
 }
 
-fn get_wb_and_sensor(
+fn get_wb(
     wb:            &Option<[f64; 3]>,
     camera:        &str,
     levels_locked: bool,
-) -> ([f64; 3], String) {
-    let cam_info = get_cam_info(camera);
-    let sensor = cam_info.as_ref()
-        .map(|cam_info| cam_info.sensor.to_string())
-        .unwrap_or_default();
+) -> [f64; 3] {
     // Display-referred images already have their colors set: keep WB neutral
     if levels_locked {
-        return ([1.0, 1.0, 1.0], sensor);
+        return [1.0, 1.0, 1.0];
     }
-    let auto_wb_coeffs = cam_info.as_ref().map(|cam_info| cam_info.wb).unwrap_or([1.0, 1.0, 1.0]);
-    let mut r_wb = wb.map(|wb| wb[0]).unwrap_or(auto_wb_coeffs[0] as f64);
-    let mut g_wb = wb.map(|wb| wb[1]).unwrap_or(auto_wb_coeffs[1] as f64);
-    let mut b_wb = wb.map(|wb| wb[2]).unwrap_or(auto_wb_coeffs[2] as f64);
+    let auto_wb_coeffs = get_cam_info(camera).map(|cam_info| cam_info.wb).unwrap_or([1.0, 1.0, 1.0]);
+    let mut r_wb = wb.map(|wb| wb[0]).unwrap_or(auto_wb_coeffs[0]);
+    let mut g_wb = wb.map(|wb| wb[1]).unwrap_or(auto_wb_coeffs[1]);
+    let mut b_wb = wb.map(|wb| wb[2]).unwrap_or(auto_wb_coeffs[2]);
     let mut min_wb = r_wb.min(g_wb).min(b_wb);
     if min_wb <= 0.0 { min_wb = 1.0; }
     r_wb /= min_wb;
     g_wb /= min_wb;
     b_wb /= min_wb;
-    ([r_wb, g_wb, b_wb], sensor)
+    [r_wb, g_wb, b_wb]
 }
 
 fn to_grb_bytes(

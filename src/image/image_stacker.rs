@@ -156,6 +156,7 @@ impl ImageStacker {
         self.height = 0;
         self.max_value = 0;
         self.total_exp = 0.0;
+        self.raw_info = None;
     }
 
     pub fn add(
@@ -548,6 +549,11 @@ impl ImageStacker {
     }
 
     pub fn copy_to_image(&self, image: &mut Image) {
+        // copying from an empty stacker would stamp stale max_value/raw_info onto the image
+        if self.is_empty() {
+            return;
+        }
+
         let copy_layer = |chan: &ImageStackerChan, dst: &mut ImageLayer<u16>| {
             if chan.is_empty() { return; }
             dst.resize(self.width, self.height);

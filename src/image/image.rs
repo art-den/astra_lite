@@ -605,6 +605,12 @@ impl<'a, const N: usize> DivNRGBIterator<'a, N> {
         assert!(N > 0);
         let src_width = image.r.width();
         let src_height = image.r.height();
+        // all geometry is derived from `r`: incongruent g/b layers would step out of bounds
+        assert!(
+            image.g.width() == src_width && image.g.height() == src_height
+            && image.b.width() == src_width && image.b.height() == src_height,
+            "DivNRGBIterator: r/g/b layers must have equal width and height"
+        );
         // clamped source rect; None means the whole image
         let (x1, y1, src_w, src_h) = match rect {
             Some(r) => clamp_rect(r, src_width, src_height),

@@ -72,7 +72,8 @@ impl LightFrameInfo {
 #[derive(Clone)]
 pub struct FlatInfoChan {
     pub avg: f32,
-    pub max: u16,
+    /// 95th percentile, not the true maximum: robust to hot pixels
+    pub p95: u16,
 }
 
 #[derive(Default, Clone)]
@@ -89,10 +90,10 @@ impl FlatImageInfo {
         let calc = |chan: Option<&HistogramChan>| -> Option<FlatInfoChan> {
             chan.and_then(|c| {
                 // An empty channel has no 95th percentile: show no data at all
-                let max = c.get_nth_element(95 * c.count / 100)?;
+                let p95 = c.get_nth_element(95 * c.count / 100)?;
                 Some(FlatInfoChan {
                     avg: c.mean,
-                    max,
+                    p95,
                 })
             })
         };

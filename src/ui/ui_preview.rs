@@ -914,10 +914,10 @@ impl PreviewUi {
                 let text =
                     if ui_options.flat_percents {
                         let percent_aver = 100.0 * item.avg / info.max_value as f32;
-                        let percent_max = 100.0 * item.max as f64 / info.max_value as f64;
-                        format!("{:.1}% / {:.1}%", percent_aver, percent_max)
+                        let percent_p95 = 100.0 * item.p95 as f64 / info.max_value as f64;
+                        format!("{:.1}% / {:.1}%", percent_aver, percent_p95)
                     } else {
-                        format!("{:.1} / {}", item.avg, item.max)
+                        format!("{:.1} / {}", item.avg, item.p95)
                     };
                 entry.set_text(&text);
             }
@@ -1168,7 +1168,6 @@ impl PreviewUi {
                 &image,
                 &hist,
                 &pp,
-                stars.as_ref().map(|s| &s.items),
                 &mut self.preview_cache.borrow_mut(),
             ) else {
                 return;
@@ -1484,7 +1483,7 @@ impl PreviewUi {
             let hist = hist.read().unwrap();
             let preview_params = preview_options.preview_params();
             let rgb_data = get_preview_rgb_data(
-                &image, &hist, &preview_params, None, &mut self.preview_cache.borrow_mut()
+                &image, &hist, &preview_params, &mut self.preview_cache.borrow_mut()
             );
             let Some(rgb_data) = rgb_data else { eyre::bail!("wrong RGB data"); };
             let bytes = glib::Bytes::from_owned(rgb_data.bytes);
