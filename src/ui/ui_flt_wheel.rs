@@ -5,7 +5,7 @@ use gtk::{prelude::*, glib, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
-    core::{api::Command, engine::Engine, events::Event},
+    core::{api::{Command, FilterWheelCommand}, engine::Engine, events::Event},
     hal::{DeviceType, HalState, events::HalEvent},
     options::Options,
     ui::{gtk_utils, module::*, utils::{DelayedActions, ExclusiveCaller, fill_devices_list_into_combobox}},
@@ -159,8 +159,9 @@ impl FltWheelUi {
             let Some(active) = cb.active() else { return; };
             self_.excl_caller.exec(|| {
                 gtk_utils::exec_and_show_error(Some(&self_.window), || {
-                    let filter_wheel = self_.engine.cur_devices.filter_wheel_or_err()?;
-                    filter_wheel.set_active(active as _)?;
+                    self_.engine.exec_command(
+                        Command::FilterWheel(FilterWheelCommand::SetSlot { slot: active as usize })
+                    )?;
                     Ok(())
                 });
             });

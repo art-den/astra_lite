@@ -28,6 +28,12 @@ pub enum FocuserCommand {
     SetAbs(f64),
 }
 
+/// Filter wheel control commands.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum FilterWheelCommand {
+    SetSlot { slot: usize },
+}
+
 /// Single serializable entry point for engine state mutations issued by the UI
 /// (and later by a future web server).
 ///
@@ -45,6 +51,7 @@ pub enum Command {
     Mode(ModeCommand),
     Mount(MountCommand),
     Focuser(FocuserCommand),
+    FilterWheel(FilterWheelCommand),
     SetCameraDevice      { device_id: String },
     SetMountDevice       { device_id: String },
     SetFocuserDevice     { device_id: String },
@@ -82,6 +89,13 @@ impl Engine {
             }
             Command::SetFilterWheelDevice { device_id } => {
                 self.cur_devices.change_filter_wheel(&device_id);
+                Ok(Reply::Empty)
+            }
+            Command::FilterWheel(filter_wheel_cmd) => {
+                let filter_wheel = self.cur_devices.filter_wheel_or_err()?;
+                match filter_wheel_cmd {
+                    FilterWheelCommand::SetSlot { slot } => filter_wheel.set_active(slot)?,
+                }
                 Ok(Reply::Empty)
             }
             Command::Focuser(focuser_cmd) => {
@@ -171,6 +185,7 @@ mod tests {
             Command::Mount(MountCommand::AbortMotion),
             Command::Focuser(FocuserCommand::MoveBy(-25.5)),
             Command::Focuser(FocuserCommand::SetAbs(1000.0)),
+            Command::FilterWheel(FilterWheelCommand::SetSlot { slot: 3 }),
         ] {
             roundtrip(cmd);
         }
