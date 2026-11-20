@@ -173,6 +173,21 @@ pub enum ConnectCommand {
 ///
 /// Command handlers must keep the global lock order modes -> options and must
 /// not run long/blocking work while holding engine locks.
+///
+/// Threading contract:
+/// - `exec_command` runs synchronously on the caller's thread. Option and
+///   device-selection commands are fast and may be called from the UI thread;
+///   device-domain commands (Mount/Focuser/FilterWheel/Guider/Indi/Connect)
+///   block until the device operation returns — UI code should use
+///   `submit_command` for those.
+/// - `submit_command` enqueues onto a single FIFO worker thread; the reply is
+///   delivered as `Event::CommandReply { id, result }` sent FROM THAT THREAD.
+///   UI must consume it through the main-thread event bridge (`ui_main`
+///   relays core events via a channel); handlers subscribed directly to
+///   `events` must not touch GTK widgets when handling `CommandReply`.
+/// - Commands of the same device domain are serialized by the engine busy
+///   flags: submitting a second command while one is in progress fails with
+///   a "busy" error (see `BusyDomain`).
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Command {
     Mode(ModeCommand),
@@ -245,8 +260,16 @@ pub enum Reply {
 }
 
 impl Engine {
-    /// Executes a command synchronously on the caller's thread (a command
-    /// queue for blocking device operations is planned).
+    /// Enqueues the command onto the engine's FIFO command-queue worker
+    /// thread (see the `Command` docs threading contract). The reply arrives
+    /// as `Event::CommandReply` with the returned id.
+    pub fn submit_command(&self, cmd: Command) -> eyre::Result<u64> {
+        log::debug!("Engine submit: {:?}", cmd);
+        self.enqueue_command(cmd)
+    }
+
+    /// Executes a command synchronously on the caller's thread (see the
+    /// `Command` docs threading contract).
     pub fn exec_command(self: &Arc<Self>, cmd: Command) -> eyre::Result<Reply> {
         log::debug!("Engine command: {:?}", cmd);
         let _busy = match busy_domain_of(&cmd) {

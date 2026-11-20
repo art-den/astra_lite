@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::{Arc, RwLock, atomic::AtomicU64}};
 use crate::{guiding::external_guider::ExtGuiderEvent, plate_solve::PlateSolverEvent};
-use super::{engine::ModeKind, frame_processing::*, mode_focusing::*, mode_polar_align::PolarAlignmentEvent};
+use super::{api::Reply, engine::ModeKind, frame_processing::*, mode_focusing::*, mode_polar_align::PolarAlignmentEvent};
 
 #[derive(Clone)]
 pub struct Progress {
@@ -43,6 +43,12 @@ pub enum Event {
     CameraExposureChanged,
     CameraFrameOptionsChanged,
     NeedRefreshOptionsView,
+    /// Reply to `Engine::submit_command`; sent from the command queue thread.
+    /// UI code must consume it through the main-thread event bridge.
+    CommandReply {
+        id:     u64,
+        result: Result<Reply, String>,
+    },
 }
 
 type EventHandlerFun = dyn Fn(Event) + Send + Sync + 'static;

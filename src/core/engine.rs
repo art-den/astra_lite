@@ -1,6 +1,7 @@
 use std::{
     any::Any, fmt::Display, path::Path,
-    sync::{Arc, Mutex, RwLock, RwLockReadGuard, atomic::AtomicBool},
+    sync::{Arc, Mutex, RwLock, RwLockReadGuard, Weak, mpsc,
+        atomic::{AtomicBool, AtomicU64}},
 };
 
 use crate::{
@@ -8,6 +9,7 @@ use crate::{
 };
 
 use super::{
+    api::Command,
     events::*,
     frame_processing::*,
     mode_platesolve::*,
@@ -95,6 +97,17 @@ pub enum BusyDomain {
     Connect,
 }
 
+struct QueuedCommand {
+    id:  u64,
+    cmd: Command,
+}
+
+/// FIFO queue drained by a single worker thread (see `command_queue_loop`).
+struct CommandQueue {
+    sender:  mpsc::Sender<QueuedCommand>,
+    next_id: AtomicU64,
+}
+
 const BUSY_DOMAIN_COUNT: usize = 7;
 
 struct DeviceBusyFlags {
@@ -169,6 +182,7 @@ pub struct Engine {
     img_proc_stop_flag: Mutex<Arc<AtomicBool>>, // stop flag for last command
     frame_processing:   Arc<FrameProcessing>,
     device_busy:        DeviceBusyFlags,
+    cmd_queue:          CommandQueue,
 
 }
 
@@ -194,6 +208,8 @@ impl Engine {
 
         let cur_devices = CurDevices::new(&options, &hal, &events);
 
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+
         let this = Arc::new(Self {
             options:            Arc::clone(&options),
             modes:              RwLock::new(EngineModes::new()),
@@ -207,13 +223,41 @@ impl Engine {
             hal,
             frame_processing,
             device_busy: DeviceBusyFlags::new(),
+            cmd_queue: CommandQueue {
+                sender:  cmd_tx,
+                next_id: AtomicU64::new(1),
+            },
             events,
         });
+
+        let weak_self = Arc::downgrade(&this);
+        std::thread::Builder::new()
+            .name("astra_cmd_queue".into())
+            .spawn(move || Engine::command_queue_loop(cmd_rx, weak_self))
+            .expect("Failed to spawn the command queue thread");
 
         this.set_ext_guider_events_handler();
         this.connect_events();
         this.start_timer();
         this
+    }
+
+    fn command_queue_loop(rx: mpsc::Receiver<QueuedCommand>, engine: Weak<Engine>) {
+        while let Ok(qc) = rx.recv() {
+            let Some(engine) = engine.upgrade() else { break };
+            let result = engine.exec_command(qc.cmd);
+            engine.events.send(Event::CommandReply {
+                id:     qc.id,
+                result: result.map_err(|err| format!("{err:#}")),
+            });
+        }
+    }
+
+    pub(crate) fn enqueue_command(&self, cmd: Command) -> eyre::Result<u64> {
+        let id = self.cmd_queue.next_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.cmd_queue.sender.send(QueuedCommand { id, cmd })
+            .map_err(|_| eyre::eyre!("Command queue is closed"))?;
+        Ok(id)
     }
 
     /// Locks the busy flag of a device domain for the lifetime of the returned
