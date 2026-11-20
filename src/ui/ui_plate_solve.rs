@@ -3,7 +3,7 @@ use gtk::{glib, prelude::*, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
-    core::{engine::{Engine, ModeKind}, events::*},
+    core::{api::{Command, StartMode}, engine::{Engine, ModeKind}, events::*},
     hal::{DeviceType, events::HalEvent},
     options::*,
 };
@@ -234,7 +234,7 @@ impl PlateSolveUi {
         self.main_ui.get_all_options();
 
         exec_and_show_error(Some(&self.window), || {
-            self.engine.start_capture_and_platesolve()?;
+            self.engine.exec_command(Command::Start(StartMode::CaptureAndPlatesolve))?;
             Ok(())
         });
     }
@@ -243,7 +243,7 @@ impl PlateSolveUi {
         self.main_ui.get_all_options();
 
         exec_and_show_error(Some(&self.window), || {
-            self.engine.start_goto_image()?;
+            self.engine.exec_command(Command::Start(StartMode::GotoImage))?;
             Ok(())
         });
     }

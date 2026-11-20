@@ -4,11 +4,12 @@ use serde::{Deserialize, Serialize};
 
 use std::path::PathBuf;
 
-use super::{commands::{ModeCommand, ModeCommandReply}, engine::Engine, events::Event};
+use super::{commands::{ModeCommand, ModeCommandReply}, engine::Engine, events::Event, mode_darks_lib::{DarkLibMode, MasterFileCreationProgramItem}, mode_goto::GotoConfig};
 use crate::{
     guiding::external_guider::ExtGuiderType,
     hal::{FrameType, TelescopeMoveDir},
     options::{Binning, Crop, StarRecognSensitivity},
+    sky_math::math::EqCoord,
 };
 #[cfg(windows)]
 use crate::hal::HalImpl;
@@ -59,6 +60,24 @@ pub enum GuiderCommand {
     DisconnectPhd2,
 }
 
+/// Working modes that can be started via `Command::Start`.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum StartMode {
+    SingleShot,
+    LiveView,
+    SavingRawFrames,
+    LiveStacking,
+    Focusing,
+    MountCalibr,
+    Goto { coord: EqCoord, config: GotoConfig },
+    /// Goto to the currently shown preview image; the image data is resolved
+    /// by the facade from the engine's own preview state.
+    GotoImage,
+    CaptureAndPlatesolve,
+    PolarAlignment,
+    CreatingDarkLibrary { mode: DarkLibMode, program: Vec<MasterFileCreationProgramItem> },
+}
+
 /// Hardware connection management commands.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum ConnectCommand {
@@ -95,6 +114,10 @@ pub enum ConnectCommand {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Command {
     Mode(ModeCommand),
+    Start(StartMode),
+    /// Aborts the active mode (it may leave a continuable aborted mode behind).
+    StopActiveMode,
+    ContinueAbortedMode,
     Mount(MountCommand),
     Focuser(FocuserCommand),
     FilterWheel(FilterWheelCommand),
@@ -160,6 +183,31 @@ impl Engine {
         log::debug!("Engine command: {:?}", cmd);
         match cmd {
             Command::Mode(mode_cmd) => Ok(Reply::Mode(self.exec_mode_command(mode_cmd)?)),
+            Command::Start(start_mode) => {
+                match start_mode {
+                    StartMode::SingleShot        => self.start_single_shot()?,
+                    StartMode::LiveView          => self.start_live_view()?,
+                    StartMode::SavingRawFrames   => self.start_saving_raw_frames()?,
+                    StartMode::LiveStacking      => self.start_live_stacking()?,
+                    StartMode::Focusing          => self.start_focusing()?,
+                    StartMode::MountCalibr       => self.start_mount_calibr()?,
+                    StartMode::Goto { coord, config } => self.start_goto_coord(&coord, config)?,
+                    StartMode::GotoImage         => self.start_goto_image()?,
+                    StartMode::CaptureAndPlatesolve => self.start_capture_and_platesolve()?,
+                    StartMode::PolarAlignment    => self.start_polar_alignment()?,
+                    StartMode::CreatingDarkLibrary { mode, program } =>
+                        self.start_creating_dark_library(mode, &program)?,
+                }
+                Ok(Reply::Empty)
+            }
+            Command::StopActiveMode => {
+                self.abort_active_mode();
+                Ok(Reply::Empty)
+            }
+            Command::ContinueAbortedMode => {
+                self.continue_aborted_mode()?;
+                Ok(Reply::Empty)
+            }
             Command::SetCooling { enable_cooler, temperature } => {
                 let mut options = self.options.write().unwrap();
                 if options.cam.ctrl.enable_cooler == enable_cooler
@@ -479,6 +527,41 @@ mod tests {
             Command::Mode(ModeCommand::PolarAlign(PolarAlignCommand::Restart)),
             Command::Mode(ModeCommand::PolarAlign(PolarAlignCommand::ManualRefresh)),
             Command::Mode(ModeCommand::PolarAlign(PolarAlignCommand::GetState)),
+        ] {
+            roundtrip(cmd);
+        }
+
+        for cmd in [
+            Command::Start(StartMode::SingleShot),
+            Command::Start(StartMode::LiveView),
+            Command::Start(StartMode::SavingRawFrames),
+            Command::Start(StartMode::LiveStacking),
+            Command::Start(StartMode::Focusing),
+            Command::Start(StartMode::MountCalibr),
+            Command::Start(StartMode::Goto {
+                coord: EqCoord { dec: 0.5, ra: 1.5 },
+                config: GotoConfig::OnlyGoto,
+            }),
+            Command::Start(StartMode::Goto {
+                coord: EqCoord { dec: -0.25, ra: 3.0 },
+                config: GotoConfig::GotoPlateSolveAndCorrect,
+            }),
+            Command::Start(StartMode::GotoImage),
+            Command::Start(StartMode::CaptureAndPlatesolve),
+            Command::Start(StartMode::PolarAlignment),
+            Command::Start(StartMode::CreatingDarkLibrary {
+                mode: DarkLibMode::MasterDark,
+                program: vec![MasterFileCreationProgramItem {
+                    count: 3, temperature: Some(-10.0), exposure: 60.0,
+                    gain: 100.0, offset: 30, binning: Binning::Bin2, crop: Crop::P50,
+                }],
+            }),
+            Command::Start(StartMode::CreatingDarkLibrary {
+                mode: DarkLibMode::DefectPixels,
+                program: Vec::new(),
+            }),
+            Command::StopActiveMode,
+            Command::ContinueAbortedMode,
         ] {
             roundtrip(cmd);
         }

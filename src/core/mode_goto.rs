@@ -35,7 +35,7 @@ pub enum GotoDestination {
     Coord(EqCoord)
 }
 
-#[derive(PartialEq, Serialize, Deserialize)]
+#[derive(PartialEq, Debug, Clone, Serialize, Deserialize)]
 pub enum GotoConfig {
     OnlyGoto,
     GotoPlateSolveAndCorrect,

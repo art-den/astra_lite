@@ -11,7 +11,8 @@ use gtk::{prelude::*, glib, glib::clone, cairo};
 use macros::FromBuilder;
 use serde::{Serialize, Deserialize};
 use crate::{
-    core::{engine::*, events::*}, hal::events::HalEvent, options::*, utils::io_utils::*,
+    core::{api::Command, engine::*, events::*}, hal::events::HalEvent, options::*,
+    utils::{io_utils::*, log_utils::log_if_error},
 };
 use super::{gtk_utils::*, module::*, utils::*};
 
@@ -441,7 +442,10 @@ impl MainUi {
             dialog.connect_response(clone!(@weak self as self_ =>
                 move |dlg, response| {
                 if response == gtk::ResponseType::Yes {
-                    self_.engine.abort_active_mode();
+                    log_if_error(
+                        &self_.engine.exec_command(Command::StopActiveMode),
+                        "Stop active mode"
+                    );
                     self_.close_win_flag.set(true);
                 }
                 dlg.close();
@@ -700,12 +704,15 @@ impl MainUi {
     }
 
     fn handler_action_stop(&self) {
-        self.engine.abort_active_mode();
+        log_if_error(
+            &self.engine.exec_command(Command::StopActiveMode),
+            "Stop active mode"
+        );
     }
 
     fn handler_action_continue(&self) {
         exec_and_show_error(Some(&self.widgets.window), || {
-            self.engine.continue_aborted_mode()?;
+            self.engine.exec_command(Command::ContinueAbortedMode)?;
             Ok(())
         });
     }

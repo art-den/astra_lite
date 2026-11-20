@@ -4,7 +4,7 @@ use macros::FromBuilder;
 use serde::{Serialize, Deserialize};
 use gtk::{cairo, gdk, glib::{self, clone}, prelude::*};
 use crate::{
-    core::{engine::*, events::*, mode_goto::GotoConfig},
+    core::{api::{Command, StartMode}, engine::*, events::*, mode_goto::GotoConfig},
     image::preview::PreviewRgbData,
     options::*,
     plate_solve::PlateSolveOkResult,
@@ -1247,7 +1247,10 @@ impl MapUi {
             GotoConfig::GotoPlateSolveAndCorrect
         };
         exec_and_show_error(Some(&self.window), || {
-            self.engine.start_goto_coord(coord, config)?;
+            self.engine.exec_command(Command::Start(StartMode::Goto {
+                coord: *coord,
+                config,
+            }))?;
             Ok(())
         });
     }

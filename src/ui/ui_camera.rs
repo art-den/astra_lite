@@ -2,7 +2,7 @@ use std::{rc::Rc, sync::Arc, cell::{Cell, RefCell}};
 use gtk::{cairo, glib::{self, clone}, prelude::*};
 use macros::FromBuilder;
 use crate::{
-    core::{api::Command, cur_devices::CurDevices, engine::*, events::*, frame_processing::*, utils::{FileNameArg, FileNameUtils}}, hal::{DeviceType, FrameType, HalState, events::HalEvent}, image::{info::*, raw::CalibrMethods}, options::*, utils::log_utils::log_if_error,
+    core::{api::{Command, StartMode}, cur_devices::CurDevices, engine::*, events::*, frame_processing::*, utils::{FileNameArg, FileNameUtils}}, hal::{DeviceType, FrameType, HalState, events::HalEvent}, image::{info::*, raw::CalibrMethods}, options::*, utils::log_utils::log_if_error,
 };
 use super::{gtk_utils::*, module::*, ui_main::*, ui_start_dialog::StartDialog, utils::*};
 
@@ -1653,7 +1653,7 @@ impl CameraUi {
     fn start_live_view(&self) {
         self.main_ui.get_all_options();
         exec_and_show_error(Some(&self.window), || {
-            self.engine.start_live_view()?;
+            self.engine.exec_command(Command::Start(StartMode::LiveView))?;
             Ok(())
         });
     }
@@ -1661,13 +1661,16 @@ impl CameraUi {
     fn handler_action_take_shot(&self) {
         self.main_ui.get_all_options();
         exec_and_show_error(Some(&self.window), || {
-            self.engine.start_single_shot()?;
+            self.engine.exec_command(Command::Start(StartMode::SingleShot))?;
             Ok(())
         });
     }
 
     fn handler_action_stop_shot(&self) {
-        self.engine.abort_active_mode();
+        log_if_error(
+            &self.engine.exec_command(Command::StopActiveMode),
+            "Stop active mode"
+        );
     }
 
     fn show_cur_temperature_value(
@@ -1703,7 +1706,10 @@ impl CameraUi {
             self.main_ui.get_all_options();
             self.start_live_view();
         } else {
-            self.engine.abort_active_mode();
+            log_if_error(
+                &self.engine.exec_command(Command::StopActiveMode),
+                "Stop active mode"
+            );
         }
     }
 
@@ -1734,20 +1740,23 @@ impl CameraUi {
             &info_pairs
         );
         dialog.exec(clone!(@strong self as self_ => move || {
-            self_.engine.start_live_stacking()?;
+            self_.engine.exec_command(Command::Start(StartMode::LiveStacking))?;
             Ok(())
         }));
     }
 
     fn handler_action_stop_live_stacking(&self) {
-        self.engine.abort_active_mode();
+        log_if_error(
+            &self.engine.exec_command(Command::StopActiveMode),
+            "Stop active mode"
+        );
     }
 
     fn handler_action_continue_live_stacking(&self) {
         self.main_ui.get_all_options();
         exec_and_show_error(Some(&self.window), || {
             self.engine.check_before_saving_raw_or_live_stacking()?;
-            self.engine.continue_aborted_mode()?;
+            self.engine.exec_command(Command::ContinueAbortedMode)?;
             Ok(())
         });
     }
@@ -1902,7 +1911,7 @@ impl CameraUi {
             &info_pairs
         );
         dialog.exec(clone!(@strong self as self_ => move || {
-            self_.engine.start_saving_raw_frames()?;
+            self_.engine.exec_command(Command::Start(StartMode::SavingRawFrames))?;
             Ok(())
         }));
     }
@@ -1911,13 +1920,16 @@ impl CameraUi {
         self.main_ui.get_all_options();
         exec_and_show_error(Some(&self.window), || {
             self.engine.check_before_saving_raw_or_live_stacking()?;
-            self.engine.continue_aborted_mode()?;
+            self.engine.exec_command(Command::ContinueAbortedMode)?;
             Ok(())
         });
     }
 
     fn handler_action_stop_save_raw_frames(&self) {
-        self.engine.abort_active_mode();
+        log_if_error(
+            &self.engine.exec_command(Command::StopActiveMode),
+            "Stop active mode"
+        );
     }
 
     fn show_total_raw_time_impl(&self, options: &Options) {

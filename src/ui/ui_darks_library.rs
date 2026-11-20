@@ -4,7 +4,8 @@ use itertools::Itertools;
 use macros::FromBuilder;
 use serde::{Deserialize, Serialize};
 use crate::{
-    core::{engine::*, events::*, mode_darks_lib::*}, hal::Camera, image::info::seconds_to_total_time_str, options::*, utils::io_utils::*
+    core::{api::{Command, StartMode}, engine::*, events::*, mode_darks_lib::*}, hal::Camera, image::info::seconds_to_total_time_str, options::*,
+    utils::{io_utils::*, log_utils::log_if_error}
 };
 
 use super::{gtk_utils::*, module::*};
@@ -1102,7 +1103,9 @@ impl DarksLibraryUI {
             drop(ui_options);
             drop(options);
 
-            self.engine.start_creating_dark_library(mode, &program)?;
+            self.engine.exec_command(Command::Start(
+                StartMode::CreatingDarkLibrary { mode, program }
+            ))?;
             Ok(())
         });
     }
@@ -1156,7 +1159,10 @@ impl DarksLibraryUI {
     }
 
     fn handler_action_stop_creating_defect_pixels_files(&self) {
-        self.engine.abort_active_mode();
+        log_if_error(
+            &self.engine.exec_command(Command::StopActiveMode),
+            "Stop active mode"
+        );
     }
 
     fn handler_action_create_dark_files(&self) {
@@ -1164,7 +1170,10 @@ impl DarksLibraryUI {
     }
 
     fn handler_action_stop_dark_files(&self) {
-        self.engine.abort_active_mode();
+        log_if_error(
+            &self.engine.exec_command(Command::StopActiveMode),
+            "Stop active mode"
+        );
     }
 
     fn handler_action_create_bias_files(&self) {
@@ -1172,6 +1181,9 @@ impl DarksLibraryUI {
     }
 
     fn handler_action_stop_bias_files(&self) {
-        self.engine.abort_active_mode();
+        log_if_error(
+            &self.engine.exec_command(Command::StopActiveMode),
+            "Stop active mode"
+        );
     }
 }

@@ -3,7 +3,7 @@ use gtk::{glib, gdk, prelude::*, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
-    core::{api::{Command, FocuserCommand, Reply}, engine::{Engine, ModeKind}, events::*, mode_focusing::*},
+    core::{api::{Command, FocuserCommand, Reply, StartMode}, engine::{Engine, ModeKind}, events::*, mode_focusing::*},
     hal::{DeviceType, FocuserState, HalState, events::HalEvent},
     options::*,
     ui::plots::*,
@@ -628,13 +628,16 @@ impl FocuserUi {
         self.main_ui.get_all_options();
 
         exec_and_show_error(Some(&self.window), || {
-            self.engine.start_focusing()?;
+            self.engine.exec_command(Command::Start(StartMode::Focusing))?;
             Ok(())
         });
     }
 
     fn handler_action_stop_manual_focus(&self) {
-        self.engine.abort_active_mode();
+        log_if_error(
+            &self.engine.exec_command(Command::StopActiveMode),
+            "Stop active mode"
+        );
     }
 
     fn update_focuser_value(&self, offset: i32) {
