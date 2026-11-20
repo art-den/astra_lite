@@ -28,6 +28,7 @@ Note for those editing this file: The file should contain only general informati
 ## Architecture (Modules)
 
 - `src/core` - System core: engine, working modes, frame processing, events, camera control, guiding by main camera, live stacking, raw calibration.
+- `src/core/api.rs` - Single serializable entry point for engine state mutations from the UI (`Engine::exec_command` for fast commands, `Engine::submit_command` for blocking device commands; replies via `Event::CommandReply`). New mutations in `src/ui` must go only through `Command`, not direct `options.write()` or HAL calls.
 - `src/guiding` - API for external auto-guiding software (PHD2).
 - `src/hal` - Hardware Abstraction Layer for connecting cameras, telescopes (mounts), focusers, filter wheels (interfaces and implementations):
   - "INDI" (Instrument-Neutral-Device-Interface) - all platforms
