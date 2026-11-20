@@ -2,8 +2,13 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use super::{commands::{ModeCommand, ModeCommandReply}, engine::Engine};
-use crate::hal::TelescopeMoveDir;
+use std::path::PathBuf;
+
+use super::{commands::{ModeCommand, ModeCommandReply}, engine::Engine, events::Event};
+use crate::{
+    hal::{FrameType, TelescopeMoveDir},
+    options::{Binning, Crop, StarRecognSensitivity},
+};
 
 /// Telescope (mount) control commands.
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -56,6 +61,38 @@ pub enum Command {
     SetMountDevice       { device_id: String },
     SetFocuserDevice     { device_id: String },
     SetFilterWheelDevice { device_id: String },
+    // Camera options: one command per "field group -> event" pair (same events
+    // the GTK panels sent before the facade).
+    SetCooling  { enable_cooler: bool, temperature: f64 },
+    SetFan      { enable_fan: bool },
+    SetHeater   { heater_str: Option<String> },
+    SetCamReadoutOptions { conv_gain_str: Option<String>, low_noise: bool, high_fullwell: bool },
+    SetFrameType { frame_type: FrameType },
+    SetAutoExpEnabled { enabled: bool },
+    SetExposure { exposure: f64 },
+    SetGain     { gain: f64 },
+    SetOffset   { offset: i32 },
+    SetBinning  { binning: Binning },
+    SetCrop     { crop: Crop },
+    SetRawFramesCount { frame_cnt: usize },
+    SetLiveViewEnabled { enabled: bool },
+    SetLiveStackingOptions { remove_tracks: bool, frame_cnt: usize },
+    SetQualityOptions {
+        use_max_fwhm:      bool,
+        max_fwhm:          f32,
+        use_max_ovality:   bool,
+        max_ovality:       f32,
+        ignore_3px_stars:  bool,
+        star_recogn_sens:  StarRecognSensitivity,
+        check_ccd_temp:    bool,
+        max_ccd_temp_diff: f64,
+    },
+    SetCalibrOptions {
+        dark_frame_en:    bool,
+        flat_frame_en:    bool,
+        flat_frame_fname: String,
+        hot_pixels:       bool,
+    },
 }
 
 /// Reply to a `Command`.
@@ -75,6 +112,146 @@ impl Engine {
         log::debug!("Engine command: {:?}", cmd);
         match cmd {
             Command::Mode(mode_cmd) => Ok(Reply::Mode(self.exec_mode_command(mode_cmd)?)),
+            Command::SetCooling { enable_cooler, temperature } => {
+                let mut options = self.options.write().unwrap();
+                if options.cam.ctrl.enable_cooler == enable_cooler
+                    && options.cam.ctrl.temperature == temperature {
+                    return Ok(Reply::Empty);
+                }
+                options.cam.ctrl.enable_cooler = enable_cooler;
+                options.cam.ctrl.temperature = temperature;
+                drop(options);
+                self.events.send(Event::CameraCoolingOptionsChanged);
+                Ok(Reply::Empty)
+            }
+            Command::SetFan { enable_fan } => {
+                let mut options = self.options.write().unwrap();
+                if options.cam.ctrl.enable_fan == enable_fan {
+                    return Ok(Reply::Empty);
+                }
+                options.cam.ctrl.enable_fan = enable_fan;
+                drop(options);
+                self.events.send(Event::CameraFanOptionsChanged);
+                Ok(Reply::Empty)
+            }
+            Command::SetHeater { heater_str } => {
+                let mut options = self.options.write().unwrap();
+                if options.cam.ctrl.heater_str == heater_str {
+                    return Ok(Reply::Empty);
+                }
+                options.cam.ctrl.heater_str = heater_str;
+                drop(options);
+                self.events.send(Event::CameraHeaterOptionsChanged);
+                Ok(Reply::Empty)
+            }
+            Command::SetCamReadoutOptions { conv_gain_str, low_noise, high_fullwell } => {
+                let mut options = self.options.write().unwrap();
+                options.cam.ctrl.conv_gain_str = conv_gain_str;
+                options.cam.ctrl.low_noise = low_noise;
+                options.cam.ctrl.high_fullwell = high_fullwell;
+                Ok(Reply::Empty)
+            }
+            Command::SetFrameType { frame_type } => {
+                let mut options = self.options.write().unwrap();
+                if options.cam.frame.frame_type == frame_type {
+                    return Ok(Reply::Empty);
+                }
+                options.cam.frame.frame_type = frame_type;
+                drop(options);
+                self.events.send(Event::CameraFrameTypeChanged);
+                Ok(Reply::Empty)
+            }
+            Command::SetAutoExpEnabled { enabled } => {
+                self.options.write().unwrap().cam.frame.auto_exp = enabled;
+                Ok(Reply::Empty)
+            }
+            Command::SetExposure { exposure } => {
+                let mut options = self.options.write().unwrap();
+                if options.cam.frame.exposure() == exposure {
+                    return Ok(Reply::Empty);
+                }
+                options.cam.frame.set_exposure(exposure);
+                drop(options);
+                self.events.send(Event::CameraExposureChanged);
+                Ok(Reply::Empty)
+            }
+            Command::SetGain { gain } => {
+                let mut options = self.options.write().unwrap();
+                if options.cam.frame.gain == gain {
+                    return Ok(Reply::Empty);
+                }
+                options.cam.frame.gain = gain;
+                drop(options);
+                self.events.send(Event::CameraFrameOptionsChanged);
+                Ok(Reply::Empty)
+            }
+            Command::SetOffset { offset } => {
+                let mut options = self.options.write().unwrap();
+                if options.cam.frame.offset == offset {
+                    return Ok(Reply::Empty);
+                }
+                options.cam.frame.offset = offset;
+                drop(options);
+                self.events.send(Event::CameraFrameOptionsChanged);
+                Ok(Reply::Empty)
+            }
+            Command::SetBinning { binning } => {
+                let mut options = self.options.write().unwrap();
+                if options.cam.frame.binning == binning {
+                    return Ok(Reply::Empty);
+                }
+                options.cam.frame.binning = binning;
+                drop(options);
+                self.events.send(Event::CameraFrameOptionsChanged);
+                Ok(Reply::Empty)
+            }
+            Command::SetCrop { crop } => {
+                let mut options = self.options.write().unwrap();
+                if options.cam.frame.crop == crop {
+                    return Ok(Reply::Empty);
+                }
+                options.cam.frame.crop = crop;
+                drop(options);
+                self.events.send(Event::CameraFrameOptionsChanged);
+                Ok(Reply::Empty)
+            }
+            Command::SetRawFramesCount { frame_cnt } => {
+                self.options.write().unwrap().raw_frames.frame_cnt = frame_cnt;
+                Ok(Reply::Empty)
+            }
+            Command::SetLiveViewEnabled { enabled } => {
+                self.options.write().unwrap().cam.live_view = enabled;
+                Ok(Reply::Empty)
+            }
+            Command::SetLiveStackingOptions { remove_tracks, frame_cnt } => {
+                let mut options = self.options.write().unwrap();
+                options.live.remove_tracks = remove_tracks;
+                options.live.frame_cnt = frame_cnt;
+                Ok(Reply::Empty)
+            }
+            Command::SetQualityOptions {
+                use_max_fwhm, max_fwhm, use_max_ovality, max_ovality,
+                ignore_3px_stars, star_recogn_sens, check_ccd_temp, max_ccd_temp_diff,
+            } => {
+                let mut options = self.options.write().unwrap();
+                options.quality.use_max_fwhm       = use_max_fwhm;
+                options.quality.max_fwhm           = max_fwhm;
+                options.quality.use_max_ovality    = use_max_ovality;
+                options.quality.max_ovality        = max_ovality;
+                options.quality.ignore_3px_stars   = ignore_3px_stars;
+                options.quality.star_recogn_sens   = star_recogn_sens;
+                options.quality.check_ccd_temp     = check_ccd_temp;
+                options.quality.max_ccd_temp_diff  = max_ccd_temp_diff;
+                Ok(Reply::Empty)
+            }
+            Command::SetCalibrOptions { dark_frame_en, flat_frame_en, flat_frame_fname, hot_pixels } => {
+                let mut options = self.options.write().unwrap();
+                options.calibr.dark_frame_en    = dark_frame_en;
+                options.calibr.flat_frame_en    = flat_frame_en;
+                options.calibr.flat_frame_fname = PathBuf::from(flat_frame_fname);
+                options.calibr.hot_pixels       = hot_pixels;
+                Ok(Reply::Empty)
+            }
             Command::SetCameraDevice { device_id } => {
                 self.cur_devices.change_camera(&device_id);
                 Ok(Reply::Empty)
@@ -186,6 +363,33 @@ mod tests {
             Command::Focuser(FocuserCommand::MoveBy(-25.5)),
             Command::Focuser(FocuserCommand::SetAbs(1000.0)),
             Command::FilterWheel(FilterWheelCommand::SetSlot { slot: 3 }),
+            Command::SetCooling { enable_cooler: true, temperature: -10.5 },
+            Command::SetFan { enable_fan: false },
+            Command::SetHeater { heater_str: Some("auto".to_string()) },
+            Command::SetHeater { heater_str: None },
+            Command::SetCamReadoutOptions {
+                conv_gain_str: Some("x1".to_string()), low_noise: true, high_fullwell: false,
+            },
+            Command::SetFrameType { frame_type: FrameType::Flats },
+            Command::SetAutoExpEnabled { enabled: true },
+            Command::SetExposure { exposure: 3.25 },
+            Command::SetGain { gain: 100.0 },
+            Command::SetOffset { offset: -10 },
+            Command::SetBinning { binning: Binning::Bin2 },
+            Command::SetCrop { crop: Crop::P50 },
+            Command::SetRawFramesCount { frame_cnt: 10 },
+            Command::SetLiveViewEnabled { enabled: true },
+            Command::SetLiveStackingOptions { remove_tracks: true, frame_cnt: 42 },
+            Command::SetQualityOptions {
+                use_max_fwhm: true, max_fwhm: 4.5, use_max_ovality: false,
+                max_ovality: 2.25, ignore_3px_stars: true,
+                star_recogn_sens: StarRecognSensitivity::High,
+                check_ccd_temp: false, max_ccd_temp_diff: 1.5,
+            },
+            Command::SetCalibrOptions {
+                dark_frame_en: true, flat_frame_en: false,
+                flat_frame_fname: "/tmp/flat.fits".to_string(), hot_pixels: true,
+            },
         ] {
             roundtrip(cmd);
         }
