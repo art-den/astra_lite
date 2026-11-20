@@ -637,7 +637,7 @@ impl IndiPanelWidget {
                     .iter()
                     .map(|(name, entry)| (name.to_string(), entry.text().to_string()))
                     .collect();
-                _ = engine.exec_command(Command::Indi(IndiCommand::SetTextProperty {
+                _ = engine.submit_command(Command::Indi(IndiCommand::SetTextProperty {
                     device: device_string.clone(),
                     prop: prop_name_string.clone(),
                     elements,
@@ -762,7 +762,7 @@ impl IndiPanelWidget {
                     .iter()
                     .map(|(name, spin)| (name.to_string(), spin.value()))
                     .collect();
-                _ = engine.exec_command(Command::Indi(IndiCommand::SetNumberProperty {
+                _ = engine.submit_command(Command::Indi(IndiCommand::SetNumberProperty {
                     device: device_string.clone(),
                     prop: prop_name_string.clone(),
                     elements,
@@ -816,7 +816,7 @@ impl IndiPanelWidget {
                 let one_btn = property.elements.len() == 1;
                 button.connect_clicked(move |btn| {
                     if !btn.is_sensitive() { return; }
-                    _ = engine.exec_command(Command::Indi(IndiCommand::SetSwitchProperty {
+                    _ = engine.submit_command(Command::Indi(IndiCommand::SetSwitchProperty {
                         device: device_string.clone(),
                         prop: prop_name_string.clone(),
                         elements: vec![(elem_name.to_string(), true)],
@@ -842,7 +842,7 @@ impl IndiPanelWidget {
                 bx.add(&button);
                 button.connect_active_notify(move |btn| {
                     if !btn.is_sensitive() { return; }
-                    _ = engine.exec_command(Command::Indi(IndiCommand::SetSwitchProperty {
+                    _ = engine.submit_command(Command::Indi(IndiCommand::SetSwitchProperty {
                         device: device_string.clone(),
                         prop: prop_name_string.clone(),
                         elements: vec![(elem_name.to_string(), btn.is_active())],

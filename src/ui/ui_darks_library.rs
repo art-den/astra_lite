@@ -1,4 +1,4 @@
-use std::{cell::RefCell, rc::Rc, sync::Arc};
+use std::{cell::RefCell, collections::HashSet, rc::Rc, sync::Arc};
 use gtk::{gdk::ffi::GDK_CURRENT_TIME, glib::{self, clone}, prelude::*};
 use itertools::Itertools;
 use macros::FromBuilder;
@@ -31,9 +31,10 @@ pub fn init_ui(
 
     let obj = Rc::new(DarksLibraryUI {
         widgets,
-        window:     window.clone(),
-        engine:     Arc::clone(engine),
-        ui_options: RefCell::new(ui_options),
+        window:       window.clone(),
+        engine:       Arc::clone(engine),
+        ui_options:   RefCell::new(ui_options),
+        pending_cmds: RefCell::new(HashSet::new()),
     });
 
     obj.init_widgets();
@@ -556,10 +557,11 @@ struct Widgets {
 }
 
 pub struct DarksLibraryUI {
-    widgets:    Widgets,
-    window:     gtk::ApplicationWindow,
-    engine:     Arc<Engine>,
-    ui_options: RefCell<UiOptions>,
+    widgets:      Widgets,
+    window:       gtk::ApplicationWindow,
+    engine:       Arc<Engine>,
+    ui_options:   RefCell<UiOptions>,
+    pending_cmds: RefCell<HashSet<u64>>,
 }
 
 impl Drop for DarksLibraryUI {
@@ -1103,9 +1105,12 @@ impl DarksLibraryUI {
             drop(ui_options);
             drop(options);
 
-            self.engine.exec_command(Command::Start(
-                StartMode::CreatingDarkLibrary { mode, program }
-            ))?;
+            match self.engine.submit_command(
+                Command::Start(StartMode::CreatingDarkLibrary { mode, program })
+            ) {
+                Ok(id) => { _ = self.pending_cmds.borrow_mut().insert(id); }
+                Err(err) => show_error_message(Some(&self.window), "Error", &err.to_string()),
+            }
             Ok(())
         });
     }
@@ -1119,6 +1124,14 @@ impl DarksLibraryUI {
         };
 
         match event {
+            Event::CommandReply { id, result } => {
+                if !self.pending_cmds.borrow_mut().remove(&id) {
+                    return;
+                }
+                if let Err(err_msg) = result {
+                    show_error_message(Some(&self.window), "Error", &err_msg);
+                }
+            }
             Event::Progress(Some(progress), ModeKind::CreatingDefectPixels) => {
                 show_progress(&self.widgets.dp.prb_def, progress.cur, progress.total);
                 self.correct_widgets_enable_state();

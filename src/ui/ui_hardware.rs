@@ -50,6 +50,7 @@ pub fn init_ui(
         aa_state:     RefCell::new(HalState::Disconnected),
         is_remote:    Cell::new(false),
         opts_syncing: Cell::new(false),
+        pending_cmds: RefCell::new(HashMap::new()),
         main_ui:      Rc::clone(main_ui),
         window:       window.clone(),
         widgets,
@@ -177,6 +178,14 @@ struct HardwareUi {
     /// Set while widgets are programmatically synced from `Options`: option
     /// write handlers must not run (callers hold the `options` read guard).
     opts_syncing: Cell<bool>,
+    pending_cmds: RefCell<HashMap<u64, ConnectPending>>,
+}
+
+#[derive(PartialEq)]
+enum ConnectPending {
+    Plain,
+    IndiConnect,
+    Guider,
 }
 
 impl Drop for HardwareUi {
@@ -304,6 +313,22 @@ impl UiModule for HardwareUi {
                 let diff_with_cur = f64::abs(self.widgets.telescope.spb_guid_foc_len.value() - focal_len);
                 if diff_with_cur < 0.1 { return; }
                 self.widgets.telescope.spb_guid_foc_len.set_value(*focal_len);
+            }
+            Event::CommandReply { id, result } => {
+                let Some(pending) = self.pending_cmds.borrow_mut().remove(id) else {
+                    return;
+                };
+                match result {
+                    Err(err_msg) => show_error_message(Some(&self.window), "Error", err_msg),
+                    Ok(_) => match pending {
+                        ConnectPending::Plain => {}
+                        ConnectPending::IndiConnect => {
+                            let remote = self.engine.options.read().unwrap().indi.remote;
+                            self.is_remote.set(remote);
+                        }
+                        ConnectPending::Guider => self.correct_widgets_by_cur_state(),
+                    },
+                }
             }
             _ => {},
         }
@@ -694,80 +719,63 @@ impl HardwareUi {
 
     fn handler_action_conn_indi(&self) {
         self.sync_options_from_widgets();
-        exec_and_show_error(Some(&self.window), || {
-            let cmd = {
-                let options = self.engine.options.read().unwrap();
-                ConnectCommand::ConnectIndi {
-                    remote:    options.indi.remote,
-                    address:   options.indi.address.clone(),
-                    mount:     options.indi.mount.clone(),
-                    camera:    options.indi.camera.clone(),
-                    guid_cam:  options.indi.guid_cam.clone(),
-                    focuser:   options.indi.focuser.clone(),
-                    flt_wheel: options.indi.flt_wheel.clone(),
-                    aux1:      options.indi.aux1.clone(),
-                    aux2:      options.indi.aux2.clone(),
-                }
-            };
-            self.engine.exec_command(Command::Connect(cmd))?;
-            let remote = self.engine.options.read().unwrap().indi.remote;
-            self.is_remote.set(remote);
-            Ok(())
-        });
+        let cmd = {
+            let options = self.engine.options.read().unwrap();
+            ConnectCommand::ConnectIndi {
+                remote:    options.indi.remote,
+                address:   options.indi.address.clone(),
+                mount:     options.indi.mount.clone(),
+                camera:    options.indi.camera.clone(),
+                guid_cam:  options.indi.guid_cam.clone(),
+                focuser:   options.indi.focuser.clone(),
+                flt_wheel: options.indi.flt_wheel.clone(),
+                aux1:      options.indi.aux1.clone(),
+                aux2:      options.indi.aux2.clone(),
+            }
+        };
+        self.submit_connect_cmd(Command::Connect(cmd), ConnectPending::IndiConnect);
     }
 
     fn handler_action_disconn_indi(&self) {
-        exec_and_show_error(Some(&self.window), || {
-            self.engine.exec_command(
-                Command::Connect(ConnectCommand::DisconnectIndi {
-                    disable_all: !self.is_remote.get(),
-                })
-            )?;
-            Ok(())
-        });
+        self.submit_connect_cmd(
+            Command::Connect(ConnectCommand::DisconnectIndi {
+                disable_all: !self.is_remote.get(),
+            }),
+            ConnectPending::Plain
+        );
     }
 
     #[cfg(windows)]
     fn handler_action_conn_aa(&self) {
         self.sync_options_from_widgets();
-        exec_and_show_error(Some(&self.window), || {
-            let address = self.engine.options.read().unwrap().ascom_alpaca.address.clone();
-            self.engine.exec_command(
-                Command::Connect(ConnectCommand::ConnectAlpaca { address })
-            )?;
-            Ok(())
-        });
+        let address = self.engine.options.read().unwrap().ascom_alpaca.address.clone();
+        self.submit_connect_cmd(
+            Command::Connect(ConnectCommand::ConnectAlpaca { address }),
+            ConnectPending::Plain
+        );
     }
 
     #[cfg(windows)]
     fn handler_action_disconn_aa(&self) {
-        exec_and_show_error(Some(&self.window), || {
-            self.engine.exec_command(
-                Command::Connect(ConnectCommand::DisconnectAlpaca)
-            )?;
-            Ok(())
-        });
+        self.submit_connect_cmd(
+            Command::Connect(ConnectCommand::DisconnectAlpaca),
+            ConnectPending::Plain
+        );
     }
 
     fn handler_action_conn_phd2(&self) {
-        exec_and_show_error(Some(&self.window), || {
-            self.sync_options_from_widgets();
-            self.engine.exec_command(
-                Command::Guider(GuiderCommand::ConnectPhd2)
-            )?;
-            self.correct_widgets_by_cur_state();
-            Ok(())
-        });
+        self.sync_options_from_widgets();
+        self.submit_connect_cmd(
+            Command::Guider(GuiderCommand::ConnectPhd2),
+            ConnectPending::Guider
+        );
     }
 
     fn handler_action_disconn_phd2(&self) {
-        exec_and_show_error(Some(&self.window), || {
-            self.engine.exec_command(
-                Command::Guider(GuiderCommand::DisconnectPhd2)
-            )?;
-            self.correct_widgets_by_cur_state();
-            Ok(())
-        });
+        self.submit_connect_cmd(
+            Command::Guider(GuiderCommand::DisconnectPhd2),
+            ConnectPending::Guider
+        );
     }
 
     fn fill_devices_name(&self) {
@@ -991,15 +999,20 @@ impl HardwareUi {
     }
 
     fn set_switch_property_for_all_device(&self, prop_name: &str, elem_name: &str) {
-        exec_and_show_error(Some(&self.window), || {
-            self.engine.exec_command(Command::Indi(
-                IndiCommand::SetSwitchElementForAllDevices {
-                    prop: prop_name.to_string(),
-                    element: elem_name.to_string(),
-                }
-            ))?;
-            Ok(())
-        });
+        self.submit_connect_cmd(
+            Command::Indi(IndiCommand::SetSwitchElementForAllDevices {
+                prop: prop_name.to_string(),
+                element: elem_name.to_string(),
+            }),
+            ConnectPending::Plain
+        );
+    }
+
+    fn submit_connect_cmd(&self, cmd: Command, pending: ConnectPending) {
+        match self.engine.submit_command(cmd) {
+            Ok(id) => { _ = self.pending_cmds.borrow_mut().insert(id, pending); }
+            Err(err) => show_error_message(Some(&self.window), "Error", &err.to_string()),
+        }
     }
 
     fn handler_action_get_site_from_devices(self: &Rc<Self>) {
