@@ -79,6 +79,61 @@ pub enum NotifyResult {
     Exec(Box<dyn FnOnce(&Arc<Engine>, &mut EngineModes)-> eyre::Result<()> + 'static + Send + Sync>),
 }
 
+/// Device domains serialized by the engine busy flags: a command for a domain
+/// that is already running is rejected with a "busy" error (never silently
+/// dropped, so a future web client sees the rejection).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BusyDomain {
+    Mount,
+    /// Reserved: camera operations do not go through the facade yet.
+    #[allow(dead_code)]
+    Camera,
+    Focuser,
+    FilterWheel,
+    Guider,
+    Indi,
+    Connect,
+}
+
+const BUSY_DOMAIN_COUNT: usize = 7;
+
+struct DeviceBusyFlags {
+    flags: [AtomicBool; BUSY_DOMAIN_COUNT],
+}
+
+impl DeviceBusyFlags {
+    fn new() -> Self {
+        Self { flags: std::array::from_fn(|_| AtomicBool::new(false)) }
+    }
+
+    fn idx(domain: BusyDomain) -> usize {
+        let idx = match domain {
+            BusyDomain::Mount       => 0,
+            BusyDomain::Camera      => 1,
+            BusyDomain::Focuser     => 2,
+            BusyDomain::FilterWheel => 3,
+            BusyDomain::Guider      => 4,
+            BusyDomain::Indi        => 5,
+            BusyDomain::Connect     => 6,
+        };
+        debug_assert!(idx < BUSY_DOMAIN_COUNT);
+        idx
+    }
+}
+
+/// Releases the busy flag on drop.
+pub(crate) struct BusyGuard<'a> {
+    flags:  &'a DeviceBusyFlags,
+    domain: BusyDomain,
+}
+
+impl Drop for BusyGuard<'_> {
+    fn drop(&mut self) {
+        self.flags.flags[DeviceBusyFlags::idx(self.domain)]
+            .store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
 pub struct EngineModes {
     pub active:   ModeBox,
     pub finished: Option<ModeBox>,
@@ -113,6 +168,7 @@ pub struct Engine {
     timer:              Arc<Timer>,
     img_proc_stop_flag: Mutex<Arc<AtomicBool>>, // stop flag for last command
     frame_processing:   Arc<FrameProcessing>,
+    device_busy:        DeviceBusyFlags,
 
 }
 
@@ -150,6 +206,7 @@ impl Engine {
             cur_devices,
             hal,
             frame_processing,
+            device_busy: DeviceBusyFlags::new(),
             events,
         });
 
@@ -157,6 +214,21 @@ impl Engine {
         this.connect_events();
         this.start_timer();
         this
+    }
+
+    /// Locks the busy flag of a device domain for the lifetime of the returned
+    /// guard; `Err` if a command of that domain is already in progress.
+    #[must_use = "the guard releases the busy flag when dropped"]
+    pub(crate) fn lock_device_busy(&self, domain: BusyDomain) -> eyre::Result<BusyGuard<'_>> {
+        let flag = &self.device_busy.flags[DeviceBusyFlags::idx(domain)];
+        if flag.compare_exchange(
+            false, true,
+            std::sync::atomic::Ordering::Acquire,
+            std::sync::atomic::Ordering::Relaxed
+        ).is_err() {
+            eyre::bail!("Device domain {:?} is busy", domain);
+        }
+        Ok(BusyGuard { flags: &self.device_busy, domain })
     }
 
     pub fn stop(self: &Arc<Self>) {

@@ -4,7 +4,15 @@ use serde::{Deserialize, Serialize};
 
 use std::path::PathBuf;
 
-use super::{commands::{ModeCommand, ModeCommandReply}, engine::Engine, events::Event, mode_darks_lib::{DarkLibMode, MasterFileCreationProgramItem}, mode_goto::GotoConfig};
+use super::{
+    commands::{ModeCommand, ModeCommandReply},
+    engine::{BusyDomain, Engine},
+    events::Event,
+    mode_darks_lib::{DarkLibMode, MasterFileCreationProgramItem},
+    mode_goto::GotoConfig,
+};
+
+/// Raw INDI property commands
 use crate::{
     guiding::external_guider::ExtGuiderType,
     hal::{FrameType, TelescopeMoveDir},
@@ -16,6 +24,40 @@ use crate::{
 };
 #[cfg(windows)]
 use crate::hal::HalImpl;
+
+/// Device domain gated by the engine busy flag for this command.
+/// Device-selection, mode lifecycle and option commands below are fast and
+/// intentionally not gated; new device-domain variants must be added here
+/// explicitly (no wildcard arm).
+fn busy_domain_of(cmd: &Command) -> Option<BusyDomain> {
+    match cmd {
+        Command::Mount(_)       => Some(BusyDomain::Mount),
+        Command::Focuser(_)     => Some(BusyDomain::Focuser),
+        Command::FilterWheel(_) => Some(BusyDomain::FilterWheel),
+        Command::Guider(_)      => Some(BusyDomain::Guider),
+        Command::Indi(_)        => Some(BusyDomain::Indi),
+        Command::Connect(_)     => Some(BusyDomain::Connect),
+        Command::Mode(_)
+        | Command::Start(_)
+        | Command::StopActiveMode
+        | Command::ContinueAbortedMode
+        | Command::SetCameraDevice{..} | Command::SetMountDevice{..}
+        | Command::SetFocuserDevice{..} | Command::SetFilterWheelDevice{..}
+        | Command::OpenImageFile{..}
+        | Command::Preview(_) => None,
+        // Option commands:
+        Command::SetCooling{..} | Command::SetFan{..} | Command::SetHeater{..}
+        | Command::SetCamReadoutOptions{..} | Command::SetFrameType{..}
+        | Command::SetAutoExpEnabled{..} | Command::SetExposure{..}
+        | Command::SetGain{..} | Command::SetOffset{..} | Command::SetBinning{..}
+        | Command::SetCrop{..} | Command::SetRawFramesCount{..}
+        | Command::SetLiveViewEnabled{..} | Command::SetLiveStackingOptions{..}
+        | Command::SetQualityOptions{..} | Command::SetCalibrOptions{..}
+        | Command::SetTelescopeFocalLen{..} | Command::SetBarlow{..}
+        | Command::SetGuidingFocalLen{..} | Command::SetFocuserOptions{..}
+        | Command::SetPlateSolverOptions{..} | Command::SetGuidingOptions{..} => None,
+    }
+}
 
 /// Telescope (mount) control commands.
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -207,6 +249,10 @@ impl Engine {
     /// queue for blocking device operations is planned).
     pub fn exec_command(self: &Arc<Self>, cmd: Command) -> eyre::Result<Reply> {
         log::debug!("Engine command: {:?}", cmd);
+        let _busy = match busy_domain_of(&cmd) {
+            Some(domain) => Some(self.lock_device_busy(domain)?),
+            None => None,
+        };
         match cmd {
             Command::Mode(mode_cmd) => Ok(Reply::Mode(self.exec_mode_command(mode_cmd)?)),
             Command::Start(start_mode) => {
