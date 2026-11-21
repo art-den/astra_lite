@@ -87,6 +87,10 @@ pub fn init_ui(
     let map           = super::ui_skymap       ::init_ui(&main_ui.widgets.window, &main_ui, engine);
     let debug         = super::ui_debug        ::init_ui(&engine.options);
 
+    // Module init may mutate engine options through the facade (hardware panel
+    // forces INDI remote mode); refresh the display cache before first show
+    main_ui.refresh_snapshot_cache();
+
     let mut modules = main_ui.modules.borrow_mut();
     modules.add(hardware);
     modules.add(camera);

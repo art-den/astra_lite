@@ -47,8 +47,14 @@ pub fn init_ui(
     let drivers = query_indi_drivers(engine);
 
     if drivers.groups.is_empty() {
-        let mut options = engine.options.write().unwrap();
-        options.indi.remote = true; // force remote mode if no devices info
+        // Force remote mode if no devices info
+        log_if_error(
+            &engine.exec_command(Command::SetIndiSelection(IndiSelPatch {
+                remote: Some(true),
+                ..Default::default()
+            })),
+            "Force INDI remote mode"
+        );
     }
 
     let indi_widget = IndiPanelWidget::new(indi_hal.indi(), engine);
