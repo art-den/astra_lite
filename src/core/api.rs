@@ -46,16 +46,16 @@ fn busy_domain_of(cmd: &Command) -> Option<BusyDomain> {
         | Command::OpenImageFile{..}
         | Command::Preview(_) => None,
         // Option commands:
-        Command::SetCooling{..} | Command::SetFan{..} | Command::SetHeater{..}
-        | Command::SetCamReadoutOptions{..} | Command::SetFrameType{..}
+        Command::SetCooling(..) | Command::SetFan{..} | Command::SetHeater{..}
+        | Command::SetCamReadoutOptions(..) | Command::SetFrameType{..}
         | Command::SetAutoExpEnabled{..} | Command::SetExposure{..}
         | Command::SetGain{..} | Command::SetOffset{..} | Command::SetBinning{..}
         | Command::SetCrop{..} | Command::SetRawFramesCount{..}
-        | Command::SetLiveViewEnabled{..} | Command::SetLiveStackingOptions{..}
-        | Command::SetQualityOptions{..} | Command::SetCalibrOptions{..}
+        | Command::SetLiveViewEnabled{..} | Command::SetLiveStackingOptions(..)
+        | Command::SetQualityOptions(..) | Command::SetCalibrOptions(..)
         | Command::SetTelescopeFocalLen{..} | Command::SetBarlow{..}
-        | Command::SetGuidingFocalLen{..} | Command::SetFocuserOptions{..}
-        | Command::SetPlateSolverOptions{..} | Command::SetGuidingOptions{..} => None,
+        | Command::SetGuidingFocalLen{..} | Command::SetFocuserOptions(..)
+        | Command::SetPlateSolverOptions(..) | Command::SetGuidingOptions(..) => None,
     }
 }
 
@@ -174,6 +174,114 @@ pub enum ConnectCommand {
     DisconnectAlpaca,
 }
 
+/// Partial update of a group of options (PATCH semantics): a `None` field
+/// leaves the corresponding option unchanged. Every patch derives `Default`,
+/// so callers set only the fields they really changed:
+/// `QualityPatch { use_max_fwhm: Some(true), ..Default::default() }`.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(default)]
+pub struct CoolingPatch {
+    pub enable_cooler: Option<bool>,
+    pub temperature:   Option<f64>,
+}
+
+/// See [`CoolingPatch`].
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(default)]
+pub struct CamReadoutPatch {
+    /// Double `Option` patch field: absent in JSON = unchanged, `null` = set to `None`.
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "de_patch_opt")]
+    pub conv_gain_str:  Option<Option<String>>,
+    pub low_noise:      Option<bool>,
+    pub high_fullwell:  Option<bool>,
+}
+
+/// Deserialize a patch field with PATCH semantics: `null` means "set to `None`";
+/// a field absent from the payload means "unchanged" (handled by the container
+/// `#[serde(default)]`).
+fn de_patch_opt<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    struct OptOptVisitor<T>(std::marker::PhantomData<T>);
+    impl<'de, T: Deserialize<'de>> serde::de::Visitor<'de> for OptOptVisitor<T> {
+        type Value = Option<Option<T>>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("null or a value")
+        }
+        fn visit_some<D: serde::Deserializer<'de>>(
+            self, d: D,
+        ) -> Result<Self::Value, D::Error> {
+            Ok(Some(Option::<T>::deserialize(d)?))
+        }
+        fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(Some(None))
+        }
+        fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(Some(None))
+        }
+    }
+    deserializer.deserialize_option(OptOptVisitor(std::marker::PhantomData))
+}
+
+/// See [`CoolingPatch`].
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(default)]
+pub struct LiveStackingPatch {
+    pub remove_tracks: Option<bool>,
+    pub frame_cnt:     Option<usize>,
+}
+
+/// See [`CoolingPatch`].
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(default)]
+pub struct QualityPatch {
+    pub use_max_fwhm:      Option<bool>,
+    pub max_fwhm:          Option<f32>,
+    pub use_max_ovality:   Option<bool>,
+    pub max_ovality:       Option<f32>,
+    pub ignore_3px_stars:  Option<bool>,
+    pub star_recogn_sens:  Option<StarRecognSensitivity>,
+    pub check_ccd_temp:    Option<bool>,
+    pub max_ccd_temp_diff: Option<f64>,
+}
+
+/// See [`CoolingPatch`].
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(default)]
+pub struct CalibrPatch {
+    pub dark_frame_en:    Option<bool>,
+    pub flat_frame_en:    Option<bool>,
+    pub flat_frame_fname: Option<String>,
+    pub hot_pixels:       Option<bool>,
+}
+
+/// See [`CoolingPatch`].
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(default)]
+pub struct FocuserPatch {
+    pub exposure: Option<f64>,
+    pub gain:     Option<Gain>,
+}
+
+/// See [`CoolingPatch`].
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(default)]
+pub struct PlateSolverPatch {
+    pub exposure: Option<f64>,
+    pub gain:     Option<Gain>,
+    pub bin:      Option<Binning>,
+}
+
+/// See [`CoolingPatch`].
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(default)]
+pub struct GuidingPatch {
+    pub calibr_exposure: Option<f64>,
+    pub calibr_gain:     Option<Gain>,
+}
+
 /// Single serializable entry point for engine state mutations issued by the UI
 /// (and later by a future web server).
 ///
@@ -219,11 +327,12 @@ pub enum Command {
     SetFocuserDevice     { device_id: String },
     SetFilterWheelDevice { device_id: String },
     // Camera options: one command per "field group -> event" pair (same events
-    // the GTK panels sent before the facade).
-    SetCooling  { enable_cooler: bool, temperature: f64 },
+    // the GTK panels sent before the facade). Multi-field groups take a partial
+    // update patch (see [`CoolingPatch`]).
+    SetCooling(CoolingPatch),
     SetFan      { enable_fan: bool },
     SetHeater   { heater_str: Option<String> },
-    SetCamReadoutOptions { conv_gain_str: Option<String>, low_noise: bool, high_fullwell: bool },
+    SetCamReadoutOptions(CamReadoutPatch),
     SetFrameType { frame_type: FrameType },
     SetAutoExpEnabled { enabled: bool },
     SetExposure { exposure: f64 },
@@ -233,32 +342,18 @@ pub enum Command {
     SetCrop     { crop: Crop },
     SetRawFramesCount { frame_cnt: usize },
     SetLiveViewEnabled { enabled: bool },
-    SetLiveStackingOptions { remove_tracks: bool, frame_cnt: usize },
-    SetQualityOptions {
-        use_max_fwhm:      bool,
-        max_fwhm:          f32,
-        use_max_ovality:   bool,
-        max_ovality:       f32,
-        ignore_3px_stars:  bool,
-        star_recogn_sens:  StarRecognSensitivity,
-        check_ccd_temp:    bool,
-        max_ccd_temp_diff: f64,
-    },
-    SetCalibrOptions {
-        dark_frame_en:    bool,
-        flat_frame_en:    bool,
-        flat_frame_fname: String,
-        hot_pixels:       bool,
-    },
+    SetLiveStackingOptions(LiveStackingPatch),
+    SetQualityOptions(QualityPatch),
+    SetCalibrOptions(CalibrPatch),
     // Optics
     SetTelescopeFocalLen { focal_len: f64 },
     SetBarlow { barlow: f64 },
     SetGuidingFocalLen { foc_len: f64 },
     // Preview and misc options
     Preview(PreviewCommand),
-    SetFocuserOptions { exposure: f64, gain: Gain },
-    SetPlateSolverOptions { exposure: f64, gain: Gain, bin: Binning },
-    SetGuidingOptions { calibr_exposure: f64, calibr_gain: Gain },
+    SetFocuserOptions(FocuserPatch),
+    SetPlateSolverOptions(PlateSolverPatch),
+    SetGuidingOptions(GuidingPatch),
     OpenImageFile { path: String },
 }
 
@@ -316,14 +411,22 @@ impl Engine {
                 self.continue_aborted_mode()?;
                 Ok(Reply::Empty)
             }
-            Command::SetCooling { enable_cooler, temperature } => {
+            Command::SetCooling(patch) => {
                 let mut options = self.options.write().unwrap();
-                if options.cam.ctrl.enable_cooler == enable_cooler
-                    && options.cam.ctrl.temperature == temperature {
+                let mut changed = false;
+                if let Some(v) = patch.enable_cooler
+                    && options.cam.ctrl.enable_cooler != v {
+                        options.cam.ctrl.enable_cooler = v;
+                        changed = true;
+                }
+                if let Some(v) = patch.temperature
+                    && options.cam.ctrl.temperature != v {
+                        options.cam.ctrl.temperature = v;
+                        changed = true;
+                }
+                if !changed {
                     return Ok(Reply::Empty);
                 }
-                options.cam.ctrl.enable_cooler = enable_cooler;
-                options.cam.ctrl.temperature = temperature;
                 drop(options);
                 self.events.send(Event::CameraCoolingOptionsChanged);
                 Ok(Reply::Empty)
@@ -348,11 +451,11 @@ impl Engine {
                 self.events.send(Event::CameraHeaterOptionsChanged);
                 Ok(Reply::Empty)
             }
-            Command::SetCamReadoutOptions { conv_gain_str, low_noise, high_fullwell } => {
+            Command::SetCamReadoutOptions(patch) => {
                 let mut options = self.options.write().unwrap();
-                options.cam.ctrl.conv_gain_str = conv_gain_str;
-                options.cam.ctrl.low_noise = low_noise;
-                options.cam.ctrl.high_fullwell = high_fullwell;
+                if let Some(v) = patch.conv_gain_str { options.cam.ctrl.conv_gain_str = v; }
+                if let Some(v) = patch.low_noise     { options.cam.ctrl.low_noise = v; }
+                if let Some(v) = patch.high_fullwell { options.cam.ctrl.high_fullwell = v; }
                 Ok(Reply::Empty)
             }
             Command::SetFrameType { frame_type } => {
@@ -427,33 +530,32 @@ impl Engine {
                 self.options.write().unwrap().cam.live_view = enabled;
                 Ok(Reply::Empty)
             }
-            Command::SetLiveStackingOptions { remove_tracks, frame_cnt } => {
+            Command::SetLiveStackingOptions(patch) => {
                 let mut options = self.options.write().unwrap();
-                options.live.remove_tracks = remove_tracks;
-                options.live.frame_cnt = frame_cnt;
+                if let Some(v) = patch.remove_tracks { options.live.remove_tracks = v; }
+                if let Some(v) = patch.frame_cnt     { options.live.frame_cnt = v; }
                 Ok(Reply::Empty)
             }
-            Command::SetQualityOptions {
-                use_max_fwhm, max_fwhm, use_max_ovality, max_ovality,
-                ignore_3px_stars, star_recogn_sens, check_ccd_temp, max_ccd_temp_diff,
-            } => {
+            Command::SetQualityOptions(patch) => {
                 let mut options = self.options.write().unwrap();
-                options.quality.use_max_fwhm       = use_max_fwhm;
-                options.quality.max_fwhm           = max_fwhm;
-                options.quality.use_max_ovality    = use_max_ovality;
-                options.quality.max_ovality        = max_ovality;
-                options.quality.ignore_3px_stars   = ignore_3px_stars;
-                options.quality.star_recogn_sens   = star_recogn_sens;
-                options.quality.check_ccd_temp     = check_ccd_temp;
-                options.quality.max_ccd_temp_diff  = max_ccd_temp_diff;
+                if let Some(v) = patch.use_max_fwhm      { options.quality.use_max_fwhm = v; }
+                if let Some(v) = patch.max_fwhm          { options.quality.max_fwhm = v; }
+                if let Some(v) = patch.use_max_ovality   { options.quality.use_max_ovality = v; }
+                if let Some(v) = patch.max_ovality       { options.quality.max_ovality = v; }
+                if let Some(v) = patch.ignore_3px_stars  { options.quality.ignore_3px_stars = v; }
+                if let Some(v) = patch.star_recogn_sens  { options.quality.star_recogn_sens = v; }
+                if let Some(v) = patch.check_ccd_temp    { options.quality.check_ccd_temp = v; }
+                if let Some(v) = patch.max_ccd_temp_diff { options.quality.max_ccd_temp_diff = v; }
                 Ok(Reply::Empty)
             }
-            Command::SetCalibrOptions { dark_frame_en, flat_frame_en, flat_frame_fname, hot_pixels } => {
+            Command::SetCalibrOptions(patch) => {
                 let mut options = self.options.write().unwrap();
-                options.calibr.dark_frame_en    = dark_frame_en;
-                options.calibr.flat_frame_en    = flat_frame_en;
-                options.calibr.flat_frame_fname = PathBuf::from(flat_frame_fname);
-                options.calibr.hot_pixels       = hot_pixels;
+                if let Some(v) = patch.dark_frame_en    { options.calibr.dark_frame_en = v; }
+                if let Some(v) = patch.flat_frame_en    { options.calibr.flat_frame_en = v; }
+                if let Some(v) = patch.flat_frame_fname {
+                    options.calibr.flat_frame_fname = PathBuf::from(v);
+                }
+                if let Some(v) = patch.hot_pixels       { options.calibr.hot_pixels = v; }
                 Ok(Reply::Empty)
             }
             Command::SetTelescopeFocalLen { focal_len } => {
@@ -499,23 +601,27 @@ impl Engine {
                 }
                 Ok(Reply::Empty)
             }
-            Command::SetFocuserOptions { exposure, gain } => {
+            Command::SetFocuserOptions(patch) => {
                 let mut options = self.options.write().unwrap();
-                options.focuser.exposure = exposure;
-                options.focuser.gain = gain;
+                if let Some(v) = patch.exposure { options.focuser.exposure = v; }
+                if let Some(v) = patch.gain     { options.focuser.gain = v; }
                 Ok(Reply::Empty)
             }
-            Command::SetPlateSolverOptions { exposure, gain, bin } => {
+            Command::SetPlateSolverOptions(patch) => {
                 let mut options = self.options.write().unwrap();
-                options.plate_solver.exposure = exposure;
-                options.plate_solver.gain = gain;
-                options.plate_solver.bin = bin;
+                if let Some(v) = patch.exposure { options.plate_solver.exposure = v; }
+                if let Some(v) = patch.gain     { options.plate_solver.gain = v; }
+                if let Some(v) = patch.bin      { options.plate_solver.bin = v; }
                 Ok(Reply::Empty)
             }
-            Command::SetGuidingOptions { calibr_exposure, calibr_gain } => {
+            Command::SetGuidingOptions(patch) => {
                 let mut options = self.options.write().unwrap();
-                options.guiding.main_cam.calibr_exposure = calibr_exposure;
-                options.guiding.main_cam.calibr_gain = calibr_gain;
+                if let Some(v) = patch.calibr_exposure {
+                    options.guiding.main_cam.calibr_exposure = v;
+                }
+                if let Some(v) = patch.calibr_gain {
+                    options.guiding.main_cam.calibr_gain = v;
+                }
                 Ok(Reply::Empty)
             }
             Command::OpenImageFile { path } => {
@@ -738,13 +844,19 @@ mod tests {
             Command::Focuser(FocuserCommand::MoveBy(-25.5)),
             Command::Focuser(FocuserCommand::SetAbs(1000.0)),
             Command::FilterWheel(FilterWheelCommand::SetSlot { slot: 3 }),
-            Command::SetCooling { enable_cooler: true, temperature: -10.5 },
+            Command::SetCooling(CoolingPatch { enable_cooler: Some(true), temperature: Some(-10.5) }),
+            Command::SetCooling(CoolingPatch { temperature: Some(-5.0), ..Default::default() }),
             Command::SetFan { enable_fan: false },
             Command::SetHeater { heater_str: Some("auto".to_string()) },
             Command::SetHeater { heater_str: None },
-            Command::SetCamReadoutOptions {
-                conv_gain_str: Some("x1".to_string()), low_noise: true, high_fullwell: false,
-            },
+            Command::SetCamReadoutOptions(CamReadoutPatch {
+                conv_gain_str: Some(Some("x1".to_string())),
+                low_noise: Some(true), high_fullwell: Some(false),
+            }),
+            Command::SetCamReadoutOptions(CamReadoutPatch {
+                conv_gain_str: Some(None), ..Default::default()
+            }),
+            Command::SetCamReadoutOptions(CamReadoutPatch::default()),
             Command::SetFrameType { frame_type: FrameType::Flats },
             Command::SetAutoExpEnabled { enabled: true },
             Command::SetExposure { exposure: 3.25 },
@@ -754,17 +866,25 @@ mod tests {
             Command::SetCrop { crop: Crop::P50 },
             Command::SetRawFramesCount { frame_cnt: 10 },
             Command::SetLiveViewEnabled { enabled: true },
-            Command::SetLiveStackingOptions { remove_tracks: true, frame_cnt: 42 },
-            Command::SetQualityOptions {
-                use_max_fwhm: true, max_fwhm: 4.5, use_max_ovality: false,
-                max_ovality: 2.25, ignore_3px_stars: true,
-                star_recogn_sens: StarRecognSensitivity::High,
-                check_ccd_temp: false, max_ccd_temp_diff: 1.5,
-            },
-            Command::SetCalibrOptions {
-                dark_frame_en: true, flat_frame_en: false,
-                flat_frame_fname: "/tmp/flat.fits".to_string(), hot_pixels: true,
-            },
+            Command::SetLiveStackingOptions(LiveStackingPatch {
+                remove_tracks: Some(true), frame_cnt: Some(42),
+            }),
+            Command::SetQualityOptions(QualityPatch {
+                use_max_fwhm: Some(true), max_fwhm: Some(4.5), use_max_ovality: Some(false),
+                max_ovality: Some(2.25), ignore_3px_stars: Some(true),
+                star_recogn_sens: Some(StarRecognSensitivity::High),
+                check_ccd_temp: Some(false), max_ccd_temp_diff: Some(1.5),
+            }),
+            Command::SetQualityOptions(QualityPatch {
+                max_fwhm: Some(3.75), ..Default::default()
+            }),
+            Command::SetCalibrOptions(CalibrPatch {
+                dark_frame_en: Some(true), flat_frame_en: Some(false),
+                flat_frame_fname: Some("/tmp/flat.fits".to_string()), hot_pixels: Some(true),
+            }),
+            Command::SetCalibrOptions(CalibrPatch {
+                flat_frame_fname: Some("/tmp/flat2.fits".to_string()), ..Default::default()
+            }),
             Command::Connect(ConnectCommand::ConnectIndi {
                 remote: true, address: "localhost".to_string(),
                 mount: Some(" monta".to_string()), camera: None, guid_cam: None,
@@ -811,9 +931,16 @@ mod tests {
             Command::Preview(PreviewCommand::SetWbGreen { wb_green: 1.5 }),
             Command::Preview(PreviewCommand::SetWbBlue { wb_blue: 0.5 }),
             Command::Preview(PreviewCommand::SetStars { stars: true }),
-            Command::SetFocuserOptions { exposure: 2.5, gain: Gain::P50 },
-            Command::SetPlateSolverOptions { exposure: 5.0, gain: Gain::Same, bin: Binning::Bin2 },
-            Command::SetGuidingOptions { calibr_exposure: 3.5, calibr_gain: Gain::Max },
+            Command::SetFocuserOptions(FocuserPatch {
+                exposure: Some(2.5), gain: Some(Gain::P50),
+            }),
+            Command::SetFocuserOptions(FocuserPatch { gain: Some(Gain::P50), ..Default::default() }),
+            Command::SetPlateSolverOptions(PlateSolverPatch {
+                exposure: Some(5.0), gain: Some(Gain::Same), bin: Some(Binning::Bin2),
+            }),
+            Command::SetGuidingOptions(GuidingPatch {
+                calibr_exposure: Some(3.5), calibr_gain: Some(Gain::Max),
+            }),
             Command::OpenImageFile { path: "/tmp/test.fits".to_string() },
         ] {
             roundtrip(cmd);
@@ -836,5 +963,34 @@ mod tests {
         ] {
             roundtrip(reply);
         }
+    }
+
+    #[test]
+    fn patch_serde_semantics() {
+        // Field absent from the payload means "unchanged".
+        let p: CamReadoutPatch = serde_json::from_str(r#"{"low_noise": true}"#).unwrap();
+        assert_eq!(p.conv_gain_str, None);
+        assert_eq!(p.low_noise, Some(true));
+        assert_eq!(p.high_fullwell, None);
+        // JSON `null` means "set to None".
+        let p: CamReadoutPatch = serde_json::from_str(r#"{"conv_gain_str": null}"#).unwrap();
+        assert_eq!(p.conv_gain_str, Some(None));
+        // A present value means "set to Some(value)".
+        let p: CamReadoutPatch = serde_json::from_str(r#"{"conv_gain_str": "x2"}"#).unwrap();
+        assert_eq!(p.conv_gain_str, Some(Some("x2".to_string())));
+        // Only the double-Option field skips serialization when untouched;
+        // plain fields serialize as `null`, which deserializes back to "unchanged".
+        let p = CamReadoutPatch { low_noise: Some(true), ..Default::default() };
+        assert_eq!(serde_json::to_string(&p).unwrap(), r#"{"low_noise":true,"high_fullwell":null}"#);
+        // Container `#[serde(default)]` keeps plain fields optional on the wire too.
+        let p: QualityPatch = serde_json::from_str("{}").unwrap();
+        assert_eq!(p.max_fwhm, None);
+        let p: QualityPatch =
+            serde_json::from_str(r#"{"use_max_fwhm": true, "max_fwhm": null}"#).unwrap();
+        assert_eq!(p.use_max_fwhm, Some(true));
+        assert_eq!(p.max_fwhm, None);
+        // Empty patch roundtrips to an empty patch.
+        let p = QualityPatch::default();
+        roundtrip(p);
     }
 }

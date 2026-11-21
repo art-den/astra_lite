@@ -3,7 +3,7 @@ use gtk::{glib, prelude::*, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
-    core::{api::{Command, StartMode}, engine::{Engine, ModeKind}, events::*},
+    core::{api::{Command, PlateSolverPatch, StartMode}, engine::{Engine, ModeKind}, events::*},
     hal::{DeviceType, events::HalEvent},
     options::*,
     utils::log_utils::log_if_error,
@@ -176,15 +176,12 @@ impl PlateSolveUi {
         self.widgets.spb_exp.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
                 if self_.opts_syncing.get() { return; }
-                let (gain, bin) = {
-                    let options = self_.engine.options.read().unwrap();
-                    (options.plate_solver.gain, options.plate_solver.bin)
-                };
                 log_if_error(
                     &self_.engine.exec_command(
-                        Command::SetPlateSolverOptions {
-                            exposure: sb.value(), gain, bin,
-                        }
+                        Command::SetPlateSolverOptions(PlateSolverPatch {
+                            exposure: Some(sb.value()),
+                            ..Default::default()
+                        })
                     ),
                     "Set plate solver options"
                 );
@@ -194,17 +191,12 @@ impl PlateSolveUi {
         self.widgets.cbx_gain.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
                 if self_.opts_syncing.get() { return; }
-                let (exposure, bin) = {
-                    let options = self_.engine.options.read().unwrap();
-                    (options.plate_solver.exposure, options.plate_solver.bin)
-                };
                 log_if_error(
                     &self_.engine.exec_command(
-                        Command::SetPlateSolverOptions {
-                            exposure,
-                            gain: Gain::from_active_id(cb.active_id().as_deref()),
-                            bin,
-                        }
+                        Command::SetPlateSolverOptions(PlateSolverPatch {
+                            gain: Some(Gain::from_active_id(cb.active_id().as_deref())),
+                            ..Default::default()
+                        })
                     ),
                     "Set plate solver options"
                 );
@@ -214,16 +206,12 @@ impl PlateSolveUi {
         self.widgets.cbx_bin.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
                 if self_.opts_syncing.get() { return; }
-                let (exposure, gain) = {
-                    let options = self_.engine.options.read().unwrap();
-                    (options.plate_solver.exposure, options.plate_solver.gain)
-                };
                 log_if_error(
                     &self_.engine.exec_command(
-                        Command::SetPlateSolverOptions {
-                            exposure, gain,
-                            bin: Binning::from_active_id(cb.active_id().as_deref()),
-                        }
+                        Command::SetPlateSolverOptions(PlateSolverPatch {
+                            bin: Some(Binning::from_active_id(cb.active_id().as_deref())),
+                            ..Default::default()
+                        })
                     ),
                     "Set plate solver options"
                 );

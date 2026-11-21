@@ -2,7 +2,12 @@ use std::{rc::Rc, sync::Arc, cell::{Cell, RefCell}};
 use gtk::{cairo, glib::{self, clone}, prelude::*};
 use macros::FromBuilder;
 use crate::{
-    core::{api::{Command, StartMode}, cur_devices::CurDevices, engine::*, events::*, frame_processing::*, utils::{FileNameArg, FileNameUtils}}, hal::{DeviceType, FrameType, HalState, events::HalEvent}, image::{info::*, raw::CalibrMethods}, options::*, utils::log_utils::log_if_error,
+    core::{
+        api::{
+            CalibrPatch, CamReadoutPatch, Command, CoolingPatch, LiveStackingPatch,
+            QualityPatch, StartMode,
+        },
+        cur_devices::CurDevices, engine::*, events::*, frame_processing::*, utils::{FileNameArg, FileNameUtils}}, hal::{DeviceType, FrameType, HalState, events::HalEvent}, image::{info::*, raw::CalibrMethods}, options::*, utils::log_utils::log_if_error,
 };
 use super::{gtk_utils::*, module::*, ui_main::*, ui_start_dialog::StartDialog, utils::*};
 
@@ -654,10 +659,12 @@ impl CameraUi {
         self.widgets.ctrl.chb_cooler.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 if self_.opts_syncing.get() { return; }
-                let temperature = self_.engine.options.read().unwrap().cam.ctrl.temperature;
                 log_if_error(
                     &self_.engine.exec_command(
-                        Command::SetCooling { enable_cooler: chb.is_active(), temperature }
+                        Command::SetCooling(CoolingPatch {
+                            enable_cooler: Some(chb.is_active()),
+                            ..Default::default()
+                        })
                     ),
                     "Set cooling options"
                 );
@@ -667,10 +674,12 @@ impl CameraUi {
         self.widgets.ctrl.spb_temp.connect_value_changed(
             clone!(@weak self as self_ => move |spb| {
                 if self_.opts_syncing.get() { return; }
-                let enable_cooler = self_.engine.options.read().unwrap().cam.ctrl.enable_cooler;
                 log_if_error(
                     &self_.engine.exec_command(
-                        Command::SetCooling { enable_cooler, temperature: spb.value() }
+                        Command::SetCooling(CoolingPatch {
+                            temperature: Some(spb.value()),
+                            ..Default::default()
+                        })
                     ),
                     "Set cooling options"
                 );
@@ -704,17 +713,12 @@ impl CameraUi {
         self.widgets.ctrl.cb_conv_gain.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
                 if self_.opts_syncing.get() { return; }
-                let (low_noise, high_fullwell) = {
-                    let options = self_.engine.options.read().unwrap();
-                    (options.cam.ctrl.low_noise, options.cam.ctrl.high_fullwell)
-                };
                 log_if_error(
                     &self_.engine.exec_command(
-                        Command::SetCamReadoutOptions {
-                            conv_gain_str: cb.active_id().map(|id| id.to_string()),
-                            low_noise,
-                            high_fullwell,
-                        }
+                        Command::SetCamReadoutOptions(CamReadoutPatch {
+                            conv_gain_str: Some(cb.active_id().map(|id| id.to_string())),
+                            ..Default::default()
+                        })
                     ),
                     "Set camera readout options"
                 );
@@ -724,17 +728,12 @@ impl CameraUi {
         self.widgets.ctrl.chb_low_noise.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 if self_.opts_syncing.get() { return; }
-                let (conv_gain_str, high_fullwell) = {
-                    let options = self_.engine.options.read().unwrap();
-                    (options.cam.ctrl.conv_gain_str.clone(), options.cam.ctrl.high_fullwell)
-                };
                 log_if_error(
                     &self_.engine.exec_command(
-                        Command::SetCamReadoutOptions {
-                            conv_gain_str,
-                            low_noise: chb.is_active(),
-                            high_fullwell,
-                        }
+                        Command::SetCamReadoutOptions(CamReadoutPatch {
+                            low_noise: Some(chb.is_active()),
+                            ..Default::default()
+                        })
                     ),
                     "Set camera readout options"
                 );
@@ -744,17 +743,12 @@ impl CameraUi {
         self.widgets.ctrl.chb_high_fw.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 if self_.opts_syncing.get() { return; }
-                let (conv_gain_str, low_noise) = {
-                    let options = self_.engine.options.read().unwrap();
-                    (options.cam.ctrl.conv_gain_str.clone(), options.cam.ctrl.low_noise)
-                };
                 log_if_error(
                     &self_.engine.exec_command(
-                        Command::SetCamReadoutOptions {
-                            conv_gain_str,
-                            low_noise,
-                            high_fullwell: chb.is_active(),
-                        }
+                        Command::SetCamReadoutOptions(CamReadoutPatch {
+                            high_fullwell: Some(chb.is_active()),
+                            ..Default::default()
+                        })
                     ),
                     "Set camera readout options"
                 );
@@ -865,20 +859,15 @@ impl CameraUi {
         self.widgets.quality.chb_max_fwhm.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 if self_.opts_syncing.get() { return; }
-                let cmd = {
-                    let options = self_.engine.options.read().unwrap();
-                    Command::SetQualityOptions {
-                        use_max_fwhm:      chb.is_active(),
-                        max_fwhm:          options.quality.max_fwhm,
-                        use_max_ovality:   options.quality.use_max_ovality,
-                        max_ovality:       options.quality.max_ovality,
-                        ignore_3px_stars:  options.quality.ignore_3px_stars,
-                        star_recogn_sens:  options.quality.star_recogn_sens,
-                        check_ccd_temp:    options.quality.check_ccd_temp,
-                        max_ccd_temp_diff: options.quality.max_ccd_temp_diff,
-                    }
-                };
-                log_if_error(&self_.engine.exec_command(cmd), "Set quality options");
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetQualityOptions(QualityPatch {
+                            use_max_fwhm: Some(chb.is_active()),
+                            ..Default::default()
+                        })
+                    ),
+                    "Set quality options"
+                );
                 self_.correct_frame_quality_widgets_props();
             })
         );
@@ -886,40 +875,30 @@ impl CameraUi {
         self.widgets.quality.spb_max_fwhm.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
                 if self_.opts_syncing.get() { return; }
-                let cmd = {
-                    let options = self_.engine.options.read().unwrap();
-                    Command::SetQualityOptions {
-                        use_max_fwhm:      options.quality.use_max_fwhm,
-                        max_fwhm:          sb.value() as f32,
-                        use_max_ovality:   options.quality.use_max_ovality,
-                        max_ovality:       options.quality.max_ovality,
-                        ignore_3px_stars:  options.quality.ignore_3px_stars,
-                        star_recogn_sens:  options.quality.star_recogn_sens,
-                        check_ccd_temp:    options.quality.check_ccd_temp,
-                        max_ccd_temp_diff: options.quality.max_ccd_temp_diff,
-                    }
-                };
-                log_if_error(&self_.engine.exec_command(cmd), "Set quality options");
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetQualityOptions(QualityPatch {
+                            max_fwhm: Some(sb.value() as f32),
+                            ..Default::default()
+                        })
+                    ),
+                    "Set quality options"
+                );
             })
         );
 
         self.widgets.quality.chb_max_oval.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 if self_.opts_syncing.get() { return; }
-                let cmd = {
-                    let options = self_.engine.options.read().unwrap();
-                    Command::SetQualityOptions {
-                        use_max_fwhm:      options.quality.use_max_fwhm,
-                        max_fwhm:          options.quality.max_fwhm,
-                        use_max_ovality:   chb.is_active(),
-                        max_ovality:       options.quality.max_ovality,
-                        ignore_3px_stars:  options.quality.ignore_3px_stars,
-                        star_recogn_sens:  options.quality.star_recogn_sens,
-                        check_ccd_temp:    options.quality.check_ccd_temp,
-                        max_ccd_temp_diff: options.quality.max_ccd_temp_diff,
-                    }
-                };
-                log_if_error(&self_.engine.exec_command(cmd), "Set quality options");
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetQualityOptions(QualityPatch {
+                            use_max_ovality: Some(chb.is_active()),
+                            ..Default::default()
+                        })
+                    ),
+                    "Set quality options"
+                );
                 self_.correct_frame_quality_widgets_props();
             })
         );
@@ -927,82 +906,62 @@ impl CameraUi {
         self.widgets.quality.spb_max_oval.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
                 if self_.opts_syncing.get() { return; }
-                let cmd = {
-                    let options = self_.engine.options.read().unwrap();
-                    Command::SetQualityOptions {
-                        use_max_fwhm:      options.quality.use_max_fwhm,
-                        max_fwhm:          options.quality.max_fwhm,
-                        use_max_ovality:   options.quality.use_max_ovality,
-                        max_ovality:       sb.value() as f32,
-                        ignore_3px_stars:  options.quality.ignore_3px_stars,
-                        star_recogn_sens:  options.quality.star_recogn_sens,
-                        check_ccd_temp:    options.quality.check_ccd_temp,
-                        max_ccd_temp_diff: options.quality.max_ccd_temp_diff,
-                    }
-                };
-                log_if_error(&self_.engine.exec_command(cmd), "Set quality options");
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetQualityOptions(QualityPatch {
+                            max_ovality: Some(sb.value() as f32),
+                            ..Default::default()
+                        })
+                    ),
+                    "Set quality options"
+                );
             })
         );
 
         self.widgets.quality.chb_ignore_3px_stars.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 if self_.opts_syncing.get() { return; }
-                let cmd = {
-                    let options = self_.engine.options.read().unwrap();
-                    Command::SetQualityOptions {
-                        use_max_fwhm:      options.quality.use_max_fwhm,
-                        max_fwhm:          options.quality.max_fwhm,
-                        use_max_ovality:   options.quality.use_max_ovality,
-                        max_ovality:       options.quality.max_ovality,
-                        ignore_3px_stars:  chb.is_active(),
-                        star_recogn_sens:  options.quality.star_recogn_sens,
-                        check_ccd_temp:    options.quality.check_ccd_temp,
-                        max_ccd_temp_diff: options.quality.max_ccd_temp_diff,
-                    }
-                };
-                log_if_error(&self_.engine.exec_command(cmd), "Set quality options");
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetQualityOptions(QualityPatch {
+                            ignore_3px_stars: Some(chb.is_active()),
+                            ..Default::default()
+                        })
+                    ),
+                    "Set quality options"
+                );
             })
         );
 
         self.widgets.quality.cbx_stars_sens.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
                 if self_.opts_syncing.get() { return; }
-                let cmd = {
-                    let options = self_.engine.options.read().unwrap();
-                    Command::SetQualityOptions {
-                        use_max_fwhm:      options.quality.use_max_fwhm,
-                        max_fwhm:          options.quality.max_fwhm,
-                        use_max_ovality:   options.quality.use_max_ovality,
-                        max_ovality:       options.quality.max_ovality,
-                        ignore_3px_stars:  options.quality.ignore_3px_stars,
-                        star_recogn_sens:  StarRecognSensitivity::from_active_id(
-                            cb.active_id().as_deref()
-                        ),
-                        check_ccd_temp:    options.quality.check_ccd_temp,
-                        max_ccd_temp_diff: options.quality.max_ccd_temp_diff,
-                    }
-                };
-                log_if_error(&self_.engine.exec_command(cmd), "Set quality options");
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetQualityOptions(QualityPatch {
+                            star_recogn_sens: Some(StarRecognSensitivity::from_active_id(
+                                cb.active_id().as_deref()
+                            )),
+                            ..Default::default()
+                        })
+                    ),
+                    "Set quality options"
+                );
             })
         );
 
         self.widgets.quality.chb_max_temp_diff.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 if self_.opts_syncing.get() { return; }
-                let cmd = {
-                    let options = self_.engine.options.read().unwrap();
-                    Command::SetQualityOptions {
-                        use_max_fwhm:      options.quality.use_max_fwhm,
-                        max_fwhm:          options.quality.max_fwhm,
-                        use_max_ovality:   options.quality.use_max_ovality,
-                        max_ovality:       options.quality.max_ovality,
-                        ignore_3px_stars:  options.quality.ignore_3px_stars,
-                        star_recogn_sens:  options.quality.star_recogn_sens,
-                        check_ccd_temp:    chb.is_active(),
-                        max_ccd_temp_diff: options.quality.max_ccd_temp_diff,
-                    }
-                };
-                log_if_error(&self_.engine.exec_command(cmd), "Set quality options");
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetQualityOptions(QualityPatch {
+                            check_ccd_temp: Some(chb.is_active()),
+                            ..Default::default()
+                        })
+                    ),
+                    "Set quality options"
+                );
                 self_.correct_frame_quality_widgets_props();
             })
         );
@@ -1010,36 +969,30 @@ impl CameraUi {
         self.widgets.quality.spb_max_temp_diff.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
                 if self_.opts_syncing.get() { return; }
-                let cmd = {
-                    let options = self_.engine.options.read().unwrap();
-                    Command::SetQualityOptions {
-                        use_max_fwhm:      options.quality.use_max_fwhm,
-                        max_fwhm:          options.quality.max_fwhm,
-                        use_max_ovality:   options.quality.use_max_ovality,
-                        max_ovality:       options.quality.max_ovality,
-                        ignore_3px_stars:  options.quality.ignore_3px_stars,
-                        star_recogn_sens:  options.quality.star_recogn_sens,
-                        check_ccd_temp:    options.quality.check_ccd_temp,
-                        max_ccd_temp_diff: sb.value(),
-                    }
-                };
-                log_if_error(&self_.engine.exec_command(cmd), "Set quality options");
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetQualityOptions(QualityPatch {
+                            max_ccd_temp_diff: Some(sb.value()),
+                            ..Default::default()
+                        })
+                    ),
+                    "Set quality options"
+                );
             })
         );
 
         self.widgets.calibr.chb_dark.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 if self_.opts_syncing.get() { return; }
-                let cmd = {
-                    let options = self_.engine.options.read().unwrap();
-                    Command::SetCalibrOptions {
-                        dark_frame_en:    chb.is_active(),
-                        flat_frame_en:    options.calibr.flat_frame_en,
-                        flat_frame_fname: options.calibr.flat_frame_fname.to_string_lossy().into_owned(),
-                        hot_pixels:       options.calibr.hot_pixels,
-                    }
-                };
-                log_if_error(&self_.engine.exec_command(cmd), "Set calibration options");
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetCalibrOptions(CalibrPatch {
+                            dark_frame_en: Some(chb.is_active()),
+                            ..Default::default()
+                        })
+                    ),
+                    "Set calibration options"
+                );
                 let options = self_.engine.options.read().unwrap();
                 self_.show_calibr_file_for_frame(&options);
             })
@@ -1048,16 +1001,15 @@ impl CameraUi {
         self.widgets.calibr.chb_flat.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 if self_.opts_syncing.get() { return; }
-                let cmd = {
-                    let options = self_.engine.options.read().unwrap();
-                    Command::SetCalibrOptions {
-                        dark_frame_en:    options.calibr.dark_frame_en,
-                        flat_frame_en:    chb.is_active(),
-                        flat_frame_fname: options.calibr.flat_frame_fname.to_string_lossy().into_owned(),
-                        hot_pixels:       options.calibr.hot_pixels,
-                    }
-                };
-                log_if_error(&self_.engine.exec_command(cmd), "Set calibration options");
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetCalibrOptions(CalibrPatch {
+                            flat_frame_en: Some(chb.is_active()),
+                            ..Default::default()
+                        })
+                    ),
+                    "Set calibration options"
+                );
                 let options = self_.engine.options.read().unwrap();
                 self_.show_calibr_file_for_frame(&options);
             })
@@ -1066,16 +1018,17 @@ impl CameraUi {
         self.widgets.calibr.fch_flat.connect_file_set(
             clone!(@weak self as self_ => move |fch| {
                 if self_.opts_syncing.get() { return; }
-                let cmd = {
-                    let options = self_.engine.options.read().unwrap();
-                    Command::SetCalibrOptions {
-                        dark_frame_en:    options.calibr.dark_frame_en,
-                        flat_frame_en:    options.calibr.flat_frame_en,
-                        flat_frame_fname: fch.filename().unwrap_or_default().to_string_lossy().into_owned(),
-                        hot_pixels:       options.calibr.hot_pixels,
-                    }
-                };
-                log_if_error(&self_.engine.exec_command(cmd), "Set calibration options");
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetCalibrOptions(CalibrPatch {
+                            flat_frame_fname: Some(
+                                fch.filename().unwrap_or_default().to_string_lossy().into_owned()
+                            ),
+                            ..Default::default()
+                        })
+                    ),
+                    "Set calibration options"
+                );
                 let options = self_.engine.options.read().unwrap();
                 self_.show_calibr_file_for_frame(&options);
             })
@@ -1085,16 +1038,15 @@ impl CameraUi {
             clone!(@weak self as self_ => move |chb| {
                 self_.widgets.calibr.l_hot_px_warn.set_visible(chb.is_active());
                 if self_.opts_syncing.get() { return; }
-                let cmd = {
-                    let options = self_.engine.options.read().unwrap();
-                    Command::SetCalibrOptions {
-                        dark_frame_en:    options.calibr.dark_frame_en,
-                        flat_frame_en:    options.calibr.flat_frame_en,
-                        flat_frame_fname: options.calibr.flat_frame_fname.to_string_lossy().into_owned(),
-                        hot_pixels:       chb.is_active(),
-                    }
-                };
-                log_if_error(&self_.engine.exec_command(cmd), "Set calibration options");
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetCalibrOptions(CalibrPatch {
+                            hot_pixels: Some(chb.is_active()),
+                            ..Default::default()
+                        })
+                    ),
+                    "Set calibration options"
+                );
             })
         );
 
@@ -1102,13 +1054,12 @@ impl CameraUi {
             clone!(@weak self as self_ => move |chb| {
                 self_.widgets.live_st.l_no_tracks.set_visible(chb.is_active());
                 if self_.opts_syncing.get() { return; }
-                let frame_cnt = self_.engine.options.read().unwrap().live.frame_cnt;
                 log_if_error(
                     &self_.engine.exec_command(
-                        Command::SetLiveStackingOptions {
-                            remove_tracks: chb.is_active(),
-                            frame_cnt,
-                        }
+                        Command::SetLiveStackingOptions(LiveStackingPatch {
+                            remove_tracks: Some(chb.is_active()),
+                            ..Default::default()
+                        })
                     ),
                     "Set live stacking options"
                 );
@@ -1117,13 +1068,12 @@ impl CameraUi {
 
         self.widgets.live_st.spb_frames_cnt.connect_value_changed(clone!(@weak self as self_ => move |sb| {
             if self_.opts_syncing.get() { return; }
-            let remove_tracks = self_.engine.options.read().unwrap().live.remove_tracks;
             log_if_error(
                 &self_.engine.exec_command(
-                    Command::SetLiveStackingOptions {
-                        remove_tracks,
-                        frame_cnt: sb.value() as usize,
-                    }
+                    Command::SetLiveStackingOptions(LiveStackingPatch {
+                        frame_cnt: Some(sb.value() as usize),
+                        ..Default::default()
+                    })
                 ),
                 "Set live stacking options"
             );

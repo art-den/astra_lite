@@ -3,7 +3,7 @@ use gtk::{glib, gdk, prelude::*, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
-    core::{api::{Command, FocuserCommand, Reply, StartMode}, engine::{Engine, ModeKind}, events::*, mode_focusing::*},
+    core::{api::{Command, FocuserCommand, FocuserPatch, Reply, StartMode}, engine::{Engine, ModeKind}, events::*, mode_focusing::*},
     hal::{DeviceType, FocuserState, HalState, events::HalEvent},
     options::*,
     ui::plots::*,
@@ -365,10 +365,12 @@ impl FocuserUi {
 
         self.widgets.spb_exp.connect_value_changed(clone!(@weak self as self_ => move |sb| {
             if self_.opts_syncing.get() { return; }
-            let gain = self_.engine.options.read().unwrap().focuser.gain;
             log_if_error(
                 &self_.engine.exec_command(
-                    Command::SetFocuserOptions { exposure: sb.value(), gain }
+                    Command::SetFocuserOptions(FocuserPatch {
+                        exposure: Some(sb.value()),
+                        ..Default::default()
+                    })
                 ),
                 "Set focuser options"
             );
@@ -376,13 +378,12 @@ impl FocuserUi {
 
         self.widgets.cbx_gain.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
             if self_.opts_syncing.get() { return; }
-            let exposure = self_.engine.options.read().unwrap().focuser.exposure;
             log_if_error(
                 &self_.engine.exec_command(
-                    Command::SetFocuserOptions {
-                        exposure,
-                        gain: Gain::from_active_id(cb.active_id().as_deref()),
-                    }
+                    Command::SetFocuserOptions(FocuserPatch {
+                        gain: Some(Gain::from_active_id(cb.active_id().as_deref())),
+                        ..Default::default()
+                    })
                 ),
                 "Set focuser options"
             );

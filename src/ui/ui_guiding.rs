@@ -3,7 +3,7 @@ use gtk::{prelude::*, glib, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
-    core::{api::{Command, StartMode}, engine::*, events::*}, guiding::external_guider::*, hal::events::HalEvent, options::*,
+    core::{api::{Command, GuidingPatch, StartMode}, engine::*, events::*}, guiding::external_guider::*, hal::events::HalEvent, options::*,
     utils::log_utils::log_if_error
 };
 
@@ -222,12 +222,12 @@ impl GuidingUi {
 
         self.widgets.spb_mnt_cal_exp.connect_value_changed(clone!(@weak self as self_ => move |sb| {
             if self_.opts_syncing.get() { return; }
-            let calibr_gain = self_.engine.options.read().unwrap().guiding.main_cam.calibr_gain;
             log_if_error(
                 &self_.engine.exec_command(
-                    Command::SetGuidingOptions {
-                        calibr_exposure: sb.value(), calibr_gain,
-                    }
+                    Command::SetGuidingOptions(GuidingPatch {
+                        calibr_exposure: Some(sb.value()),
+                        ..Default::default()
+                    })
                 ),
                 "Set guiding options"
             );
@@ -235,13 +235,12 @@ impl GuidingUi {
 
         self.widgets.cbx_mnt_cal_gain.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
             if self_.opts_syncing.get() { return; }
-            let calibr_exposure = self_.engine.options.read().unwrap().guiding.main_cam.calibr_exposure;
             log_if_error(
                 &self_.engine.exec_command(
-                    Command::SetGuidingOptions {
-                        calibr_exposure,
-                        calibr_gain: Gain::from_active_id(cb.active_id().as_deref()),
-                    }
+                    Command::SetGuidingOptions(GuidingPatch {
+                        calibr_gain: Some(Gain::from_active_id(cb.active_id().as_deref())),
+                        ..Default::default()
+                    })
                 ),
                 "Set guiding options"
             );
