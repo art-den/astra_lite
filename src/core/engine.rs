@@ -508,7 +508,7 @@ impl Engine {
         // `seq` is read first: a later change invalidates this build (see `snapshot`)
         let seq = self.seq.load(Ordering::Relaxed);
         // Scope 1: modes + options + busy flags, released before anything else
-        let (mode, busy, options) = {
+        let (mut mode, busy, options) = {
             let modes = self.modes.read().unwrap();
             let options = self.options.read().unwrap();
             (
@@ -517,6 +517,12 @@ impl Engine {
                 options.clone(),
             )
         };
+        // Shot overlay data: meaningful only while an exposure is in progress;
+        // device read with no engine lock held
+        if mode.cur_exposure.is_some() {
+            mode.remaining_time = self.cur_devices.camera()
+                .and_then(|cam| cam.remaining_time());
+        }
         // Scope 2: device `Arc`s (the `cur_devices` accessors hold the registry
         // mutex only while cloning); `state()`/`is_active()` run with no engine
         // locks held (COM calls under ASCOM)

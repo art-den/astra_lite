@@ -44,16 +44,33 @@ pub struct FileNameUtils {
 }
 
 impl FileNameUtils {
+    /// Metadata-only init (see `CameraCaps` in the facade query API): used by
+    /// the UI so it does not need the live camera object
+    #[allow(clippy::too_many_arguments)]
+    pub fn init_from_data(
+        &mut self,
+        camera_name:      &str,
+        ccd_size:         (usize, usize),
+        cooler_supported: bool,
+        gain_supported:   bool,
+        offset_supported: bool,
+    ) {
+        self.camera_name = Self::sanitize_file_name(camera_name);
+        self.cooler_supported = cooler_supported;
+        self.gain_supported = gain_supported;
+        self.offset_supported = offset_supported;
+        self.sensor_width = ccd_size.0;
+        self.sensor_height = ccd_size.1;
+    }
+
     pub fn init(&mut self, camera: &Arc<dyn Camera>) {
-        self.camera_name = Self::sanitize_file_name(camera.name());
-
-        let (sensor_width, sensor_height) = camera.ccd_size().unwrap_or((0, 0));
-        self.cooler_supported = camera.is_cooler_supported().unwrap_or(false);
-        self.gain_supported = camera.is_gain_supported().unwrap_or(false);
-        self.offset_supported = camera.is_offset_supported().unwrap_or(false);
-
-        self.sensor_width = sensor_width;
-        self.sensor_height = sensor_height;
+        self.init_from_data(
+            camera.name(),
+            camera.ccd_size().unwrap_or((0, 0)),
+            camera.is_cooler_supported().unwrap_or(false),
+            camera.is_gain_supported().unwrap_or(false),
+            camera.is_offset_supported().unwrap_or(false),
+        );
     }
 
     /// Sanitized folder name of the camera initialized by `init()`

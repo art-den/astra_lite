@@ -1298,6 +1298,8 @@ impl CameraUi {
                 self.correct_widgets_props();
             }
             DelayedAction::UpdateResolutionList => {
+                // Resolution list now comes from caps: keep the cache fresh here
+                self.refresh_camera_caps();
                 // Fresh: an eventless option commit may have followed the
                 // HAL event that scheduled this action
                 let snap = self.main_ui.fresh_snapshot();
@@ -1503,9 +1505,17 @@ impl CameraUi {
     }
 
     fn init_fn_utils(&self) {
-        let Some(camera) = self.engine.cur_devices.camera() else { return; };
+        // Camera metadata from the cached `Query::CameraCaps` (refreshed on
+        // camera device events, see `refresh_camera_caps`)
+        let Some(caps) = self.camera_caps() else { return; };
         let mut fn_utils = self.fn_utils.borrow_mut();
-        fn_utils.init(&(camera.clone() as Arc<_>));
+        fn_utils.init_from_data(
+            &caps.name,
+            caps.ccd_size,
+            caps.cooler_supported,
+            caps.gain_supported,
+            caps.offset_supported,
+        );
     }
 
     fn show_calibr_file_for_frame(&self, options: &Options) {
@@ -1582,10 +1592,9 @@ impl CameraUi {
         let last_bin = cb_bin.active_id();
         cb_bin.remove_all();
 
-        let Some(camera) = self.engine.cur_devices.camera() else { return; };
-        let Ok((max_width, max_height)) = camera.ccd_size() else { return; };
-        let Ok((max_hor_bin, max_vert_bin)) = camera.max_binning() else { return; };
-        let max_bin = usize::min(max_hor_bin, max_vert_bin);
+        let Some(caps) = self.camera_caps() else { return; };
+        let (max_width, max_height) = caps.ccd_size;
+        let max_bin = caps.max_binning;
         let bins = [ Binning::Orig, Binning::Bin2, Binning::Bin4 ];
         for bin in bins {
             let ratio = bin.get_ratio();
@@ -1612,12 +1621,11 @@ impl CameraUi {
             let cb = &self.widgets.ctrl.cb_heater;
             let last_value = cb.active_id();
             cb.remove_all();
-            let Some(camera) = self.engine.cur_devices.camera() else { return Ok(()); };
 
-            if !self.camera_caps().is_some_and(|caps| caps.heater_supported) { return Ok(()); }
-            let items = camera.heater_ctrl_list()?;
-            for (id, label) in items {
-                cb.append(Some(id.as_str()), &label);
+            let Some(caps) = self.camera_caps() else { return Ok(()); };
+            if !caps.heater_supported { return Ok(()); }
+            for (id, label) in &caps.heater_ctrl_list {
+                cb.append(Some(id.as_str()), label);
             }
             if last_value.is_some() {
                 cb.set_active_id(last_value.as_deref());
@@ -1637,11 +1645,10 @@ impl CameraUi {
             let last_value = cb.active_id();
             cb.remove_all();
 
-            let Some(camera) = self.engine.cur_devices.camera() else { return Ok(()); };
-            if !self.camera_caps().is_some_and(|caps| caps.conversion_gain_supported) { return Ok(()) }
-            let Ok(items) = camera.conversion_gain_list() else { return Ok(()); };
-            for (id, label) in items {
-                cb.append(Some(id.as_str()), &label);
+            let Some(caps) = self.camera_caps() else { return Ok(()); };
+            if !caps.conversion_gain_supported { return Ok(()) }
+            for (id, label) in &caps.conversion_gain_list {
+                cb.append(Some(id.as_str()), label);
             }
             if last_value.is_some() {
                 cb.set_active_id(last_value.as_deref());
@@ -1776,8 +1783,7 @@ impl CameraUi {
             return;
         };
         if cur_exposure < 1.0 { return; };
-        let Some(camera) = self.engine.cur_devices.camera() else { return; };
-        let Some(remaining_time) = camera.remaining_time() else { return; };
+        let Some(remaining_time) = snap.mode.remaining_time else { return; };
         let progress = ((cur_exposure - remaining_time) / cur_exposure).clamp(0.0, 1.0);
         let text_to_show = format!("{:.0} / {:.0}", cur_exposure - remaining_time, cur_exposure);
         exec_and_show_error(Some(&self.window), || {

@@ -184,6 +184,9 @@ pub struct ModeState {
     pub can_stop:        bool,
     pub can_continue:    bool,
     pub cur_exposure:    Option<f64>,
+    /// Camera remaining exposure time, filled only while an exposure is in
+    /// progress (device read at snapshot build time)
+    pub remaining_time:  Option<f64>,
     pub finished:        Option<ModeSummary>,
     pub aborted:         Option<ModeSummary>,
 }
@@ -206,6 +209,7 @@ impl ModeState {
             can_stop:        active.can_be_stopped(),
             can_continue:    active.can_be_continued_after_stop(),
             cur_exposure:    active.get_cur_exposure(),
+            remaining_time:  None, // filled by `Engine::snapshot_once()`
             finished:        modes.finished.as_ref().map(ModeSummary::from_mode),
             aborted:         modes.aborted.as_ref().map(ModeSummary::from_mode),
         }

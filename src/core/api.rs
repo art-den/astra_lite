@@ -653,6 +653,16 @@ pub struct FloatRange {
 /// gate is false.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct CameraCaps {
+    /// Camera display name (file naming in the panel)
+    pub name:                      String,
+    /// Sensor size in pixels (0,0 when the read failed)
+    pub ccd_size:                  (usize, usize),
+    /// Max supported binning factor (min of x/y; 0 when the read failed)
+    pub max_binning:               usize,
+    /// (id, label) heater list; empty when unsupported
+    pub heater_ctrl_list:          Vec<(String, String)>,
+    /// (id, label) conversion gain list; empty when unsupported
+    pub conversion_gain_list:      Vec<(String, String)>,
     /// `None` also means 'exposure not supported' (mirrors the panel check)
     pub exposure_range:            Option<FloatRange>,
     pub cooler_supported:          bool,
@@ -682,11 +692,28 @@ fn caps_range(
         .map(|r| FloatRange { start: *r.start(), end: *r.end() })
 }
 
+fn caps_list(
+    result: eyre::Result<Vec<(String, String)>>,
+    what:   &str,
+) -> Vec<(String, String)> {
+    super::snapshot::opt_logged(what, result).unwrap_or_default()
+}
+
 impl CameraCaps {
     /// Reads all capabilities from the camera object. Ranges are only queried
     /// when the capability is supported (same order as the camera panel).
     fn of(camera: &(dyn Camera + Send + Sync)) -> Self {
         let mut caps = Self {
+            name:                      camera.name().to_string(),
+            ccd_size:                  super::snapshot::opt_logged(
+                                           "ccd_size", camera.ccd_size())
+                                       .unwrap_or((0, 0)),
+            max_binning:               super::snapshot::opt_logged(
+                                           "max_binning", camera.max_binning())
+                                       .map(|(x, y)| usize::min(x, y))
+                                       .unwrap_or(0),
+            heater_ctrl_list:          Vec::new(),
+            conversion_gain_list:      Vec::new(),
             exposure_range:            caps_range(camera.exposure_range(), "exposure_range"),
             cooler_supported:          caps_supported(camera.is_cooler_supported(), "is_cooler_supported"),
             temperature_range:         None,
@@ -710,6 +737,14 @@ impl CameraCaps {
         }
         if caps.offset_supported {
             caps.offset_range = caps_range(camera.offset_range(), "offset_range");
+        }
+        if caps.heater_supported {
+            caps.heater_ctrl_list = caps_list(
+                camera.heater_ctrl_list(), "heater_ctrl_list");
+        }
+        if caps.conversion_gain_supported {
+            caps.conversion_gain_list = caps_list(
+                camera.conversion_gain_list(), "conversion_gain_list");
         }
         caps
     }
@@ -1945,6 +1980,11 @@ mod tests {
             type_: DeviceType::CAMERA,
         }]));
         roundtrip(QueryReply::CameraCaps(CameraCaps {
+            name:                      "ZWO CCD".to_string(),
+            ccd_size:                  (4656, 3520),
+            max_binning:               4,
+            heater_ctrl_list:          vec![("h1".to_string(), "Heater 1".to_string())],
+            conversion_gain_list:      vec![("g1".to_string(), "Gain 1".to_string())],
             exposure_range:            Some(FloatRange { start: 0.00003, end: 1800.0 }),
             cooler_supported:          true,
             temperature_range:         Some(FloatRange { start: -35.0, end: 15.0 }),
