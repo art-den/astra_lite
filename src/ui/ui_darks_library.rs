@@ -50,7 +50,6 @@ pub fn init_ui(
     obj.load_options();
     obj.show_options();
     obj.connect_widgets_events();
-    obj.connect_core_events();
     obj.show_info();
 
     obj.correct_widgets_enable_state();
@@ -226,6 +225,89 @@ impl UiModule for DarksLibraryUI {
         let ui_options = self.ui_options.borrow();
         _ = save_json_to_config::<UiOptions>(&ui_options, Self::CONF_FN);
         drop(ui_options);
+    }
+
+    fn on_event(&self, event: &Event) {
+        let show_progress = |prb: &gtk::ProgressBar, cur, total| {
+            if total != 0 {
+                prb.set_fraction(cur as f64 / total as f64);
+                prb.set_text(Some(&format!("{} / {}", cur, total)));
+            }
+        };
+
+        match event {
+            Event::CommandReply { id, result } => {
+                let Some(pending) = self.pending_cmds.borrow_mut().remove(id) else { return; };
+                match pending {
+                    PendingCmd::Build(mode) => {
+                        // Info labels: build errors are silently ignored
+                        // (as the old in-panel `is_cooler_supported` errors were)
+                        if let Ok(Reply::DarkLibraryProgram {
+                            program, total_duration_sec, ..
+                        }) = result {
+                            self.show_program_info(
+                                &mode, program.len(), *total_duration_sec
+                            );
+                        }
+                    }
+
+                    PendingCmd::BuildForStart(mode) => {
+                        // Start is triggered only by the still-current start-Build
+                        if self.pending_start_build_id.get() != Some(*id) {
+                            return;
+                        }
+                        self.pending_start_build_id.set(None);
+                        match result.as_ref() {
+                            Ok(Reply::DarkLibraryProgram { program, .. }) => {
+                                match self.engine.submit_command(
+                                    Command::Start(StartMode::CreatingDarkLibrary {
+                                        mode, program: program.clone()
+                                    })
+                                ) {
+                                    Ok(id) => {
+                                        _ = self.pending_cmds.borrow_mut()
+                                            .insert(id, PendingCmd::Start);
+                                    }
+                                    Err(err) => show_error_message(
+                                        Some(&self.window), "Error", &err.to_string()
+                                    ),
+                                }
+                            }
+                            Ok(_) => {}
+                            Err(err_msg) => show_error_message(
+                                Some(&self.window), "Error", err_msg
+                            ),
+                        }
+                    }
+
+                    PendingCmd::Start => {
+                        if let Err(err_msg) = result {
+                            show_error_message(Some(&self.window), "Error", err_msg);
+                        }
+                    }
+                }
+            }
+            Event::Progress(Some(progress), ModeKind::CreatingDefectPixels) => {
+                show_progress(&self.widgets.dp.prb_def, progress.cur, progress.total);
+                self.correct_widgets_enable_state();
+            }
+
+            Event::Progress(Some(progress), ModeKind::CreatingMasterDarks) => {
+                show_progress(&self.widgets.darks.prb_dark, progress.cur, progress.total);
+                self.correct_widgets_enable_state();
+            }
+
+            Event::Progress(Some(progress), ModeKind::CreatingMasterBiases) => {
+                show_progress(&self.widgets.biases.prb_bias, progress.cur, progress.total);
+                self.correct_widgets_enable_state();
+            }
+
+            Event::ModeChanged => {
+                self.correct_widgets_enable_state();
+            }
+
+            _ => {},
+        }
     }
 }
 
@@ -604,26 +686,6 @@ impl DarksLibraryUI {
         connect_action(&self.window, self, "stop_bias_files",                  Self::handler_action_stop_bias_files);
     }
 
-    fn connect_core_events(self: &Rc<Self>) {
-        let (sender, receiver) = async_channel::unbounded();
-        self.engine.events.connect(move |evt| {
-            // The receiver side may already be gone (module dropped on window close),
-            // so a failed send is simply dropped instead of panicking
-            _ = sender.send_blocking(evt);
-        });
-        // Upgrade the weak ref inside the loop body (not via clone!@weak before
-        // `async move`): otherwise the strong ref obtained at the first poll would
-        // be kept alive across every await and pin this module forever.
-
-        let weak_self = Rc::downgrade(self);
-        glib::spawn_future_local(async move {
-            while let Ok(event) = receiver.recv().await {
-                let Some(self_) = weak_self.upgrade() else { break; };
-                self_.process_core_event(event);
-            }
-        });
-    }
-
     fn correct_widgets_enable_state(&self) {
         let perms = &self.main_ui.snapshot().permissions;
         let is_waiting = perms.waiting;
@@ -752,81 +814,7 @@ impl DarksLibraryUI {
         });
     }
 
-    fn process_core_event(&self, event: Event) {
-        let show_progress = |prb: &gtk::ProgressBar, cur, total| {
-            if total != 0 {
-                prb.set_fraction(cur as f64 / total as f64);
-                prb.set_text(Some(&format!("{} / {}", cur, total)));
-            }
-        };
 
-        match event {
-            Event::CommandReply { id, result } => {
-                let Some(pending) = self.pending_cmds.borrow_mut().remove(&id) else { return; };
-                match pending {
-                    PendingCmd::Build(mode) => {
-                        // Info labels: build errors are silently ignored
-                        // (as the old in-panel `is_cooler_supported` errors were)
-                        if let Ok(Reply::DarkLibraryProgram { program, total_duration_sec, .. }) = result {
-                            self.show_program_info(&mode, program.len(), total_duration_sec);
-                        }
-                    }
-
-                    PendingCmd::BuildForStart(mode) => {
-                        // Start is triggered only by the still-current start-Build
-                        if self.pending_start_build_id.get() != Some(id) {
-                            return;
-                        }
-                        self.pending_start_build_id.set(None);
-                        match result {
-                            Ok(Reply::DarkLibraryProgram { program, .. }) => {
-                                match self.engine.submit_command(
-                                    Command::Start(StartMode::CreatingDarkLibrary { mode, program })
-                                ) {
-                                    Ok(id) => {
-                                        _ = self.pending_cmds.borrow_mut().insert(id, PendingCmd::Start);
-                                    }
-                                    Err(err) => show_error_message(
-                                        Some(&self.window), "Error", &err.to_string()
-                                    ),
-                                }
-                            }
-                            Ok(_) => {}
-                            Err(err_msg) => show_error_message(
-                                Some(&self.window), "Error", &err_msg
-                            ),
-                        }
-                    }
-
-                    PendingCmd::Start => {
-                        if let Err(err_msg) = result {
-                            show_error_message(Some(&self.window), "Error", &err_msg);
-                        }
-                    }
-                }
-            }
-            Event::Progress(Some(progress), ModeKind::CreatingDefectPixels) => {
-                show_progress(&self.widgets.dp.prb_def, progress.cur, progress.total);
-                self.correct_widgets_enable_state();
-            }
-
-            Event::Progress(Some(progress), ModeKind::CreatingMasterDarks) => {
-                show_progress(&self.widgets.darks.prb_dark, progress.cur, progress.total);
-                self.correct_widgets_enable_state();
-            }
-
-            Event::Progress(Some(progress), ModeKind::CreatingMasterBiases) => {
-                show_progress(&self.widgets.biases.prb_bias, progress.cur, progress.total);
-                self.correct_widgets_enable_state();
-            }
-
-            Event::ModeChanged => {
-                self.correct_widgets_enable_state();
-            }
-
-            _ => {},
-        }
-    }
 
     fn handler_action_open_dark_lib_folder(&self) {
         // Fresh: `SetDarkLibraryPath` is eventless
