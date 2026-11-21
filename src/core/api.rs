@@ -51,9 +51,11 @@ fn busy_domain_of(cmd: &Command) -> Option<BusyDomain> {
         | Command::ContinueAbortedMode
         | Command::Shutdown { .. } | Command::SaveOptions
         | Command::GetSnapshot
-        | Command::Query(Query::Devices | Query::CameraCaps | Query::IndiProperties { .. } | Query::IndiDrivers | Query::AllMountSites)
+        | Command::Query(Query::Devices | Query::CameraCaps | Query::IndiProperties { .. } | Query::IndiDrivers)
         | Command::OpenImageFile{..}
         | Command::Preview(_) => None,
+        // Blocking `site()` HAL calls, serialized with mount commands
+        Command::Query(Query::AllMountSites) => Some(BusyDomain::Mount),
         // Option commands:
         Command::SetCooling(..) | Command::SetFan{..} | Command::SetHeater{..}
         | Command::SetCamReadoutOptions(..) | Command::SetFrameType{..}
@@ -574,6 +576,8 @@ pub enum Query {
     IndiDrivers,
     /// Sites of all connected telescopes. Makes blocking `site()` HAL
     /// calls: must go through `submit_command`, not the caller's thread.
+    /// Gated by `BusyDomain::Mount`: fails immediately with a "busy" error
+    /// while a mount command is in progress.
     AllMountSites,
 }
 
