@@ -11,7 +11,7 @@ use super::{
         DarkLibMode, DarkLibSpec, MasterFileCreationProgramItem, build_program,
     },
     mode_goto::GotoConfig,
-    mode_polar_align::{PolarAlignCommand, PolarAlignState},
+    mode_polar_align::{PolarAlignCommand, PolarAlignMode, PolarAlignState},
     snapshot::StateSnapshot,
 };
 
@@ -51,7 +51,8 @@ fn busy_domain_of(cmd: &Command) -> Option<BusyDomain> {
         | Command::ContinueAbortedMode
         | Command::Shutdown { .. } | Command::SaveOptions
         | Command::GetSnapshot
-        | Command::Query(Query::Devices | Query::CameraCaps | Query::IndiProperties { .. } | Query::IndiDrivers)
+        | Command::Query(Query::Devices | Query::CameraCaps | Query::IndiProperties { .. }
+            | Query::IndiDrivers | Query::PolarAlignCheck)
         | Command::OpenImageFile{..}
         | Command::Preview(_) => None,
         // Blocking `site()` HAL calls, serialized with mount commands
@@ -110,7 +111,8 @@ pub(crate) fn is_read_only(cmd: &Command) -> bool {
     match cmd {
         Command::GetSnapshot
         | Command::Query(Query::Devices | Query::CameraCaps
-            | Query::IndiProperties { .. } | Query::IndiDrivers | Query::AllMountSites)
+            | Query::IndiProperties { .. } | Query::IndiDrivers | Query::AllMountSites
+            | Query::PolarAlignCheck)
         | Command::BuildDarkLibraryProgram { .. }
         // Pure mode state read polled by the polar align panel
         | Command::Mode(ModeCommand::PolarAlign(PolarAlignCommand::GetState)) => true,
@@ -588,6 +590,10 @@ pub enum Query {
     /// Gated by `BusyDomain::Mount`: fails immediately with a "busy" error
     /// while a mount command is in progress.
     AllMountSites,
+    /// Pre-start polar alignment check (see `PolarAlignMode::check_before_start`).
+    /// Makes blocking `eq_coord()` HAL reads: must go through
+    /// `submit_command`, not the caller's thread.
+    PolarAlignCheck,
 }
 
 /// Site of one telescope, for the `Query::AllMountSites` reply.
@@ -638,6 +644,9 @@ pub enum QueryReply {
     IndiProperties(IndiPropertiesData),
     IndiDrivers(indi::Drivers),
     AllMountSites(Vec<MountSite>),
+    /// Warning text for `Query::PolarAlignCheck`; empty when the check passed
+    /// without warnings. A failed check arrives as `Err` in the command reply.
+    PolarAlignCheck(String),
 }
 
 /// Serializable `RangeInclusive<f64>`.
@@ -1377,6 +1386,9 @@ impl Engine {
                         }
                         QueryReply::AllMountSites(sites)
                     }
+                    Query::PolarAlignCheck => QueryReply::PolarAlignCheck(
+                        PolarAlignMode::check_before_start(&self.hal, &self.options)?
+                    ),
                 };
                 Ok(Reply::Query(Box::new(reply)))
             }
@@ -1967,6 +1979,8 @@ mod tests {
         roundtrip(Command::Query(Query::IndiProperties { since: Some(7) }));
         roundtrip(Command::Query(Query::IndiDrivers));
         roundtrip(Command::Query(Query::AllMountSites));
+        roundtrip(Command::Query(Query::PolarAlignCheck));
+        roundtrip(QueryReply::PolarAlignCheck("warn".to_string()));
         roundtrip(QueryReply::AllMountSites(vec![MountSite {
             id:   "indi_sim_mount".to_string(),
             name: "INDI Simulator Mount".to_string(),

@@ -247,7 +247,7 @@ pub struct PolarAlignMode {
 }
 
 impl PolarAlignMode {
-    pub fn check_before_start(
+    pub(crate) fn check_before_start(
         hal:     &Arc<Hal>,
         options: &Arc<RwLock<Options>>,
     ) -> eyre::Result<String> {

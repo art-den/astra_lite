@@ -2,7 +2,7 @@ use std::{cell::Cell, rc::Rc, sync::Arc};
 use gtk::{glib::{self, clone}, pango, prelude::*};
 use macros::FromBuilder;
 use crate::{
-    core::{api::{Command, ModeCommand, ModeCommandReply, PolarAlignPatch, Reply, StartMode}, engine::{Engine, ModeKind}, events::*, mode_polar_align::{PolarAlignCommand, PolarAlignMode, PolarAlignState, PolarAlignmentEvent}},
+    core::{api::{Command, ModeCommand, ModeCommandReply, PolarAlignPatch, Query, QueryReply, Reply, StartMode}, engine::{Engine, ModeKind}, events::*, mode_polar_align::{PolarAlignCommand, PolarAlignState, PolarAlignmentEvent}},
     hal::{DeviceType, events::HalEvent},
     options::*,
     sky_math::math::*,
@@ -22,8 +22,10 @@ pub fn init_ui(
         main_ui:         Rc::clone(main_ui),
         window:          window.clone(),
         engine:          Arc::clone(engine),
-        delayed_actions: DelayedActions::new(200),
-        opts_syncing:    Cell::new(false),
+        delayed_actions:  DelayedActions::new(200),
+        opts_syncing:     Cell::new(false),
+        pending_check_id: Cell::new(None),
+        pending_start_id: Cell::new(None),
     });
 
     obj.init_widgets();
@@ -73,12 +75,14 @@ struct Widgets {
 }
 
 struct PolarAlignUi {
-    widgets:         Widgets,
-    main_ui:         Rc<MainUi>,
-    window:          gtk::ApplicationWindow,
-    engine:          Arc<Engine>,
-    delayed_actions: DelayedActions<DelayedAction>,
-    opts_syncing:    Cell<bool>,
+    widgets:          Widgets,
+    main_ui:          Rc<MainUi>,
+    window:           gtk::ApplicationWindow,
+    engine:           Arc<Engine>,
+    delayed_actions:  DelayedActions<DelayedAction>,
+    opts_syncing:     Cell<bool>,
+    pending_check_id: Cell<Option<u64>>,
+    pending_start_id: Cell<Option<u64>>,
 }
 
 impl Drop for PolarAlignUi {
@@ -131,6 +135,17 @@ impl UiModule for PolarAlignUi {
             }
             Event::PolarAlignment(event) => {
                 self.show_polar_alignment_error(event);
+            }
+            Event::CommandReply { id, result } => {
+                if self.pending_check_id.get() == Some(*id) {
+                    self.pending_check_id.set(None);
+                    self.handle_polar_align_check_reply(result);
+                } else if self.pending_start_id.get() == Some(*id) {
+                    self.pending_start_id.set(None);
+                    if let Err(err_msg) = result {
+                        show_error_message(Some(&self.window), "Error", err_msg);
+                    }
+                }
             }
             _ => {}
         }
@@ -322,26 +337,25 @@ impl PolarAlignUi {
     }
 
     fn handler_action_start_polar_align(&self) {
-        // Pre-start mode check
+        // Pre-start mode check: blocking HAL reads go through the command queue
+        match self.engine.submit_command(Command::Query(Query::PolarAlignCheck)) {
+            Ok(id) => { self.pending_check_id.set(Some(id)); }
+            Err(err) => show_error_message(Some(&self.window), "Error", &err.to_string()),
+        }
+    }
 
-        let check_result = PolarAlignMode::check_before_start(
-            &self.engine.hal,
-            &self.engine.options
-        );
-
-        match check_result {
-            Err(err) => {
-                gtk_utils::show_message(
-                    Some(&self.window),
-                    "Error",
-                    &err.to_string(),
-                    gtk::MessageType::Error
-                );
-                return;
-            }
-            Ok(mut warn_text) => {
+    fn handle_polar_align_check_reply(&self, result: &Result<Reply, String>) {
+        match result {
+            Err(err_msg) => gtk_utils::show_message(
+                Some(&self.window),
+                "Error",
+                err_msg,
+                gtk::MessageType::Error
+            ),
+            Ok(Reply::Query(q)) => {
+                let QueryReply::PolarAlignCheck(warn_text) = &**q else { return; };
                 if !warn_text.is_empty() {
-                    warn_text += "\n\nContinue?";
+                    let warn_text = warn_text.clone() + "\n\nContinue?";
                     let dialog = gtk::MessageDialog::builder()
                         .title("Warning")
                         .text(&warn_text)
@@ -356,15 +370,19 @@ impl PolarAlignUi {
                         return;
                     }
                 }
+
+                // Start mode
+                match self.engine.submit_command(
+                    Command::Start(StartMode::PolarAlignment)
+                ) {
+                    Ok(id) => { self.pending_start_id.set(Some(id)); }
+                    Err(err) => show_error_message(
+                        Some(&self.window), "Error", &err.to_string()
+                    ),
+                }
             }
+            Ok(_) => {}
         }
-
-        // Start mode
-
-        exec_and_show_error(Some(&self.window), || {
-            self.engine.exec_command(Command::Start(StartMode::PolarAlignment))?;
-            Ok(())
-        });
     }
 
     fn handler_action_restart_polar_align(&self) {
