@@ -591,6 +591,8 @@ impl FocuserUi {
     }
 
     fn show_cur_focuser_value(&self, value: Option<i32>, force_configure_widget: bool) {
+        // Exception (follow-up `Query::FocuserState`): live `abs_position()` /
+        // `abs_position_range()` reads; the snapshot API has no focuser state yet
         if let Some(focuser) = self.engine.cur_devices.focuser() {
             let abs_position = value.unwrap_or_else(|| focuser.abs_position().unwrap_or(0.0) as i32 );
             if force_configure_widget || self.widgets.spb_val.value() == 0.0 {
@@ -648,6 +650,7 @@ impl FocuserUi {
     }
 
     fn show_focuser_temperature(&self, value_x10: Option<i32>) {
+        // Exception (follow-up `Query::FocuserState`): live `temperature()` read
         let temperature = value_x10
             .map(|v| v as f64 / 10.0)
             .unwrap_or_else(|| {

@@ -173,6 +173,8 @@ impl FltWheelUi {
     }
 
     fn update_filters_list_and_select_active(&self) {
+        // Exception (follow-up `Query::FilterWheelState`): `list_and_active()`
+        // is a live filter wheel read; the snapshot API has no state query yet
         let Some(filter_wheel) = self.engine.cur_devices.filter_wheel() else { return; };
 
         let Ok((list, active_id)) = filter_wheel.list_and_active() else { return; };
