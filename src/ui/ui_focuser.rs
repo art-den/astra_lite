@@ -3,7 +3,10 @@ use gtk::{glib, gdk, prelude::*, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
-    core::{api::{Command, FocuserCommand, FocuserPatch, Reply, StartMode}, engine::{Engine, ModeKind}, events::*, mode_focusing::*},
+    core::{
+        api::{Command, FocuserCommand, FocuserPatch, Query, QueryReply, Reply, StartMode},
+        engine::{Engine, ModeKind}, events::*, mode_focusing::*, snapshot::DeviceState,
+    },
     hal::{DeviceType, FocuserState, HalState, events::HalEvent},
     options::*,
     ui::plots::*,
@@ -207,9 +210,7 @@ impl UiModule for FocuserUi {
                 self.correct_widgets_props();
             }
             Event::CameraDeviceChanged(_) => {
-                let options = self.engine.options.read().unwrap();
-                self.show_options(&options);
-                drop(options);
+                self.show_options(&self.main_ui.snapshot().options);
                 self.correct_widgets_props();
             }
             Event::Focusing(fevent) => {
@@ -264,30 +265,26 @@ impl UiModule for FocuserUi {
                 }
             }
             HalEvent::FocuserStateChanged { device_id, .. } => {
-                let options = self.engine.options.read().unwrap();
-                if **device_id == options.focuser.device {
+                if **device_id == self.main_ui.snapshot().options.focuser.device {
                     self.show_info();
                 }
             }
             HalEvent::FocuserAbsValueCanBeControlled { device_id, abs_value } => {
-                let options = self.engine.options.read().unwrap();
-                if **device_id == options.focuser.device {
+                if **device_id == self.main_ui.snapshot().options.focuser.device {
                     self.delayed_actions.schedule(DelayedAction::InitAndShowFocuserValue(
                         Some(*abs_value as i32)
                     ));
                 }
             }
             HalEvent::FocuserAbsValueChanged { device_id, abs_value } => {
-                let options = self.engine.options.read().unwrap();
-                if **device_id == options.focuser.device {
+                if **device_id == self.main_ui.snapshot().options.focuser.device {
                     self.delayed_actions.schedule(DelayedAction::ShowFocuserValue(
                         Some(*abs_value as i32)
                     ));
                 }
             }
             HalEvent::FocuserTemperatureChanged { device_id, temperature } => {
-                let options = self.engine.options.read().unwrap();
-                if **device_id == options.focuser.device {
+                if **device_id == self.main_ui.snapshot().options.focuser.device {
                     self.delayed_actions.schedule(DelayedAction::ShowCurFocuserTemperature(
                         Some((10.0 * *temperature) as i32)
                     ));
@@ -535,10 +532,11 @@ impl FocuserUi {
     }
 
     fn correct_widgets_props(&self) {
-        let modes = self.engine.modes();
-        let mode_kind = modes.active.kind();
-        drop(modes);
+        let snap = self.main_ui.snapshot();
+        let mode_kind = snap.mode.kind;
 
+        // Exception (follow-up `Query::FocuserCaps`): live camera capability
+        // read for the focuser exposure spinbutton
         if let Ok(camera) = self.engine.cur_devices.camera_or_err() {
             let exp_range = camera.exposure_range().ok();
             correct_spinbutton_by_range(&self.widgets.spb_exp, exp_range, 1, Some(1.0));
@@ -550,9 +548,7 @@ impl FocuserUi {
         let focusing = mode_kind == ModeKind::Focusing;
         let can_change_mode = waiting || live_view || single_shot;
 
-        let device_enabled = self.engine.cur_devices.focuser()
-            .and_then(|f| f.is_active().ok())
-            .unwrap_or(false);
+        let device_enabled = snap.devices.focuser.as_ref().is_some_and(|f| f.is_active);
 
         self.widgets.grd.set_sensitive(device_enabled);
         self.widgets.spb_temp.set_sensitive(self.widgets.chb_temp.is_active());
@@ -572,13 +568,14 @@ impl FocuserUi {
     }
 
     fn update_devices_list(&self) {
-        let options = self.engine.options.read().unwrap();
-        let cur_focuser = options.focuser.device.clone();
-        drop(options);
+        let cur_focuser = self.main_ui.snapshot().options.focuser.device.clone();
 
-        let Ok(focusers) = self.engine.hal.devices(DeviceType::FOCUSER) else { return; };
-        let focusers_ids_and_names = focusers
+        let Ok(Reply::Query(q)) = self.engine.exec_command(Command::Query(Query::Devices))
+        else { return; };
+        let QueryReply::Devices(devices) = *q else { return; };
+        let focusers_ids_and_names = devices
             .into_iter()
+            .filter(|dev| dev.type_.contains(DeviceType::FOCUSER))
             .map(|dev| (dev.id, dev.name))
             .collect::<Vec<_>>();
 
@@ -797,9 +794,13 @@ impl FocuserUi {
     }
 
     fn show_info(&self) {
+        let snap = self.main_ui.snapshot();
         let mut info_shown = false;
-        if let Some(focuser) = self.engine.cur_devices.focuser() {
-            let focuser_state = focuser.state().ok();
+        if let Some(focuser) = &snap.devices.focuser {
+            let focuser_state = match &focuser.state {
+                Some(DeviceState::Focuser(s)) => Some(*s),
+                _ => None,
+            };
             enum InfoState { Work, Err }
 
             if self.prev_pos_state.get() != focuser_state {
