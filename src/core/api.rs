@@ -216,6 +216,10 @@ pub enum PreviewCommand {
     SetWbGreen    { wb_green: f64 },
     SetWbBlue     { wb_blue: f64 },
     SetStars      { stars: bool },
+    /// Preview widget allocation (runtime-only options, never persisted).
+    /// The panel sends it only on a real change to avoid a `seq` bump on
+    /// every size-allocate.
+    SetWidgetSize { width: usize, height: usize },
 }
 
 /// Working modes that can be started via `Command::Start`.
@@ -1012,8 +1016,16 @@ impl Engine {
                     PreviewCommand::SetWbAuto { wb_auto }         => options.preview.wb_auto = wb_auto,
                     PreviewCommand::SetWbRed { wb_red }           => options.preview.wb_red = wb_red,
                     PreviewCommand::SetWbGreen { wb_green }       => options.preview.wb_green = wb_green,
-                    PreviewCommand::SetWbBlue { wb_blue }         => options.preview.wb_blue = wb_blue,
-                    PreviewCommand::SetStars { stars }            => options.preview.stars = stars,
+                    PreviewCommand::SetWbBlue { wb_blue }           => options.preview.wb_blue = wb_blue,
+                    PreviewCommand::SetStars { stars }              => options.preview.stars = stars,
+                    PreviewCommand::SetWidgetSize { width, height } => {
+                        if options.preview.widget_width != width {
+                            options.preview.widget_width = width;
+                        }
+                        if options.preview.widget_height != height {
+                            options.preview.widget_height = height;
+                        }
+                    }
                 }
                 Ok(Reply::Empty)
             }
@@ -1516,6 +1528,7 @@ mod tests {
             Command::Preview(PreviewCommand::SetWbGreen { wb_green: 1.5 }),
             Command::Preview(PreviewCommand::SetWbBlue { wb_blue: 0.5 }),
             Command::Preview(PreviewCommand::SetStars { stars: true }),
+            Command::Preview(PreviewCommand::SetWidgetSize { width: 800, height: 600 }),
             Command::SetFocuserOptions(FocuserPatch {
                 exposure: Some(2.5), gain: Some(Gain::P50), on_temp_change: Some(true),
                 max_temp_change: Some(1.5), on_fwhm_change: Some(false),

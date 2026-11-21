@@ -47,6 +47,7 @@ pub fn init_ui(
         gamma_mark:         Cell::new(false),
         size_adj_pair:      Cell::new(None),
         image_size:         Cell::new((0, 0)),
+        sent_widget_size:   Cell::new((0, 0)),
         opts_syncing:       Cell::new(false),
     });
 
@@ -358,6 +359,8 @@ struct PreviewUi {
     gamma_mark:         Cell<bool>,
     size_adj_pair:      Cell<Option<(f64, f64)>>,
     image_size:         Cell<(usize, usize)>,
+    // Last widget size sent to the engine (no-change size-allocates skipped)
+    sent_widget_size:   Cell<(usize, usize)>,
     opts_syncing:       Cell<bool>,
 }
 
@@ -542,9 +545,17 @@ impl PreviewUi {
 
         self.widgets.image.sw_img.connect_size_allocate(
             clone!(@weak self as self_ => move |_, rect| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.preview.widget_width = rect.width() as usize;
-                options.preview.widget_height = rect.height() as usize;
+                let size = (rect.width() as usize, rect.height() as usize);
+                if self_.sent_widget_size.get() == size { return; }
+                self_.sent_widget_size.set(size);
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::Preview(PreviewCommand::SetWidgetSize {
+                            width: size.0, height: size.1,
+                        })
+                    ),
+                    "Set preview widget size"
+                );
             })
         );
 
