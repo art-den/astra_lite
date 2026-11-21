@@ -102,10 +102,42 @@ fn focuser_move_by_target(
 
 /// Read-only commands must not advance `seq` (polling would look like a change).
 /// Applies on both the `exec_command` and the `submit_command` paths.
+/// Exhaustive match (like `busy_domain_of`): new variants must be classified
+/// explicitly.
 pub(crate) fn is_read_only(cmd: &Command) -> bool {
-    matches!(cmd, Command::GetSnapshot
-        | Command::Query(Query::Devices | Query::CameraCaps | Query::IndiProperties { .. } | Query::IndiDrivers | Query::AllMountSites)
-        | Command::BuildDarkLibraryProgram { .. })
+    match cmd {
+        Command::GetSnapshot
+        | Command::Query(Query::Devices | Query::CameraCaps
+            | Query::IndiProperties { .. } | Query::IndiDrivers | Query::AllMountSites)
+        | Command::BuildDarkLibraryProgram { .. }
+        // Pure mode state read polled by the polar align panel
+        | Command::Mode(ModeCommand::PolarAlign(PolarAlignCommand::GetState)) => true,
+        Command::Mode(_) | Command::Start(_)
+        | Command::StopActiveMode | Command::ContinueAbortedMode
+        | Command::Shutdown { .. } | Command::SaveOptions
+        | Command::Mount(_) | Command::Focuser(_) | Command::FilterWheel(_)
+        | Command::Connect(_) | Command::Guider(_) | Command::Indi(_)
+        | Command::SetCameraDevice{..} | Command::SetMountDevice{..}
+        | Command::SetFocuserDevice{..} | Command::SetFilterWheelDevice{..}
+        | Command::SetCooling(..) | Command::SetFan{..} | Command::SetHeater{..}
+        | Command::SetCamReadoutOptions(..) | Command::SetFrameType{..}
+        | Command::SetAutoExpEnabled{..} | Command::SetExposure{..}
+        | Command::SetGain{..} | Command::SetOffset{..} | Command::SetBinning{..}
+        | Command::SetCrop{..} | Command::SetRawFramesCount{..}
+        | Command::SetRawFramesOptions(..)
+        | Command::SetLiveViewEnabled{..} | Command::SetLiveStackingOptions(..)
+        | Command::SetQualityOptions(..) | Command::SetCalibrOptions(..)
+        | Command::SetDarkLibraryPath{..}
+        | Command::SetTelescopeFocalLen{..} | Command::SetBarlow{..}
+        | Command::SetGuidingFocalLen{..} | Command::SetFocuserOptions(..)
+        | Command::SetPlateSolverOptions(..) | Command::SetPolarAlignOptions(..)
+        | Command::SetGuidingOptions(..)
+        | Command::SetIndiSelection(..) | Command::SetAlpacaAddress{..}
+        | Command::SetSiteLatitude{..} | Command::SetSiteLongitude{..}
+        | Command::SetTelescopeFromPlateSolve{..} | Command::SetMountOptions(..)
+        | Command::OpenImageFile{..}
+        | Command::Preview(_) => false,
+    }
 }
 
 /// A command for the active mode (plain-data rule: see [`Command`]).
@@ -1528,6 +1560,14 @@ mod tests {
         ] {
             roundtrip(reply);
         }
+    }
+
+    #[test]
+    fn polar_align_get_state_is_read_only() {
+        assert!(is_read_only(&Command::Mode(
+            ModeCommand::PolarAlign(PolarAlignCommand::GetState))));
+        assert!(!is_read_only(&Command::Mode(
+            ModeCommand::PolarAlign(PolarAlignCommand::Restart))));
     }
 
     #[test]
