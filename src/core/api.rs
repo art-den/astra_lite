@@ -1094,10 +1094,19 @@ impl Engine {
                         indi.command_set_text_property(&device, &prop, &elements)?;
                     }
                     IndiCommand::SetSwitchElementForAllDevices { prop, element } => {
+                        // Best-effort: a per-device failure must not leave the
+                        // remaining devices unset (e.g. half-applied CONFIG_SAVE)
+                        let mut errors = Vec::new();
                         for device in indi.get_devices_list() {
-                            indi.command_set_switch_property(
+                            if let Err(err) = indi.command_set_switch_property(
                                 &device.name, &prop, &[(&element, true)]
-                            )?;
+                            ) {
+                                errors.push(format!("{}: {err:#}", device.name));
+                            }
+                        }
+                        if !errors.is_empty() {
+                            eyre::bail!("Set switch on all devices failed: [{}]",
+                                errors.join("; "));
                         }
                     }
                 }
