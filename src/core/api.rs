@@ -944,8 +944,8 @@ impl Engine {
                 Ok(Reply::Empty)
             }
             Command::SetPlateSolverOptions(patch) => {
-                if patch.timeout.map_or(false, |v| v < 1)
-                    || patch.blind_timeout.map_or(false, |v| v < 1) {
+                if patch.timeout.is_some_and(|v| v < 1)
+                    || patch.blind_timeout.is_some_and(|v| v < 1) {
                         return Err(eyre::eyre!("plate solve timeout must be >= 1 sec"));
                     }
                 let mut options = self.options.write().unwrap();

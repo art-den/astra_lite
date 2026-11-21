@@ -316,11 +316,11 @@ impl GuidingUi {
 
         // Camera exposure range via the query API; no camera => leave the
         // spinbutton uncorrected (old `camera_or_err` skip semantics)
-        if let Ok(Reply::Query(q)) = self.engine.exec_command(Command::Query(Query::CameraCaps)) {
-            if let QueryReply::CameraCaps(caps) = *q {
-                let exp_range = caps.exposure_range.map(|r| r.start..=r.end);
-                correct_spinbutton_by_range(&self.widgets.spb_mnt_cal_exp, exp_range, 1, Some(1.0));
-            }
+        if let Ok(Reply::Query(q)) = self.engine.exec_command(Command::Query(Query::CameraCaps))
+            && let QueryReply::CameraCaps(caps) = *q
+        {
+            let exp_range = caps.exposure_range.map(|r| r.start..=r.end);
+            correct_spinbutton_by_range(&self.widgets.spb_mnt_cal_exp, exp_range, 1, Some(1.0));
         }
 
         self.widgets.grd.set_sensitive(true);
