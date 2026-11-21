@@ -187,7 +187,7 @@ impl CamOptions {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
 #[serde(default)]
 pub struct SeparatedCamOptions {
     pub frame:  FrameOptions,

@@ -72,7 +72,7 @@ impl GuidingOptions {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
 #[serde(default)]
 pub struct SeparatedGuidingOptions {
     pub exposure: f64,

@@ -12,6 +12,7 @@ use super::{
     },
     mode_goto::GotoConfig,
     mode_polar_align::{PolarAlignCommand, PolarAlignState},
+    snapshot::StateSnapshot,
 };
 
 /// Raw INDI property commands
@@ -43,6 +44,7 @@ fn busy_domain_of(cmd: &Command) -> Option<BusyDomain> {
         | Command::Start(_)
         | Command::StopActiveMode
         | Command::ContinueAbortedMode
+        | Command::GetSnapshot
         | Command::SetCameraDevice{..} | Command::SetMountDevice{..}
         | Command::SetFocuserDevice{..} | Command::SetFilterWheelDevice{..}
         | Command::OpenImageFile{..}
@@ -379,8 +381,8 @@ pub struct IndiSelPatch {
 /// Mutations go through here, and also read-only queries that need engine
 /// state the caller cannot access itself (device capabilities, derived
 /// computations, e.g. `BuildDarkLibraryProgram`); such query commands take
-/// no busy domain. Pure read-only access (HAL device lists, `options.read()`,
-/// mode queries) stays as is until the snapshot/query API.
+/// no busy domain. Engine state reading goes through `GetSnapshot` (and
+/// `Query` as it is added): no public in-process state accessors for the UI.
 ///
 /// Command handlers must keep the global lock order modes -> options and must
 /// not run long/blocking work while holding engine locks.
@@ -391,6 +393,10 @@ pub struct IndiSelPatch {
 ///   device-domain commands (Mount/Focuser/FilterWheel/Guider/Indi/Connect)
 ///   block until the device operation returns — UI code should use
 ///   `submit_command` for those.
+/// - Fast read commands (`GetSnapshot`, fast queries) must be executed with
+///   `exec_command` only: through the submit queue they would serialize behind
+///   blocking device commands. Blocking device queries must use
+///   `submit_command`.
 /// - `submit_command` enqueues onto a single FIFO worker thread; the reply is
 ///   delivered as `Event::CommandReply { id, result }` sent FROM THAT THREAD.
 ///   UI must consume it through the main-thread event bridge (`ui_main`
@@ -458,6 +464,10 @@ pub enum Command {
     /// Build the master file creation program for a dark library spec
     /// (read-only query, see `busy_domain_of`).
     BuildDarkLibraryProgram { spec: DarkLibSpec },
+    /// Serializable engine state snapshot (mode, options, busy domains).
+    /// Cheap read from engine memory only, no device access; synchronous
+    /// execution only (see the threading contract above).
+    GetSnapshot,
 }
 
 /// Reply to a `Command`.
@@ -475,6 +485,8 @@ pub enum Reply {
         total_frames:       usize,
         total_duration_sec: f64,
     },
+    /// Answer to `Command::GetSnapshot` (boxed to keep the enum small).
+    Snapshot(Box<StateSnapshot>),
 }
 
 impl Engine {
@@ -490,6 +502,17 @@ impl Engine {
     /// `Command` docs threading contract).
     pub fn exec_command(self: &Arc<Self>, cmd: Command) -> eyre::Result<Reply> {
         log::debug!("Engine command: {:?}", cmd);
+        // Read-only queries must not advance `seq` (polling would look like a change)
+        let read_only = matches!(cmd, Command::GetSnapshot
+            | Command::BuildDarkLibraryProgram { .. });
+        let reply = self.exec_command_inner(cmd)?;
+        if !read_only {
+            self.bump_seq();
+        }
+        Ok(reply)
+    }
+
+    fn exec_command_inner(self: &Arc<Self>, cmd: Command) -> eyre::Result<Reply> {
         let _busy = match busy_domain_of(&cmd) {
             Some(domain) => Some(self.lock_device_busy(domain)?),
             None => None,
@@ -991,6 +1014,7 @@ impl Engine {
                     total_duration_sec,
                 })
             }
+            Command::GetSnapshot => Ok(Reply::Snapshot(Box::new(self.snapshot()))),
         }
     }
 }
@@ -1004,6 +1028,8 @@ mod tests {
         DefectPixelsOptions, FramesCountMode, MasterBiasesOptions,
         MasterDarksOptions, ValuesItem,
     };
+
+    use crate::core::engine::ModeKind;
 
     fn roundtrip<T: Serialize + DeserializeOwned + std::fmt::Debug>(value: T) {
         let json = serde_json::to_string(&value).unwrap();
@@ -1367,5 +1393,46 @@ mod tests {
             ..Default::default()
         })).is_ok());
         assert_eq!(engine.options.read().unwrap().plate_solver.timeout, 15);
+    }
+
+    fn snapshot_of(engine: &Arc<Engine>) -> StateSnapshot {
+        match engine.exec_command(Command::GetSnapshot).unwrap() {
+            Reply::Snapshot(snap) => *snap,
+            _ => panic!("expected Reply::Snapshot"),
+        }
+    }
+
+    #[test]
+    fn snapshot_roundtrip_seq_and_mode() {
+        let engine = Engine::new();
+
+        let snap = snapshot_of(&engine);
+        assert_eq!(snap.mode.kind, ModeKind::Waiting);
+
+        // Full state survives a JSON round-trip
+        let json = serde_json::to_string(&snap).unwrap();
+        let back: StateSnapshot = serde_json::from_str(&json).unwrap();
+        assert_eq!(serde_json::to_string(&back).unwrap(), json);
+
+        let seq0 = snap.seq;
+
+        // A mutating command that sends an event advances seq
+        assert!(engine.exec_command(Command::SetExposure { exposure: 2.5 }).is_ok());
+        let seq1 = snapshot_of(&engine).seq;
+        assert!(seq1 > seq0, "seq must grow after an evented mutation");
+
+        // A mutating command that sends NO event also advances seq
+        // (seq is not event-coupled)
+        assert!(engine.exec_command(Command::SetCamReadoutOptions(CamReadoutPatch {
+            low_noise: Some(true),
+            ..Default::default()
+        })).is_ok());
+        let seq2 = snapshot_of(&engine).seq;
+        assert!(seq2 > seq1, "seq must grow after an eventless mutation");
+
+        // Polling must not look like a change
+        assert_eq!(snapshot_of(&engine).seq, seq2);
+
+        engine.stop();
     }
 }

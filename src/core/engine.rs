@@ -1,8 +1,10 @@
 use std::{
     any::Any, fmt::Display, path::Path,
     sync::{Arc, Mutex, RwLock, RwLockReadGuard, Weak, mpsc,
-        atomic::{AtomicBool, AtomicU64}},
+        atomic::{AtomicBool, AtomicU64, Ordering}},
 };
+
+use serde::{Deserialize, Serialize};
 
 use crate::{
     core::{cam_ctrl::*, cur_devices::CurDevices, live_stacking::LiveStacking, preview::{Preview, ResultImageInfo}, raw_calibration::{CalibrParams, RawCalibration}, utils::FileNameUtils}, guiding::external_guider::*, hal::{events::HalEvent, *}, image::io::FromFileCameraShot, options::*, sky_math::math::EqCoord, utils::{log_utils::log_if_error, timer::*},
@@ -12,6 +14,7 @@ use super::{
     api::{Command, ModeCommand, ModeCommandReply},
     events::*,
     frame_processing::*,
+    snapshot::{ModeState, StateSnapshot},
     mode_platesolve::*,
     mode_darks_lib::*,
     mode_focusing::*,
@@ -22,7 +25,7 @@ use super::{
     mode_waiting::*
 };
 
-#[derive(PartialEq, Copy, Clone, Debug)]
+#[derive(PartialEq, Eq, Copy, Clone, Debug, Serialize, Deserialize)]
 pub enum ModeKind {
     Waiting,
     OpeningImgFile,
@@ -83,7 +86,7 @@ pub enum NotifyResult {
 /// Device domains serialized by the engine busy flags: a command for a domain
 /// that is already running is rejected with a "busy" error (never silently
 /// dropped, so a future web client sees the rejection).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BusyDomain {
     Mount,
     /// Reserved: camera operations do not go through the facade yet.
@@ -113,9 +116,27 @@ struct DeviceBusyFlags {
     flags: [AtomicBool; BUSY_DOMAIN_COUNT],
 }
 
+const ALL_DOMAINS: [BusyDomain; BUSY_DOMAIN_COUNT] = [
+    BusyDomain::Mount,
+    BusyDomain::Camera,
+    BusyDomain::Focuser,
+    BusyDomain::FilterWheel,
+    BusyDomain::Guider,
+    BusyDomain::Indi,
+    BusyDomain::Connect,
+];
+
 impl DeviceBusyFlags {
     fn new() -> Self {
         Self { flags: std::array::from_fn(|_| AtomicBool::new(false)) }
+    }
+
+    /// Snapshot of the currently busy domains (for `StateSnapshot`).
+    fn busy_domains(&self) -> Vec<BusyDomain> {
+        ALL_DOMAINS.iter().copied()
+            .filter(|d| self.flags[Self::idx(*d)]
+                .load(Ordering::Acquire))
+            .collect()
     }
 
     fn idx(domain: BusyDomain) -> usize {
@@ -137,12 +158,15 @@ impl DeviceBusyFlags {
 pub(crate) struct BusyGuard<'a> {
     flags:  &'a DeviceBusyFlags,
     domain: BusyDomain,
+    seq:    &'a AtomicU64,
 }
 
 impl Drop for BusyGuard<'_> {
     fn drop(&mut self) {
         self.flags.flags[DeviceBusyFlags::idx(self.domain)]
-            .store(false, std::sync::atomic::Ordering::Release);
+            .store(false, Ordering::Release);
+        // Busy-flag transitions are state changes for snapshot consumers
+        self.seq.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -182,7 +206,9 @@ pub struct Engine {
     frame_processing:   Arc<FrameProcessing>,
     device_busy:        DeviceBusyFlags,
     cmd_queue:          CommandQueue,
-
+    /// Monotonic change counter for snapshot consumers ('refetch only on change').
+    /// Opaque: double counting is allowed, only monotonicity matters.
+    seq:                AtomicU64,
 }
 
 impl Drop for Engine {
@@ -226,6 +252,7 @@ impl Engine {
                 sender:  cmd_tx,
                 next_id: AtomicU64::new(1),
             },
+            seq: AtomicU64::new(0),
             events,
         });
 
@@ -245,6 +272,9 @@ impl Engine {
         while let Ok(qc) = rx.recv() {
             let Some(engine) = engine.upgrade() else { break };
             let result = engine.exec_command(qc.cmd);
+            if result.is_ok() {
+                engine.seq.fetch_add(1, Ordering::Relaxed);
+            }
             engine.events.send(Event::CommandReply {
                 id:     qc.id,
                 result: result.map_err(|err| format!("{err:#}")),
@@ -271,7 +301,8 @@ impl Engine {
         ).is_err() {
             eyre::bail!("Device domain {:?} is busy", domain);
         }
-        Ok(BusyGuard { flags: &self.device_busy, domain })
+        self.seq.fetch_add(1, Ordering::Relaxed);
+        Ok(BusyGuard { flags: &self.device_busy, domain, seq: &self.seq })
     }
 
     pub fn stop(self: &Arc<Self>) {
@@ -335,6 +366,40 @@ impl Engine {
         self.modes.read().unwrap()
     }
 
+    /// Advances the snapshot change counter after a successful mutation.
+    pub(crate) fn bump_seq(&self) {
+        self.seq.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Serializable engine state for `Command::GetSnapshot`.
+    /// Fields may come from slightly different moments (a torn snapshot is
+    /// acceptable for UI display); the `seq` double-read below prevents the
+    /// dangerous 'old fields + new seq' combination for snapshot consumers.
+    /// Lock discipline: sequential scopes, never nested (see `snapshot.rs`).
+    pub(crate) fn snapshot(&self) -> StateSnapshot {
+        let mut snap = self.snapshot_once();
+        if snap.seq != self.seq.load(Ordering::Relaxed) {
+            snap = self.snapshot_once();
+        }
+        snap
+    }
+
+    fn snapshot_once(&self) -> StateSnapshot {
+        // `seq` is read first: a later change invalidates this build (see `snapshot`)
+        let seq = self.seq.load(Ordering::Relaxed);
+        // Scope 1: modes + options + busy flags, released before anything else
+        let (mode, busy, options) = {
+            let modes = self.modes.read().unwrap();
+            let options = self.options.read().unwrap();
+            (
+                ModeState::from_modes(&modes),
+                self.device_busy.busy_domains(),
+                options.clone(),
+            )
+        };
+        StateSnapshot { seq, mode, busy, options }
+    }
+
     /// On error aborts the active mode and sends `Event::Error`.
     /// Must not be called while holding engine locks (see `abort_active_mode`).
     fn process_error(
@@ -382,6 +447,8 @@ impl Engine {
     }
 
     fn hal_event_handler(self: &Arc<Self>, event: HalEvent) -> eyre::Result<()> {
+        // Any HAL event may have changed engine/device state
+        self.seq.fetch_add(1, Ordering::Relaxed);
         match &event {
             HalEvent::Error(err) => {
                 self.process_error_str(&err.as_str(), "HAL error");

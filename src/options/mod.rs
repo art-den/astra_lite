@@ -61,7 +61,7 @@ pub enum Gain {
     Max
 }
 
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
 #[serde(default)]
 pub struct Options {
     pub ascom_alpaca: AscomAlpacaOptions,

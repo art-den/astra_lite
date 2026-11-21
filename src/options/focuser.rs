@@ -48,7 +48,7 @@ impl FocuserOptions {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
 #[serde(default)]
 pub struct SeparatedFocuserOptions {
     pub exposure: f64,

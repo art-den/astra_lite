@@ -1,8 +1,9 @@
 use std::{collections::HashMap, sync::{Arc, RwLock, atomic::AtomicU64}};
+use serde::{Deserialize, Serialize};
 use crate::{guiding::external_guider::ExtGuiderEvent, plate_solve::PlateSolverEvent};
 use super::{api::Reply, engine::ModeKind, frame_processing::*, mode_focusing::*, mode_polar_align::PolarAlignmentEvent};
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Progress {
     pub cur: usize,
     pub total: usize,

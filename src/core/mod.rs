@@ -12,6 +12,7 @@ pub mod cam_ctrl;
 pub mod cur_devices;
 pub mod preview;
 pub mod live_stacking;
+pub mod snapshot;
 
 mod mode_waiting;
 mod mode_camera;
