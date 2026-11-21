@@ -7,7 +7,9 @@ use std::path::PathBuf;
 use super::{
     engine::{BusyDomain, Engine},
     events::Event,
-    mode_darks_lib::{DarkLibMode, MasterFileCreationProgramItem},
+    mode_darks_lib::{
+        DarkLibMode, DarkLibSpec, MasterFileCreationProgramItem, build_program,
+    },
     mode_goto::GotoConfig,
     mode_polar_align::{PolarAlignCommand, PolarAlignState},
 };
@@ -55,7 +57,9 @@ fn busy_domain_of(cmd: &Command) -> Option<BusyDomain> {
         | Command::SetQualityOptions(..) | Command::SetCalibrOptions(..)
         | Command::SetTelescopeFocalLen{..} | Command::SetBarlow{..}
         | Command::SetGuidingFocalLen{..} | Command::SetFocuserOptions(..)
-        | Command::SetPlateSolverOptions(..) | Command::SetGuidingOptions(..) => None,
+        | Command::SetPlateSolverOptions(..) | Command::SetGuidingOptions(..)
+        // Read-only query: pure computation + capability read, no camera exclusivity
+        | Command::BuildDarkLibraryProgram{..} => None,
     }
 }
 
@@ -289,8 +293,11 @@ pub struct GuidingPatch {
 /// data (`Serialize + Deserialize`, no `Arc<dyn ...>`, Rc, closures, locks or
 /// references; paths are `String`).
 ///
-/// Only mutations go through here. Read-only access (HAL device lists,
-/// `options.read()`, mode queries) stays as is until the snapshot/query API.
+/// Mutations go through here, and also read-only queries that need engine
+/// state the caller cannot access itself (device capabilities, derived
+/// computations, e.g. `BuildDarkLibraryProgram`); such query commands take
+/// no busy domain. Pure read-only access (HAL device lists, `options.read()`,
+/// mode queries) stays as is until the snapshot/query API.
 ///
 /// Command handlers must keep the global lock order modes -> options and must
 /// not run long/blocking work while holding engine locks.
@@ -355,6 +362,9 @@ pub enum Command {
     SetPlateSolverOptions(PlateSolverPatch),
     SetGuidingOptions(GuidingPatch),
     OpenImageFile { path: String },
+    /// Build the master file creation program for a dark library spec
+    /// (read-only query, see `busy_domain_of`).
+    BuildDarkLibraryProgram { spec: DarkLibSpec },
 }
 
 /// Reply to a `Command`.
@@ -365,6 +375,13 @@ pub enum Reply {
     /// New absolute position after `FocuserCommand::MoveBy`;
     /// `None` when the move was skipped.
     FocuserMove { new_position: Option<f64> },
+    /// Answer to `Command::BuildDarkLibraryProgram` (`mode` echoes the spec variant).
+    DarkLibraryProgram {
+        mode:               DarkLibMode,
+        program:            Vec<MasterFileCreationProgramItem>,
+        total_frames:       usize,
+        total_duration_sec: f64,
+    },
 }
 
 impl Engine {
@@ -758,6 +775,25 @@ impl Engine {
                 }
                 Ok(Reply::Empty)
             }
+            Command::BuildDarkLibraryProgram { spec } => {
+                let mode = spec.mode();
+                // `is_cooler_supported()` is resolved before taking the `options` lock
+                // (lock order `modes -> options`: no `modes` lock here at all)
+                let camera = self.cur_devices.camera_or_err()?;
+                let cooler_supported = camera.is_cooler_supported()?;
+                let cam_opts = self.options.read().unwrap().cam.clone();
+                let program = build_program(&spec, &cam_opts, cooler_supported);
+                let total_frames = program.iter().map(|item| item.count).sum();
+                let total_duration_sec = program.iter()
+                    .map(|item| item.count as f64 * item.exposure)
+                    .sum();
+                Ok(Reply::DarkLibraryProgram {
+                    mode,
+                    program,
+                    total_frames,
+                    total_duration_sec,
+                })
+            }
         }
     }
 }
@@ -767,6 +803,10 @@ mod tests {
     use serde::de::DeserializeOwned;
 
     use super::*;
+    use crate::core::mode_darks_lib::{
+        DefectPixelsOptions, FramesCountMode, MasterBiasesOptions,
+        MasterDarksOptions, ValuesItem,
+    };
 
     fn roundtrip<T: Serialize + DeserializeOwned + std::fmt::Debug>(value: T) {
         let json = serde_json::to_string(&value).unwrap();
@@ -942,6 +982,21 @@ mod tests {
                 calibr_exposure: Some(3.5), calibr_gain: Some(Gain::Max),
             }),
             Command::OpenImageFile { path: "/tmp/test.fits".to_string() },
+            Command::BuildDarkLibraryProgram {
+                spec: DarkLibSpec::DefectPixels(DefectPixelsOptions {
+                    frm_cnt_mode: FramesCountMode::Count, frames_count: 10,
+                    ..Default::default()
+                }),
+            },
+            Command::BuildDarkLibraryProgram {
+                spec: DarkLibSpec::MasterDarks(MasterDarksOptions {
+                    temperature: ValuesItem { used: true, values: vec![-10.0, -5.0] },
+                    ..Default::default()
+                }),
+            },
+            Command::BuildDarkLibraryProgram {
+                spec: DarkLibSpec::MasterBiases(MasterBiasesOptions::default()),
+            },
         ] {
             roundtrip(cmd);
         }
@@ -960,6 +1015,21 @@ mod tests {
             Reply::Mode(ModeCommandReply::PolarAlignState(PolarAlignState::WaitForManualRefresh)),
             Reply::FocuserMove { new_position: None },
             Reply::FocuserMove { new_position: Some(123.5) },
+            Reply::DarkLibraryProgram {
+                mode: DarkLibMode::MasterBias,
+                program: vec![MasterFileCreationProgramItem {
+                    count: 60, temperature: Some(-10.0), exposure: 0.0001,
+                    gain: 100.0, offset: 10, binning: Binning::Orig, crop: Crop::None,
+                }],
+                total_frames: 60,
+                total_duration_sec: 0.006,
+            },
+            Reply::DarkLibraryProgram {
+                mode: DarkLibMode::MasterDark,
+                program: Vec::new(),
+                total_frames: 0,
+                total_duration_sec: 0.0,
+            },
         ] {
             roundtrip(reply);
         }

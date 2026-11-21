@@ -1,14 +1,14 @@
-use std::{cell::RefCell, collections::HashSet, rc::Rc, sync::Arc};
+use std::{cell::{Cell, RefCell}, collections::HashMap, rc::Rc, sync::Arc};
 use gtk::{gdk::ffi::GDK_CURRENT_TIME, glib::{self, clone}, prelude::*};
 use itertools::Itertools;
 use macros::FromBuilder;
 use serde::{Deserialize, Serialize};
 use crate::{
-    core::{api::{Command, StartMode}, engine::*, events::*, mode_darks_lib::*}, hal::Camera, image::info::seconds_to_total_time_str, options::*,
+    core::{api::{Command, Reply, StartMode}, engine::*, events::*, mode_darks_lib::*}, image::info::seconds_to_total_time_str, options::*,
     utils::{io_utils::*, log_utils::log_if_error}
 };
 
-use super::{gtk_utils::*, module::*};
+use super::{gtk_utils::*, module::*, utils::DelayedActions};
 
 pub fn init_ui(
     window: &gtk::ApplicationWindow,
@@ -31,11 +31,18 @@ pub fn init_ui(
 
     let obj = Rc::new(DarksLibraryUI {
         widgets,
-        window:       window.clone(),
-        engine:       Arc::clone(engine),
-        ui_options:   RefCell::new(ui_options),
-        pending_cmds: RefCell::new(HashSet::new()),
+        window:                 window.clone(),
+        engine:                 Arc::clone(engine),
+        ui_options:             RefCell::new(ui_options),
+        pending_cmds:           RefCell::new(HashMap::new()),
+        pending_start_build_id: Cell::new(None),
+        delayed_actions:        DelayedActions::new(250),
     });
+    obj.delayed_actions.set_event_handler(
+        clone!(@weak obj => move |action| {
+            obj.delayed_actions_handler(action);
+        })
+    );
 
     obj.init_widgets();
     obj.load_options();
@@ -170,7 +177,21 @@ pub struct DarksLibraryUI {
     window:       gtk::ApplicationWindow,
     engine:       Arc<Engine>,
     ui_options:   RefCell<UiOptions>,
-    pending_cmds: RefCell<HashSet<u64>>,
+    pending_cmds: RefCell<HashMap<u64, PendingCmd>>,
+    // Build command id whose reply is still allowed to trigger Start
+    pending_start_build_id: Cell<Option<u64>>,
+    delayed_actions: DelayedActions<DelayedAction>,
+}
+
+enum PendingCmd {
+    Build(DarkLibMode),
+    BuildForStart(DarkLibMode),
+    Start,
+}
+
+#[derive(Hash, Eq, PartialEq)]
+enum DelayedAction {
+    ShowInfo,
 }
 
 impl Drop for DarksLibraryUI {
@@ -461,10 +482,13 @@ impl DarksLibraryUI {
     }
 
     fn connect_widgets_events(self: &Rc<Self>) {
+        // Any widget signal invalidates a program waiting to start (its Build
+        // may still be queued in the engine FIFO)
         let connect_checkbtn = |checkbox: &gtk::CheckButton| {
             checkbox.connect_active_notify(clone!(@weak self as self_ => move |_| {
                 self_.get_options();
-                self_.show_info();
+                self_.pending_start_build_id.set(None);
+                self_.delayed_actions.schedule(DelayedAction::ShowInfo);
                 self_.correct_widgets_enable_state();
             }));
         };
@@ -472,14 +496,16 @@ impl DarksLibraryUI {
         let connect_spinbtn = |spb: &gtk::SpinButton| {
             spb.connect_value_changed(clone!(@weak self as self_ => move |_| {
                 self_.get_options();
-                self_.show_info();
+                self_.pending_start_build_id.set(None);
+                self_.delayed_actions.schedule(DelayedAction::ShowInfo);
             }));
         };
 
         let connect_radiobtn = |rb: &gtk::RadioButton| {
             rb.connect_active_notify(clone!(@weak self as self_ => move |_| {
                 self_.get_options();
-                self_.show_info();
+                self_.pending_start_build_id.set(None);
+                self_.delayed_actions.schedule(DelayedAction::ShowInfo);
                 self_.correct_widgets_enable_state();
             }));
         };
@@ -487,7 +513,8 @@ impl DarksLibraryUI {
         let connect_entry = |e: &gtk::Entry| {
             e.connect_text_notify(clone!(@weak self as self_ => move |_| {
                 self_.get_options();
-                self_.show_info();
+                self_.pending_start_build_id.set(None);
+                self_.delayed_actions.schedule(DelayedAction::ShowInfo);
             }));
         };
 
@@ -647,55 +674,46 @@ impl DarksLibraryUI {
         ]);
     }
 
-    fn show_info(&self) {
-        let ui_options = self.ui_options.borrow();
-        let Some(camera) = self.engine.cur_devices.camera() else { return; };
-        let options = self.engine.options.read().unwrap();
-
-        let defect_pixels_program = self.build_program_sync(
-            &DarkLibSpec::DefectPixels(ui_options.defect_pixels.clone()), &camera, &options.cam);
-        if let Ok(defect_pixels_program) = defect_pixels_program {
-            self.show_program_info(&defect_pixels_program, &self.widgets.dp.l_def_info);
-        };
-
-        let dark_library_program = self.build_program_sync(
-            &DarkLibSpec::MasterDarks(ui_options.master_darks.clone()), &camera, &options.cam);
-        if let Ok(dark_library_program) = dark_library_program {
-            self.show_program_info(&dark_library_program,  &self.widgets.darks.l_dark_info);
-        }
-
-        let bias_library_program = self.build_program_sync(
-            &DarkLibSpec::MasterBiases(ui_options.master_biases.clone()), &camera, &options.cam);
-        if let Ok(bias_library_program) = bias_library_program {
-            self.show_program_info(&bias_library_program, &self.widgets.biases.l_bias_info);
+    fn delayed_actions_handler(&self, action: &DelayedAction) {
+        match action {
+            DelayedAction::ShowInfo => self.show_info(),
         }
     }
 
-    /// Temporary wrapper until the `BuildDarkLibraryProgram` command:
-    /// resolves the cooler capability via HAL on the GTK thread (as before).
-    fn build_program_sync(
-        &self,
-        spec:     &DarkLibSpec,
-        camera:   &Arc<dyn Camera + Send + Sync>,
-        cam_opts: &CamOptions,
-    ) -> eyre::Result<Vec<MasterFileCreationProgramItem>> {
-        let cooler_supported = camera.is_cooler_supported()?;
-        Ok(build_program(spec, cam_opts, cooler_supported))
+    fn show_info(&self) {
+        // No camera: nothing to show (as before)
+        if self.engine.cur_devices.camera().is_none() { return; }
+
+        let ui_options = self.ui_options.borrow();
+        for spec in [
+            DarkLibSpec::DefectPixels(ui_options.defect_pixels.clone()),
+            DarkLibSpec::MasterDarks(ui_options.master_darks.clone()),
+            DarkLibSpec::MasterBiases(ui_options.master_biases.clone()),
+        ] {
+            let mode = spec.mode();
+            match self.engine.submit_command(Command::BuildDarkLibraryProgram { spec }) {
+                Ok(id) => { _ = self.pending_cmds.borrow_mut().insert(id, PendingCmd::Build(mode)); }
+                Err(err) => { log::debug!("Build dark library program submit error: {err}"); }
+            }
+        }
     }
 
     fn show_program_info(
         &self,
-        program: &[MasterFileCreationProgramItem],
-        label:   &gtk::Label
+        mode:               &DarkLibMode,
+        sessions:           usize,
+        total_duration_sec: f64,
     ) {
-        let duration: f64 = program.iter()
-            .map(|item| item.count as f64 * item.exposure)
-            .sum();
+        let label = match mode {
+            DarkLibMode::DefectPixels => &self.widgets.dp.l_def_info,
+            DarkLibMode::MasterDark   => &self.widgets.darks.l_dark_info,
+            DarkLibMode::MasterBias   => &self.widgets.biases.l_bias_info,
+        };
 
         let text = format!(
             "Sessions: {} (~ {})",
-            program.len(),
-            seconds_to_total_time_str(duration, false)
+            sessions,
+            seconds_to_total_time_str(total_duration_sec, false)
         );
 
         label.set_text(&text);
@@ -703,14 +721,10 @@ impl DarksLibraryUI {
 
     fn start(&self, mode: DarkLibMode) {
         exec_and_show_error(Some(&self.window), || {
-            let camera = self.engine.cur_devices.camera_or_err()?;
-
             self.get_options();
             self.save_options();
 
-            let options = self.engine.options.read().unwrap();
             let ui_options = self.ui_options.borrow();
-
             let spec = match &mode {
                 DarkLibMode::DefectPixels =>
                     DarkLibSpec::DefectPixels(ui_options.defect_pixels.clone()),
@@ -719,14 +733,13 @@ impl DarksLibraryUI {
                 DarkLibMode::MasterBias =>
                     DarkLibSpec::MasterBiases(ui_options.master_biases.clone()),
             };
-            let program = build_program(&spec, &options.cam, camera.is_cooler_supported()?);
             drop(ui_options);
-            drop(options);
 
-            match self.engine.submit_command(
-                Command::Start(StartMode::CreatingDarkLibrary { mode, program })
-            ) {
-                Ok(id) => { _ = self.pending_cmds.borrow_mut().insert(id); }
+            match self.engine.submit_command(Command::BuildDarkLibraryProgram { spec }) {
+                Ok(id) => {
+                    self.pending_start_build_id.set(Some(id));
+                    _ = self.pending_cmds.borrow_mut().insert(id, PendingCmd::BuildForStart(mode));
+                }
                 Err(err) => show_error_message(Some(&self.window), "Error", &err.to_string()),
             }
             Ok(())
@@ -743,11 +756,47 @@ impl DarksLibraryUI {
 
         match event {
             Event::CommandReply { id, result } => {
-                if !self.pending_cmds.borrow_mut().remove(&id) {
-                    return;
-                }
-                if let Err(err_msg) = result {
-                    show_error_message(Some(&self.window), "Error", &err_msg);
+                let Some(pending) = self.pending_cmds.borrow_mut().remove(&id) else { return; };
+                match pending {
+                    PendingCmd::Build(mode) => {
+                        // Info labels: build errors are silently ignored
+                        // (as the old in-panel `is_cooler_supported` errors were)
+                        if let Ok(Reply::DarkLibraryProgram { program, total_duration_sec, .. }) = result {
+                            self.show_program_info(&mode, program.len(), total_duration_sec);
+                        }
+                    }
+
+                    PendingCmd::BuildForStart(mode) => {
+                        // Start is triggered only by the still-current start-Build
+                        if self.pending_start_build_id.get() != Some(id) {
+                            return;
+                        }
+                        self.pending_start_build_id.set(None);
+                        match result {
+                            Ok(Reply::DarkLibraryProgram { program, .. }) => {
+                                match self.engine.submit_command(
+                                    Command::Start(StartMode::CreatingDarkLibrary { mode, program })
+                                ) {
+                                    Ok(id) => {
+                                        _ = self.pending_cmds.borrow_mut().insert(id, PendingCmd::Start);
+                                    }
+                                    Err(err) => show_error_message(
+                                        Some(&self.window), "Error", &err.to_string()
+                                    ),
+                                }
+                            }
+                            Ok(_) => {}
+                            Err(err_msg) => show_error_message(
+                                Some(&self.window), "Error", &err_msg
+                            ),
+                        }
+                    }
+
+                    PendingCmd::Start => {
+                        if let Err(err_msg) = result {
+                            show_error_message(Some(&self.window), "Error", &err_msg);
+                        }
+                    }
                 }
             }
             Event::Progress(Some(progress), ModeKind::CreatingDefectPixels) => {
