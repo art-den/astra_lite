@@ -215,7 +215,9 @@ pub struct Engine {
     /// Monotonic change counter for snapshot consumers ('refetch only on change').
     /// Opaque: double counting is allowed, only monotonicity matters.
     seq:                AtomicU64,
-    shutdown_called:    AtomicBool,
+    /// Held for the whole `shutdown()` body; set when it finished. A second
+    /// concurrent caller waits on the mutex, then takes the no-op branch.
+    shutdown_done:      Mutex<bool>,
     /// Set at the very start of `shutdown()`: the queue worker drops the
     /// remaining queued commands instead of executing them.
     queue_shutdown:     AtomicBool,
@@ -266,7 +268,7 @@ impl Engine {
                 next_id: AtomicU64::new(1),
             },
             seq: AtomicU64::new(0),
-            shutdown_called: AtomicBool::new(false),
+            shutdown_done: Mutex::new(false),
             queue_shutdown: AtomicBool::new(false),
             worker_busy: AtomicBool::new(false),
             queue_worker_id: Mutex::new(None),
@@ -348,8 +350,11 @@ impl Engine {
     }
 
     /// Unconditional full engine shutdown: the one authoritative teardown
-    /// sequence for the whole engine and its devices. Idempotent (repeat calls
-    /// are no-ops). Every step is best-effort: step errors are logged, never
+    /// sequence for the whole engine and its devices. Idempotent: a repeat
+    /// call waits for the first one to fully finish and then does nothing
+    /// (so a caller may immediately save options only after the whole
+    /// shutdown sequence, including in-memory option mutations, is done).
+    /// Every step is best-effort: step errors are logged, never
     /// propagated, and never abort the sequence. Persisting `Options` is the
     /// caller's responsibility AFTER this call (step 3 mutates per-camera
     /// options in memory). `stop()` is the internal final step that breaks
@@ -363,8 +368,11 @@ impl Engine {
         // First: make the queue worker drop the remaining queued commands
         self.queue_shutdown.store(true, Ordering::SeqCst);
 
-        if self.shutdown_called.swap(true, Ordering::SeqCst) {
-            log::info!("Engine::shutdown() already called: skipping");
+        // The guard is held for the whole body: a concurrent caller blocks
+        // here and only returns as a no-op after the first shutdown finished
+        let mut done = self.shutdown_done.lock().unwrap();
+        if *done {
+            log::info!("Engine::shutdown() already finished: skipping");
             return;
         }
         log::info!("Engine shutdown...");
@@ -410,6 +418,7 @@ impl Engine {
         _ = self.ext_guider.phd2_conn().stop();
 
         self.stop();
+        *done = true;
     }
 
     /// Final teardown breaking the engine self-reference cycles; called from
@@ -1339,6 +1348,51 @@ mod tests {
         engine.shutdown();
         engine.shutdown();
         assert_eq!(engine.snapshot().mode.kind, ModeKind::Waiting);
+    }
+
+    struct BlockingAbortMode {
+        gate: Mutex<mpsc::Receiver<()>>,
+    }
+
+    impl Mode for BlockingAbortMode {
+        fn kind(&self) -> ModeKind { ModeKind::SingleShot }
+        fn progress_string(&self) -> String { String::new() }
+        fn abort(&mut self) -> eyre::Result<()> {
+            let _ = self.gate.lock().unwrap().recv();
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn shutdown_second_call_waits_for_first() {
+        let engine = Engine::new();
+        let (tx, rx) = mpsc::channel();
+        engine.modes.write().unwrap().active =
+            Box::new(BlockingAbortMode { gate: Mutex::new(rx) });
+
+        let e1 = Arc::clone(&engine);
+        let first_finished = Arc::new(AtomicBool::new(false));
+        let ff = Arc::clone(&first_finished);
+        let h1 = std::thread::spawn(move || {
+            e1.shutdown();
+            ff.store(true, Ordering::Release);
+        });
+        // Let the first call reach the blocking `abort()`
+        std::thread::sleep(Duration::from_millis(200));
+
+        let e2 = Arc::clone(&engine);
+        let h2 = std::thread::spawn(move || e2.shutdown());
+        std::thread::sleep(Duration::from_millis(200));
+
+        assert!(!first_finished.load(Ordering::Acquire), "first must be blocked");
+        assert!(!h2.is_finished(), "second call must wait for the first");
+
+        tx.send(()).unwrap();
+        h1.join().unwrap();
+        h2.join().unwrap();
+        assert!(first_finished.load(Ordering::Acquire));
+
+        engine.shutdown();
     }
 
     #[test]
