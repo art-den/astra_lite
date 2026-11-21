@@ -49,7 +49,6 @@ pub struct PreviewOptions {
     pub wb_blue:     f64,
     pub stars:       bool,
 
-    #[serde(skip_serializing)]
     pub color:       PreviewColorMode,
 
     // fields used for PreviewOptions::preview_params

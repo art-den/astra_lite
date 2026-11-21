@@ -1630,6 +1630,22 @@ mod tests {
     }
 
     #[test]
+    fn preview_color_serialization_and_old_config_default() {
+        use crate::options::Options;
+
+        let mut options = Options::default();
+        options.preview.color = PreviewColorMode::Blue;
+        let json = serde_json::to_string(&options).unwrap();
+        assert!(json.contains(r#""color":"Blue""#), "color must be serialized");
+
+        // Old configs lack the field: it must fall back to the `Rgb` default
+        let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        value["preview"].as_object_mut().unwrap().remove("color");
+        let back: Options = serde_json::from_str(&serde_json::to_string(&value).unwrap()).unwrap();
+        assert_eq!(back.preview.color, PreviewColorMode::Rgb);
+    }
+
+    #[test]
     fn query_devices_and_camera_caps() {
         let engine = Engine::new();
 
