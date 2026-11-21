@@ -15,7 +15,7 @@ use super::{
     events::*,
     frame_processing::*,
     snapshot::{ConnectedDevicesState, DeviceRef, DeviceState, LiveStackingNums,
-        ModeState, StateSnapshot, TelescopeDeviceState, opt_logged},
+        ModeState, StateSnapshot, TelescopeDeviceState, UiPermissions, opt_logged},
     mode_platesolve::*,
     mode_darks_lib::*,
     mode_focusing::*,
@@ -442,9 +442,11 @@ impl Engine {
             guider_connected,
             phd2_working,
         };
+        let permissions = UiPermissions::from_mode(&mode);
         StateSnapshot {
             seq, mode, busy, options, devices,
             live_stacking: LiveStackingNums { total_exposure, time_cnt },
+            permissions,
         }
     }
 

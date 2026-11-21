@@ -1524,6 +1524,18 @@ mod tests {
         let snap = snapshot_of(&engine);
         assert_eq!(snap.mode.kind, ModeKind::Waiting);
 
+        // UiPermissions must be consistent with the Waiting mode
+        let perms = &snap.permissions;
+        assert!(perms.waiting && perms.can_change_mode);
+        assert!(perms.can_change_cam_opts);
+        assert!(perms.can_change_frame_opts);
+        assert!(perms.can_change_live_stacking_opts);
+        assert!(perms.can_change_cal_ops);
+        assert!(!perms.single_shot && !perms.liveview_active);
+        assert!(!perms.saving_frames && !perms.live_active);
+        assert!(!perms.saving_frames_paused && !perms.live_stacking_paused);
+        assert!(!perms.focusing && !perms.polar_align && !perms.dither_calibr);
+
         // Full state survives a JSON round-trip
         let json = serde_json::to_string(&snap).unwrap();
         let back: StateSnapshot = serde_json::from_str(&json).unwrap();

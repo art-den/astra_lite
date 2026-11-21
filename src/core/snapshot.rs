@@ -51,6 +51,7 @@ pub struct StateSnapshot {
     pub options: Options,
     pub devices: ConnectedDevicesState,
     pub live_stacking: LiveStackingNums,
+    pub permissions: UiPermissions,
 }
 
 /// A connected (selected into `cur_devices`) device of the engine.
@@ -100,6 +101,70 @@ pub struct ConnectedDevicesState {
 pub struct LiveStackingNums {
     pub total_exposure: f64,
     pub time_cnt:       f64,
+}
+
+/// Mode-level enable flags for the UI, derived from `ModeState` with the same
+/// predicates the panels used to compute inline. The final `caps && perms`
+/// combination and the GTK action names stay in the panels.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct UiPermissions {
+    pub waiting:           bool,
+    pub single_shot:       bool,
+    pub liveview_active:   bool,
+    pub saving_frames:     bool,
+    pub live_active:       bool,
+    /// An aborted `SavingRawFrames` mode is available to continue
+    pub saving_frames_paused: bool,
+    /// An aborted `LiveStacking` mode is available to continue
+    pub live_stacking_paused: bool,
+    pub focusing:          bool,
+    pub polar_align:       bool,
+    pub dither_calibr:     bool,
+    pub saving_defect_pixels: bool,
+    pub saving_master_darks:  bool,
+    pub saving_master_biases: bool,
+    /// Another mode can be started from the current one
+    pub can_change_mode:   bool,
+    pub can_change_cam_opts: bool,
+    pub can_change_frame_opts: bool,
+    pub can_change_live_stacking_opts: bool,
+    pub can_change_cal_ops: bool,
+}
+
+impl UiPermissions {
+    pub(crate) fn from_mode(mode: &ModeState) -> Self {
+        let kind = mode.kind;
+        let waiting = kind == ModeKind::Waiting;
+        let single_shot = kind == ModeKind::SingleShot;
+        let liveview_active = kind == ModeKind::LiveView;
+        let saving_frames = kind == ModeKind::SavingRawFrames;
+        let live_active = kind == ModeKind::LiveStacking;
+        let is_aborted = |k| mode.aborted.as_ref().is_some_and(|m| m.kind == k);
+        let can_change_mode = waiting || single_shot || liveview_active;
+        Self {
+            waiting,
+            single_shot,
+            liveview_active,
+            saving_frames,
+            live_active,
+            saving_frames_paused: is_aborted(ModeKind::SavingRawFrames),
+            live_stacking_paused: is_aborted(ModeKind::LiveStacking),
+            focusing: kind == ModeKind::Focusing,
+            polar_align: kind == ModeKind::PolarAlignment,
+            dither_calibr: kind == ModeKind::DitherCalibr,
+            saving_defect_pixels: matches!(kind,
+                ModeKind::DefectPixels | ModeKind::CreatingDefectPixels),
+            saving_master_darks: matches!(kind,
+                ModeKind::MasterDark | ModeKind::CreatingMasterDarks),
+            saving_master_biases: matches!(kind,
+                ModeKind::MasterBias | ModeKind::CreatingMasterBiases),
+            can_change_mode,
+            can_change_cam_opts: !saving_frames && !live_active,
+            can_change_frame_opts: waiting || liveview_active,
+            can_change_live_stacking_opts: waiting || liveview_active,
+            can_change_cal_ops: !liveview_active,
+        }
+    }
 }
 
 /// The active mode plus the `finished`/`aborted` summaries the panels show.
