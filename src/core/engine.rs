@@ -1280,6 +1280,31 @@ mod tests {
         engine.shutdown();
         assert_eq!(engine.snapshot().mode.kind, ModeKind::Waiting);
     }
+
+    struct FakeMode;
+
+    impl Mode for FakeMode {
+        fn kind(&self) -> ModeKind { ModeKind::SingleShot }
+        fn progress_string(&self) -> String { String::new() }
+    }
+
+    #[test]
+    fn shutdown_command_policy() {
+        use crate::core::api::Reply;
+
+        let engine = Engine::new();
+        engine.modes.write().unwrap().active = Box::new(FakeMode);
+
+        let err = engine.exec_command(Command::Shutdown { force: false }).unwrap_err();
+        assert!(format!("{err:#}").contains("is active"), "unexpected error: {err:#}");
+
+        assert!(matches!(
+            engine.exec_command(Command::Shutdown { force: true }).unwrap(),
+            Reply::Empty
+        ));
+        // Idempotent repeat after the full shutdown
+        assert!(engine.exec_command(Command::Shutdown { force: true }).is_ok());
+    }
 }
 
 ///////////////////////////////////////////////////////////////////////////////

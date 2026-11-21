@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use super::{
-    engine::{BusyDomain, Engine},
+    engine::{BusyDomain, Engine, ModeKind},
     events::Event,
     mode_darks_lib::{
         DarkLibMode, DarkLibSpec, MasterFileCreationProgramItem, build_program,
@@ -20,10 +20,11 @@ use crate::{
     guiding::external_guider::ExtGuiderType,
     hal::{Camera, DeviceInfo, DeviceType, FrameType, TelescopeMoveDir, TelescopeSite},
     options::{
-        Binning, Crop, Gain, GuidingMode, PlateSolverType, PolarAlignDir, PreviewColorMode,
-        PreviewScale, PreviewSource, StarRecognSensitivity,
+        Binning, Crop, Gain, GuidingMode, Options, PlateSolverType, PolarAlignDir,
+        PreviewColorMode, PreviewScale, PreviewSource, StarRecognSensitivity,
     },
     sky_math::math::EqCoord,
+    utils::io_utils::save_json_to_config,
 };
 #[cfg(windows)]
 use crate::hal::HalImpl;
@@ -44,6 +45,7 @@ fn busy_domain_of(cmd: &Command) -> Option<BusyDomain> {
         | Command::Start(_)
         | Command::StopActiveMode
         | Command::ContinueAbortedMode
+        | Command::Shutdown { .. } | Command::SaveOptions
         | Command::GetSnapshot
         | Command::Query(Query::Devices | Query::CameraCaps | Query::IndiProperties { .. } | Query::IndiDrivers | Query::AllMountSites)
         | Command::SetCameraDevice{..} | Command::SetMountDevice{..}
@@ -414,6 +416,12 @@ pub struct IndiSelPatch {
 /// - Commands of the same device domain are serialized by the engine busy
 ///   flags: submitting a second command while one is in progress fails with
 ///   a "busy" error (see `BusyDomain`).
+///
+/// Shutdown contract: `Shutdown` disconnects all event subscribers, so its
+/// `CommandReply` may never be delivered to an async client (expected; a
+/// synchronous `exec_command` caller gets the reply directly). A graceful
+/// exit sequence is `Shutdown { force }` then `SaveOptions` — saving AFTER
+/// shutdown is what captures the per-camera options written during it.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Command {
     Mode(ModeCommand),
@@ -421,6 +429,11 @@ pub enum Command {
     /// Aborts the active mode (it may leave a continuable aborted mode behind).
     StopActiveMode,
     ContinueAbortedMode,
+    /// Full engine shutdown (see `Engine::shutdown` for the sequence).
+    /// `force: false` refuses while a mode other than `Waiting` is active.
+    Shutdown { force: bool },
+    /// Persist engine `Options` to the config dir (see the shutdown contract above).
+    SaveOptions,
     Mount(MountCommand),
     Focuser(FocuserCommand),
     FilterWheel(FilterWheelCommand),
@@ -684,6 +697,21 @@ impl Engine {
             }
             Command::ContinueAbortedMode => {
                 self.continue_aborted_mode()?;
+                Ok(Reply::Empty)
+            }
+            Command::Shutdown { force } => {
+                if !force {
+                    let kind = self.modes().active.kind();
+                    if kind != ModeKind::Waiting {
+                        eyre::bail!("Shutdown: mode {kind:?} is active");
+                    }
+                }
+                self.shutdown();
+                Ok(Reply::Empty)
+            }
+            Command::SaveOptions => {
+                let options = self.options.read().unwrap();
+                save_json_to_config::<Options>(&options, "options")?;
                 Ok(Reply::Empty)
             }
             Command::SetCooling(patch) => {
@@ -1260,6 +1288,9 @@ mod tests {
             }),
             Command::StopActiveMode,
             Command::ContinueAbortedMode,
+            Command::Shutdown { force: true },
+            Command::Shutdown { force: false },
+            Command::SaveOptions,
         ] {
             roundtrip(cmd);
         }
