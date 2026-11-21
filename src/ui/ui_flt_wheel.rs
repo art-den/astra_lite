@@ -82,13 +82,6 @@ impl UiModule for FltWheelUi {
 
     fn show_options(&self, _options: &Options) {}
 
-    fn get_options(&self, options: &mut Options) {
-        options.filter_wheel.device = self.widgets.cb_device
-            .active_id()
-            .unwrap_or_default()
-            .to_string();
-    }
-
     fn on_show_options_first_time(&self) {
         // Fill the device list at first show: ASCOM Classic drivers are always
         // available, so the list must not depend on connect events

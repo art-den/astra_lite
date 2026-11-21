@@ -107,25 +107,6 @@ impl UiModule for GuidingUi {
         });
     }
 
-    fn get_options(&self, options: &mut Options) {
-        options.guiding.mode =
-            if self.widgets.rbtn_guide_main_cam.is_active() {
-                GuidingMode::MainCamera
-            } else if self.widgets.rbtn_guide_ext.is_active() {
-                GuidingMode::External
-            } else {
-                GuidingMode::Disabled
-            };
-
-        options.guiding.dith_period              = self.widgets.cb_dith_period.active_id().and_then(|v| v.parse().ok()).unwrap_or(0);
-        options.guiding.ext_guider.dith_dist     = self.widgets.spb_ext_dith_dist.value() as i32;
-
-        options.guiding.main_cam.dith_dist       = self.widgets.spb_dith_dist.value() as i32;
-        options.guiding.main_cam.calibr_exposure = self.widgets.spb_mnt_cal_exp.value();
-        options.guiding.main_cam.calibr_gain     = Gain::from_active_id(self.widgets.cbx_mnt_cal_gain.active_id().as_deref());
-        options.guiding.main_cam.max_error       = self.widgets.spb_guid_max_err.value();
-    }
-
     fn panels(&self) -> Vec<Panel> {
         vec![
             Panel {

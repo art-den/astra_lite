@@ -137,11 +137,6 @@ impl UiModule for DebugUi {
         self.widgets.spb_sim_az_err .set_value(options.polar_align.sim_az_err);
     }
 
-    fn get_options(&self, options: &mut Options) {
-        options.polar_align.sim_alt_err = self.widgets.spb_sim_alt_err.value();
-        options.polar_align.sim_az_err  = self.widgets.spb_sim_az_err.value();
-    }
-
     fn panels(&self) -> Vec<Panel> {
         vec![Panel {
             str_id: "debug",

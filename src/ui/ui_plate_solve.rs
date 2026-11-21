@@ -90,15 +90,6 @@ impl UiModule for PlateSolveUi {
         });
     }
 
-    fn get_options(&self, options: &mut Options) {
-        options.plate_solver.exposure      = self.widgets.spb_exp.value();
-        options.plate_solver.gain          = Gain::from_active_id(self.widgets.cbx_gain.active_id().as_deref());
-        options.plate_solver.bin           = Binning::from_active_id(self.widgets.cbx_bin.active_id().as_deref());
-        options.plate_solver.solver        = PlateSolverType::from_active_id(self.widgets.cbx_solver.active_id().as_deref());
-        options.plate_solver.timeout       = self.widgets.spb_timeout.value() as _;
-        options.plate_solver.blind_timeout = self.widgets.spb_blind_timeout.value() as _;
-    }
-
     fn panels(&self) -> Vec<Panel> {
         vec![Panel {
             str_id: "plate_solving",

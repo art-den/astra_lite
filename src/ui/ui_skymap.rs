@@ -313,9 +313,6 @@ impl UiModule for MapUi {
     fn show_options(&self, _options: &Options) {
     }
 
-    fn get_options(&self, _options: &mut Options) {
-    }
-
     fn panels(&self) -> Vec<Panel> {
         vec![
             Panel {

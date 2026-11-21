@@ -205,10 +205,6 @@ impl UiModule for DarksLibraryUI {
         self.widgets.common.fch_dark_library.set_filename(&options.calibr.dark_library_path);
     }
 
-    fn get_options(&self, options: &mut Options) {
-        options.calibr.dark_library_path = self.widgets.common.fch_dark_library.filename().unwrap_or_default();
-    }
-
     fn panels(&self) -> Vec<Panel> {
         vec![
             Panel {

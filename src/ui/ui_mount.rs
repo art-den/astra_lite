@@ -145,12 +145,6 @@ impl UiModule for MountUi {
         self.state_syncing.set(prev);
     }
 
-    fn get_options(&self, options: &mut Options) {
-        options.mount.inv_ns = self.widgets.chb_inv_ns.is_active();
-        options.mount.inv_we = self.widgets.chb_inv_we.is_active();
-        options.mount.speed  = self.widgets.cb_speed.active_id().map(|s| s.to_string());
-    }
-
     fn panels(&self) -> Vec<Panel> {
         vec![
             Panel {

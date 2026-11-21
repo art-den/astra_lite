@@ -157,21 +157,6 @@ impl UiModule for FocuserUi {
         });
     }
 
-    fn get_options(&self, options: &mut Options) {
-        let widgets = &self.widgets;
-        options.focuser.on_temp_change      = widgets.chb_temp.is_active();
-        options.focuser.max_temp_change     = widgets.spb_temp.value();
-        options.focuser.on_fwhm_change      = widgets.chb_fwhm.is_active();
-        options.focuser.max_fwhm_change     = widgets.cb_fwhm.active_id().and_then(|v| v.parse().ok()).unwrap_or(20);
-        options.focuser.periodically        = widgets.chb_period.is_active();
-        options.focuser.period_minutes      = widgets.cb_period.active_id().and_then(|v| v.parse().ok()).unwrap_or(120);
-        options.focuser.measures            = widgets.spb_measures.value() as u32;
-        options.focuser.step                = widgets.spb_auto_step.value();
-        options.focuser.exposure            = widgets.spb_exp.value();
-        options.focuser.gain                = Gain::from_active_id(widgets.cbx_gain.active_id().as_deref());
-        options.focuser.anti_backlash_steps = widgets.spb_extra_steps.value() as usize;
-    }
-
     fn panels(&self) -> Vec<Panel> {
         vec![
             Panel {

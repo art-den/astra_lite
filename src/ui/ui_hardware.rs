@@ -14,7 +14,7 @@ use macros::FromBuilder;
 use crate::{
     core::{api::{Command, ConnectCommand, GuiderCommand, IndiCommand, IndiSelPatch}, engine::Engine, events::Event}, guiding::phd2, hal::{DeviceType, HalImpl, HalState, events::HalEvent}, options::*, utils::log_utils::log_if_error,
 };
-use ::indi::{self, sexagesimal_to_value, value_to_sexagesimal};
+use ::indi::{self, value_to_sexagesimal};
 use super::{gtk_utils::*, indi_panel_widget::*, module::*, ui_main::*};
 
 pub fn init_ui(
@@ -201,12 +201,6 @@ impl UiModule for HardwareUi {
         self.show_telescope_options(options);
         self.show_site_options(options);
         self.opts_syncing.set(prev);
-    }
-
-    fn get_options(&self, options: &mut Options) {
-        self.get_conn_options(options);
-        self.get_telescope_options(options);
-        self.get_site_options(options);
     }
 
     fn panels(&self) -> Vec<Panel> {
@@ -592,37 +586,6 @@ impl HardwareUi {
         self.widgets.site.e_long.set_text(&value_to_sexagesimal(options.site.longitude, true, 6));
     }
 
-    fn get_conn_options(&self, options: &mut Options) {
-        options.indi.mount           = self.widgets.indi_drv.cb_mount_drivers.active_id().map(|s| s.to_string());
-        options.indi.camera          = self.widgets.indi_drv.cb_camera_drivers.active_id().map(|s| s.to_string());
-        options.indi.guid_cam        = self.widgets.indi_drv.cb_guid_cam_drivers.active_id().map(|s| s.to_string());
-        options.indi.focuser         = self.widgets.indi_drv.cb_focuser_drivers.active_id().map(|s| s.to_string());
-        options.indi.flt_wheel       = self.widgets.indi_drv.cb_flt_wheel_drivers.active_id().map(|s| s.to_string());
-        options.indi.aux1            = self.widgets.indi_drv.cb_aux1_drivers.active_id().map(|s| s.to_string());
-        options.indi.aux2            = self.widgets.indi_drv.cb_aux2_drivers.active_id().map(|s| s.to_string());
-        options.indi.remote          = self.widgets.indi_drv.chb_remote.is_active();
-        options.indi.address         = self.widgets.indi_drv.e_remote_addr.text().into();
-        options.ascom_alpaca.address = self.widgets.aa_drv.e_addr.text().into();
-    }
-
-    fn get_telescope_options(&self, options: &mut Options) {
-        options.telescope.focal_len       = self.widgets.telescope.spb_foc_len.value();
-        options.telescope.barlow          = self.widgets.telescope.spb_barlow.value();
-        options.guiding.foc_len           = self.widgets.telescope.spb_guid_foc_len.value();
-        options.telescope.from_platesolve = self.widgets.telescope.chb_corr_foc_len.is_active();
-    }
-
-    fn get_site_options(&self, options: &mut Options) {
-        let lat_string = self.widgets.site.e_lat.text();
-        if let Some(latitude) = sexagesimal_to_value(&lat_string) {
-            options.site.latitude = latitude;
-        }
-        let long_str = self.widgets.site.e_long.text();
-        if let Some(longitude) = sexagesimal_to_value(&long_str) {
-            options.site.longitude = longitude;
-        }
-    }
-
     fn process_indi_event(&self, event: &indi::Event) {
         match event {
             indi::Event::ConnectionLost => {
@@ -795,7 +758,6 @@ impl HardwareUi {
     }
 
     fn handler_action_conn_indi(&self) {
-        self.sync_options_from_widgets();
         let cmd = {
             let options = self.engine.options.read().unwrap();
             ConnectCommand::ConnectIndi {
@@ -824,7 +786,6 @@ impl HardwareUi {
 
     #[cfg(windows)]
     fn handler_action_conn_aa(&self) {
-        self.sync_options_from_widgets();
         let address = self.engine.options.read().unwrap().ascom_alpaca.address.clone();
         self.submit_connect_cmd(
             Command::Connect(ConnectCommand::ConnectAlpaca { address }),
@@ -841,7 +802,6 @@ impl HardwareUi {
     }
 
     fn handler_action_conn_phd2(&self) {
-        self.sync_options_from_widgets();
         self.submit_connect_cmd(
             Command::Guider(GuiderCommand::ConnectPhd2),
             ConnectPending::Guider
@@ -920,11 +880,6 @@ impl HardwareUi {
         fill_cb_list(self, &self.widgets.indi_drv.cb_flt_wheel_drivers, "Filter Wheels", &options.indi.flt_wheel);
         fill_cb_list(self, &self.widgets.indi_drv.cb_aux1_drivers,      "Auxiliary",     &options.indi.aux1);
         fill_cb_list(self, &self.widgets.indi_drv.cb_aux2_drivers,      "Auxiliary",     &options.indi.aux2);
-    }
-
-    fn sync_options_from_widgets(&self) {
-        let mut options = self.engine.options.write().unwrap();
-        self.get_options(&mut options);
     }
 
     fn add_log_record(

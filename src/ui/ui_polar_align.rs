@@ -95,16 +95,6 @@ impl UiModule for PolarAlignUi {
         self.opts_syncing.set(prev);
     }
 
-    fn get_options(&self, options: &mut Options) {
-        options.polar_align.angle        = self.widgets.spb_angle.value();
-        options.polar_align.speed        = self.widgets.cbx_speed.active_id().map(|s| s.to_string());
-        options.polar_align.auto_refresh = self.widgets.chb_auto_refresh.is_active();
-
-        options.polar_align.direction = PolarAlignDir::from_active_id(
-            self.widgets.cbx_dir.active_id().as_deref()
-        ).unwrap_or(PolarAlignDir::West);
-    }
-
     fn panels(&self) -> Vec<Panel> {
         vec![Panel {
             str_id: "polar_align",

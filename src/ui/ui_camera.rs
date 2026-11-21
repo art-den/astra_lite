@@ -299,16 +299,6 @@ impl UiModule for CameraUi {
         });
     }
 
-    fn get_options(&self, options: &mut Options) {
-        self.get_common_options(options);
-        self.get_ctrl_options(options);
-        self.get_frame_options(options);
-        self.get_calibr_options(options);
-        self.get_raw_options(options);
-        self.get_live_stacking_options(options);
-        self.get_frame_quality_options(options);
-    }
-
     fn on_show_options_first_time(&self) {
         // Fill the device list at first show: ASCOM Classic drivers are always
         // available, so the list must not depend on connect events
@@ -1276,72 +1266,6 @@ impl CameraUi {
         qual.spb_max_temp_diff.set_value(options.quality.max_ccd_temp_diff);
     }
 
-    fn get_common_options(&self, options: &mut Options) {
-        options.cam.live_view = self.widgets.common.chb_live_view.is_active();
-        options.cam.device_id = self.widgets.common.cb_cam_list.active_id().unwrap_or_default().to_string();
-    }
-
-    fn get_ctrl_options(&self, options: &mut Options) {
-        let ctrl = &self.widgets.ctrl;
-        options.cam.ctrl.enable_cooler = ctrl.chb_cooler.is_active();
-        options.cam.ctrl.temperature   = ctrl.spb_temp.value();
-        options.cam.ctrl.enable_fan    = ctrl.chb_fan.is_active();
-        options.cam.ctrl.low_noise     = ctrl.chb_low_noise.is_active();
-        options.cam.ctrl.high_fullwell = ctrl.chb_high_fw.is_active();
-    }
-
-    fn get_frame_options(&self, options: &mut Options) {
-        let frame = &self.widgets.frame;
-        options.cam.frame.frame_type   = FrameType::from_active_id(frame.cb_mode.active_id().as_deref());
-        options.cam.frame.set_exposure   (frame.spb_exp.value());
-        options.cam.frame.auto_exp     = frame.chb_auto_exp.is_active();
-        options.cam.frame.gain         = frame.spb_gain.value();
-        options.cam.frame.offset       = frame.spb_offset.value() as i32;
-        options.cam.frame.binning      = Binning::from_active_id(frame.cb_bin.active_id().as_deref());
-        options.cam.frame.crop         = Crop::from_active_id(frame.cb_crop.active_id().as_deref());
-    }
-
-    fn get_calibr_options(&self, options: &mut Options) {
-        let calibr = &self.widgets.calibr;
-        options.calibr.dark_frame_en     = calibr.chb_dark.is_active();
-        options.calibr.flat_frame_en     = calibr.chb_flat.is_active();
-        options.calibr.flat_frame_fname  = calibr.fch_flat.filename().unwrap_or_default();
-        options.calibr.hot_pixels        = calibr.chb_hot_pixels.is_active();
-    }
-
-    fn get_raw_options(&self, options: &mut Options) {
-        let raw = &self.widgets.raw;
-        options.raw_frames.use_cnt       = raw.chb_frames_cnt.is_active();
-        options.raw_frames.frame_cnt     = raw.spb_frames_cnt.value() as usize;
-        options.raw_frames.out_path      = raw.fcb_path.filename().unwrap_or_default();
-        options.raw_frames.create_master = raw.chb_save_master.is_active();
-    }
-
-    fn get_live_stacking_options(&self, options: &mut Options) {
-        let live = &self.widgets.live_st;
-        options.live.save_orig     = live.chb_save_orig.is_active();
-        options.live.save_enabled  = live.chb_save_period.is_active();
-        options.live.save_minutes  = live.spb_save_period.value() as usize;
-        options.live.out_dir       = live.fch_path.filename().unwrap_or_default();
-        options.live.remove_tracks = live.chb_no_tracks.is_active();
-        options.live.use_cnt       = live.chb_frames_cnt.is_active();
-        options.live.frame_cnt     = live.spb_frames_cnt.value() as usize;
-    }
-
-    fn get_frame_quality_options(&self, options: &mut Options) {
-        let qual = &self.widgets.quality;
-        options.quality.use_max_fwhm     = qual.chb_max_fwhm.is_active();
-        options.quality.max_fwhm         = qual.spb_max_fwhm.value() as f32;
-        options.quality.use_max_ovality  = qual.chb_max_oval.is_active();
-        options.quality.max_ovality      = qual.spb_max_oval.value() as f32;
-        options.quality.ignore_3px_stars = qual.chb_ignore_3px_stars.is_active();
-        options.quality.star_recogn_sens  = StarRecognSensitivity::from_active_id(
-            qual.cbx_stars_sens.active_id().as_deref()
-        );
-        options.quality.check_ccd_temp = qual.chb_max_temp_diff.is_active();
-        options.quality.max_ccd_temp_diff = qual.spb_max_temp_diff.value();
-    }
-
     fn handler_delayed_action(&self, action: &DelayedAction) {
         match action {
             DelayedAction::UpdateCamList => {
@@ -2019,6 +1943,17 @@ impl CameraUi {
         match &result.event {
             FrameProcessEvent::MasterSaved { frame_type: FrameType::Flats, file_name } => {
                 self.widgets.calibr.fch_flat.set_filename(file_name);
+                // Programmatic set_filename() does not emit 'file-set' in GTK3,
+                // so commit the autofilled path explicitly
+                log_if_error(
+                    &self.engine.exec_command(
+                        Command::SetCalibrOptions(CalibrPatch {
+                            flat_frame_fname: Some(file_name.to_string_lossy().into_owned()),
+                            ..Default::default()
+                        })
+                    ),
+                    "Set flat frame file name"
+                );
             }
             _ => {}
         }

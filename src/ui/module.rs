@@ -94,7 +94,6 @@ impl TabPage {
 
 pub trait UiModule {
     fn show_options(&self, options: &Options);
-    fn get_options(&self, options: &mut Options);
     fn panels(&self) -> Vec<Panel>;
     fn on_show_options_first_time(&self) {}
     fn on_full_screen(&self, _full_screen: bool) {}
@@ -152,12 +151,6 @@ impl UiModules {
     pub fn show_options(&self, options: &Options) {
         for item in &self.items {
             item.module.show_options(options);
-        }
-    }
-
-    pub fn get_options(&self, options: &mut Options) {
-        for item in &self.items {
-            item.module.get_options(options);
         }
     }
 

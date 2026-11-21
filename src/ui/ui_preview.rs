@@ -386,25 +386,6 @@ impl UiModule for PreviewUi {
         });
     }
 
-    fn get_options(&self, options: &mut Options) {
-        let widgets = &self.widgets;
-        options.preview.scale = PreviewScale::from_active_id(
-            widgets.ctrl.cb_scale.active_id().as_deref()
-        );
-        options.preview.source = PreviewSource::from_active_id(
-            widgets.ctrl.cb_src.active_id().as_deref()
-        );
-        options.preview.gamma       = widgets.ctrl.scl_gamma.value();
-        options.preview.dark_lvl    = widgets.ctrl.scl_dark.value();
-        options.preview.light_lvl   = widgets.ctrl.scl_highlight.value();
-        options.preview.remove_grad = widgets.ctrl.chb_rem_grad.is_active();
-        options.preview.wb_auto     = widgets.ctrl.chb_wb_auto.is_active();
-        options.preview.wb_red      = widgets.ctrl.scl_wb_red.value();
-        options.preview.wb_green    = widgets.ctrl.scl_wb_green.value();
-        options.preview.wb_blue     = widgets.ctrl.scl_wb_blue.value();
-        options.preview.stars       = widgets.ctrl.chb_stars.is_active();
-    }
-
     fn panels(&self) -> Vec<Panel> {
         vec![
             Panel {
