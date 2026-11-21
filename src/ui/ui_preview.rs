@@ -1451,11 +1451,14 @@ impl PreviewUi {
         );
         let Some((image_x, image_y)) = image_coords else { return; };
 
-        let Ok(mut options) = self.engine.options.try_write() else {
+        let Ok(options) = self.engine.options.try_read() else {
             return;
         };
 
         let pp = options.preview.preview_params();
+        let cur_scale = options.preview.scale;
+        drop(options);
+
         let (orig_img_width, orig_img_height)  = self.image_size.get();
 
         let width_for_scale = |scale: PreviewScale| -> usize {
@@ -1480,7 +1483,7 @@ impl PreviewUi {
 
         let scale_index = scale_and_width
             .iter()
-            .position(|(scale, _)| *scale == options.preview.scale);
+            .position(|(scale, _)| *scale == cur_scale);
         let Some(scale_index) = scale_index else { return; };
 
         let zoom_out =
@@ -1503,12 +1506,15 @@ impl PreviewUi {
             };
 
         let new_scale = scale_and_width[new_scale_index].0;
-        options.preview.scale = new_scale;
-        // The options write guard above is still held: suppress the combo handler
+        log_if_error(
+            &self.engine.exec_command(
+                Command::Preview(PreviewCommand::SetScale { scale: new_scale })
+            ),
+            "Set preview scale"
+        );
         self.sync_suppress(|| {
-            self.widgets.ctrl.cb_scale.set_active_id(options.preview.scale.to_active_id());
+            self.widgets.ctrl.cb_scale.set_active_id(new_scale.to_active_id());
         });
-        drop(options);
 
         self.update_preview(Some((image_x as _, image_y as _)));
     }
