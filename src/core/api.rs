@@ -18,7 +18,7 @@ use super::{
 /// Raw INDI property commands
 use crate::{
     guiding::external_guider::ExtGuiderType,
-    hal::{FrameType, TelescopeMoveDir},
+    hal::{Camera, DeviceInfo, DeviceType, FrameType, TelescopeMoveDir},
     options::{
         Binning, Crop, Gain, GuidingMode, PlateSolverType, PolarAlignDir, PreviewColorMode,
         PreviewScale, PreviewSource, StarRecognSensitivity,
@@ -45,6 +45,7 @@ fn busy_domain_of(cmd: &Command) -> Option<BusyDomain> {
         | Command::StopActiveMode
         | Command::ContinueAbortedMode
         | Command::GetSnapshot
+        | Command::Query(Query::Devices) | Command::Query(Query::CameraCaps)
         | Command::SetCameraDevice{..} | Command::SetMountDevice{..}
         | Command::SetFocuserDevice{..} | Command::SetFilterWheelDevice{..}
         | Command::OpenImageFile{..}
@@ -468,6 +469,105 @@ pub enum Command {
     /// Cheap read from engine memory only, no device access; synchronous
     /// execution only (see the threading contract above).
     GetSnapshot,
+    /// Expensive/derived reads (see [`Query`]). Fast variants execute like
+    /// `GetSnapshot` (synchronous only); blocking query variants must use
+    /// `submit_command`.
+    Query(Query),
+}
+
+/// Read commands for state the caller cannot access itself and which is too
+/// expensive or blocking for `GetSnapshot`.
+/// New variants must be registered in `busy_domain_of` explicitly.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum Query {
+    /// All HAL devices in one reply (from HAL caches); callers filter by
+    /// `type_` themselves.
+    Devices,
+    /// Capabilities of the currently selected camera (the capability calls
+    /// the camera panel made on the camera object directly before this API).
+    CameraCaps,
+}
+
+/// Answer to a [`Query`].
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum QueryReply {
+    Devices(Vec<DeviceInfo>),
+    CameraCaps(CameraCaps),
+}
+
+/// Serializable `RangeInclusive<f64>`.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+pub struct FloatRange {
+    pub start: f64,
+    pub end:   f64,
+}
+
+/// Capability snapshot of the current camera (see [`Query::CameraCaps`]).
+/// A `*_supported` flag mirrors the trait `is_*_supported()` result; a range
+/// is `None` when unsupported, the read failed (logged), or the capability
+/// gate is false.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct CameraCaps {
+    /// `None` also means 'exposure not supported' (mirrors the panel check)
+    pub exposure_range:            Option<FloatRange>,
+    pub cooler_supported:          bool,
+    pub temperature_range:         Option<FloatRange>,
+    pub gain_supported:            bool,
+    pub gain_range:                Option<FloatRange>,
+    pub offset_supported:          bool,
+    pub offset_range:              Option<FloatRange>,
+    pub frame_supported:           bool,
+    pub binning_supported:         bool,
+    pub fan_ctrl_supported:        bool,
+    pub heater_supported:          bool,
+    pub low_noise_supported:       bool,
+    pub conversion_gain_supported: bool,
+    pub high_fullwell_supported:   bool,
+}
+
+fn caps_supported(result: eyre::Result<bool>, what: &str) -> bool {
+    super::snapshot::opt_logged(what, result).unwrap_or(false)
+}
+
+fn caps_range(
+    result: eyre::Result<std::ops::RangeInclusive<f64>>,
+    what:   &str,
+) -> Option<FloatRange> {
+    super::snapshot::opt_logged(what, result)
+        .map(|r| FloatRange { start: *r.start(), end: *r.end() })
+}
+
+impl CameraCaps {
+    /// Reads all capabilities from the camera object. Ranges are only queried
+    /// when the capability is supported (same order as the camera panel).
+    fn of(camera: &(dyn Camera + Send + Sync)) -> Self {
+        let mut caps = Self {
+            exposure_range:            caps_range(camera.exposure_range(), "exposure_range"),
+            cooler_supported:          caps_supported(camera.is_cooler_supported(), "is_cooler_supported"),
+            temperature_range:         None,
+            gain_supported:            caps_supported(camera.is_gain_supported(), "is_gain_supported"),
+            gain_range:                None,
+            offset_supported:          caps_supported(camera.is_offset_supported(), "is_offset_supported"),
+            offset_range:              None,
+            frame_supported:           caps_supported(camera.is_frame_supported(), "is_frame_supported"),
+            binning_supported:         caps_supported(camera.is_binning_supported(), "is_binning_supported"),
+            fan_ctrl_supported:        caps_supported(camera.is_fan_ctrl_supported(), "is_fan_ctrl_supported"),
+            heater_supported:          caps_supported(camera.is_heater_supported(), "is_heater_supported"),
+            low_noise_supported:       caps_supported(camera.is_low_noise_supported(), "is_low_noise_supported"),
+            conversion_gain_supported: caps_supported(camera.is_conversion_gain_supported(), "is_conversion_gain_supported"),
+            high_fullwell_supported:   caps_supported(camera.is_high_fullwell_supported(), "is_high_fullwell_supported"),
+        };
+        if caps.cooler_supported {
+            caps.temperature_range = caps_range(camera.temperature_range(), "temperature_range");
+        }
+        if caps.gain_supported {
+            caps.gain_range = caps_range(camera.gain_range(), "gain_range");
+        }
+        if caps.offset_supported {
+            caps.offset_range = caps_range(camera.offset_range(), "offset_range");
+        }
+        caps
+    }
 }
 
 /// Reply to a `Command`.
@@ -487,6 +587,8 @@ pub enum Reply {
     },
     /// Answer to `Command::GetSnapshot` (boxed to keep the enum small).
     Snapshot(Box<StateSnapshot>),
+    /// Answer to `Command::Query` (boxed to keep the enum small).
+    Query(Box<QueryReply>),
 }
 
 impl Engine {
@@ -504,6 +606,7 @@ impl Engine {
         log::debug!("Engine command: {:?}", cmd);
         // Read-only queries must not advance `seq` (polling would look like a change)
         let read_only = matches!(cmd, Command::GetSnapshot
+            | Command::Query(Query::Devices | Query::CameraCaps)
             | Command::BuildDarkLibraryProgram { .. });
         let reply = self.exec_command_inner(cmd)?;
         if !read_only {
@@ -1015,6 +1118,18 @@ impl Engine {
                 })
             }
             Command::GetSnapshot => Ok(Reply::Snapshot(Box::new(self.snapshot()))),
+            Command::Query(query) => {
+                let reply = match query {
+                    // `DeviceType::empty()` passes every device type (`contains` semantics)
+                    Query::Devices =>
+                        QueryReply::Devices(self.hal.devices(DeviceType::empty())?),
+                    Query::CameraCaps => {
+                        let camera = self.cur_devices.camera_or_err()?;
+                        QueryReply::CameraCaps(CameraCaps::of(&*camera))
+                    }
+                };
+                Ok(Reply::Query(Box::new(reply)))
+            }
         }
     }
 }
@@ -1434,5 +1549,52 @@ mod tests {
         assert_eq!(snapshot_of(&engine).seq, seq2);
 
         engine.stop();
+    }
+
+    #[test]
+    fn query_devices_and_camera_caps() {
+        let engine = Engine::new();
+
+        // INDI not connected: empty device list, not an error
+        match engine.exec_command(Command::Query(Query::Devices)).unwrap() {
+            Reply::Query(q) => match *q {
+                QueryReply::Devices(devices) => assert!(devices.is_empty()),
+                _ => panic!("expected QueryReply::Devices"),
+            },
+            _ => panic!("expected Reply::Query"),
+        }
+
+        // No camera: `CameraCaps` fails explicitly
+        assert!(engine.exec_command(Command::Query(Query::CameraCaps)).is_err());
+
+        engine.stop();
+    }
+
+    #[test]
+    fn query_variants_serde_roundtrip() {
+        roundtrip(Command::GetSnapshot);
+        roundtrip(Command::Query(Query::Devices));
+        roundtrip(Command::Query(Query::CameraCaps));
+        roundtrip(QueryReply::Devices(vec![DeviceInfo {
+            id:    "indi_simulator_ccd".to_string(),
+            name:  "indi_simulator_ccd".to_string(),
+            type_: DeviceType::CAMERA,
+        }]));
+        roundtrip(QueryReply::CameraCaps(CameraCaps {
+            exposure_range:            Some(FloatRange { start: 0.00003, end: 1800.0 }),
+            cooler_supported:          true,
+            temperature_range:         Some(FloatRange { start: -35.0, end: 15.0 }),
+            gain_supported:            true,
+            gain_range:                Some(FloatRange { start: 0.0, end: 400.0 }),
+            offset_supported:          false,
+            offset_range:              None,
+            frame_supported:           true,
+            binning_supported:         true,
+            fan_ctrl_supported:        false,
+            heater_supported:          false,
+            low_noise_supported:       false,
+            conversion_gain_supported: false,
+            high_fullwell_supported:   false,
+        }));
     }
 }
