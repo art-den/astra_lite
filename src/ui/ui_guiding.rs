@@ -212,6 +212,9 @@ impl GuidingUi {
 
         let connect_rbtn = |rbtn: &gtk::RadioButton| {
             rbtn.connect_active_notify(clone!(@weak self as self_ => move |_| {
+                if !self_.opts_syncing.get() {
+                    self_.commit_guiding_mode();
+                }
                 self_.correct_widgets_props();
             }));
         };
@@ -245,6 +248,78 @@ impl GuidingUi {
                 "Set guiding options"
             );
         }));
+
+        self.widgets.cb_dith_period.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
+            if self_.opts_syncing.get() { return; }
+            log_if_error(
+                &self_.engine.exec_command(
+                    Command::SetGuidingOptions(GuidingPatch {
+                        dith_period: Some(
+                            cb.active_id().and_then(|v| v.parse().ok()).unwrap_or(0)
+                        ),
+                        ..Default::default()
+                    })
+                ),
+                "Set guiding options"
+            );
+        }));
+
+        self.widgets.spb_dith_dist.connect_value_changed(clone!(@weak self as self_ => move |sb| {
+            if self_.opts_syncing.get() { return; }
+            log_if_error(
+                &self_.engine.exec_command(
+                    Command::SetGuidingOptions(GuidingPatch {
+                        main_cam_dith_dist: Some(sb.value() as i32),
+                        ..Default::default()
+                    })
+                ),
+                "Set guiding options"
+            );
+        }));
+
+        self.widgets.spb_ext_dith_dist.connect_value_changed(clone!(@weak self as self_ => move |sb| {
+            if self_.opts_syncing.get() { return; }
+            log_if_error(
+                &self_.engine.exec_command(
+                    Command::SetGuidingOptions(GuidingPatch {
+                        ext_dith_dist: Some(sb.value() as i32),
+                        ..Default::default()
+                    })
+                ),
+                "Set guiding options"
+            );
+        }));
+
+        self.widgets.spb_guid_max_err.connect_value_changed(clone!(@weak self as self_ => move |sb| {
+            if self_.opts_syncing.get() { return; }
+            log_if_error(
+                &self_.engine.exec_command(
+                    Command::SetGuidingOptions(GuidingPatch {
+                        main_cam_max_error: Some(sb.value()),
+                        ..Default::default()
+                    })
+                ),
+                "Set guiding options"
+            );
+        }));
+    }
+
+    /// Commits the current radio button selection as `guiding.mode`
+    fn commit_guiding_mode(&self) {
+        let mode = if self.widgets.rbtn_guide_main_cam.is_active() {
+            GuidingMode::MainCamera
+        } else if self.widgets.rbtn_guide_ext.is_active() {
+            GuidingMode::External
+        } else {
+            GuidingMode::Disabled
+        };
+        log_if_error(
+            &self.engine.exec_command(Command::SetGuidingOptions(GuidingPatch {
+                mode: Some(mode),
+                ..Default::default()
+            })),
+            "Set guiding mode"
+        );
     }
 
     fn correct_widgets_props_impl(&self) {

@@ -19,7 +19,7 @@ use crate::{
     guiding::external_guider::ExtGuiderType,
     hal::{FrameType, TelescopeMoveDir},
     options::{
-        Binning, Crop, Gain, PreviewColorMode, PreviewScale, PreviewSource,
+        Binning, Crop, Gain, GuidingMode, PreviewColorMode, PreviewScale, PreviewSource,
         StarRecognSensitivity,
     },
     sky_math::math::EqCoord,
@@ -309,8 +309,13 @@ pub struct PlateSolverPatch {
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 #[serde(default)]
 pub struct GuidingPatch {
-    pub calibr_exposure: Option<f64>,
-    pub calibr_gain:     Option<Gain>,
+    pub calibr_exposure:    Option<f64>,
+    pub calibr_gain:        Option<Gain>,
+    pub mode:               Option<GuidingMode>,
+    pub dith_period:        Option<u32>,
+    pub ext_dith_dist:      Option<i32>,
+    pub main_cam_dith_dist: Option<i32>,
+    pub main_cam_max_error: Option<f64>,
 }
 
 /// Partial update of the INDI connection selection (see [`CoolingPatch`]).
@@ -725,6 +730,21 @@ impl Engine {
                 if let Some(v) = patch.calibr_gain {
                     options.guiding.main_cam.calibr_gain = v;
                 }
+                if let Some(v) = patch.mode {
+                    options.guiding.mode = v;
+                }
+                if let Some(v) = patch.dith_period {
+                    options.guiding.dith_period = v;
+                }
+                if let Some(v) = patch.ext_dith_dist {
+                    options.guiding.ext_guider.dith_dist = v;
+                }
+                if let Some(v) = patch.main_cam_dith_dist {
+                    options.guiding.main_cam.dith_dist = v;
+                }
+                if let Some(v) = patch.main_cam_max_error {
+                    options.guiding.main_cam.max_error = v;
+                }
                 Ok(Reply::Empty)
             }
             Command::SetIndiSelection(patch) => {
@@ -1110,6 +1130,9 @@ mod tests {
             }),
             Command::SetGuidingOptions(GuidingPatch {
                 calibr_exposure: Some(3.5), calibr_gain: Some(Gain::Max),
+                mode: Some(GuidingMode::MainCamera), dith_period: Some(2),
+                ext_dith_dist: Some(10), main_cam_dith_dist: Some(50),
+                main_cam_max_error: Some(3.0),
             }),
             Command::OpenImageFile { path: "/tmp/test.fits".to_string() },
             Command::BuildDarkLibraryProgram {
