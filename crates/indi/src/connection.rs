@@ -10,6 +10,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 use bitflags::bitflags;
 use chrono::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use super::{xml_reader::*, error::*, xml_helper::*, events::*, property::*, device::*};
 
@@ -118,7 +119,7 @@ pub struct DriverInfo {
 }
 
 bitflags! {
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
     pub struct DriverInterface: u32 {
         const GENERAL       = 0;
         const TELESCOPE     = (1 << 0);
@@ -140,7 +141,7 @@ bitflags! {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportDevice {
     pub name:      Arc<String>,
     pub interface: DriverInterface,

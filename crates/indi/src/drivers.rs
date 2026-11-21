@@ -1,9 +1,12 @@
 #![allow(dead_code)]
 
 use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+
 use super::{xml_helper::*, error::*};
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DriverItem {
     pub device: String,
     pub manufacturer: String,
@@ -32,7 +35,7 @@ impl DriverItem {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DriverGroup {
     pub name:  String,
     pub items: Vec<DriverItem>,
@@ -44,7 +47,7 @@ impl DriverGroup {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Drivers {
     pub groups: Vec<DriverGroup>,
 }

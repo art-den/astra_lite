@@ -1,10 +1,11 @@
 use std::{borrow::Cow, sync::Arc};
 
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 use super::{xml_reader::*, error::*, xml_helper::*, num_format::*};
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum PropState { Idle, Ok, Busy, Alert }
 
 impl PropState {
@@ -19,7 +20,7 @@ impl PropState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Serialize, Deserialize)]
 pub enum PropPermission { RO, WO, RW }
 
 impl PropPermission {
@@ -34,7 +35,7 @@ impl PropPermission {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub enum SwitchRule { OneOfMany, AtMostOne, AnyOfMany }
 
 impl SwitchRule {
@@ -63,7 +64,7 @@ impl CamCcd {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub enum PropType {
     Text,
     Num,
@@ -84,7 +85,7 @@ impl PropType {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlobPropValue {
     pub format:  String,
     pub data:    Vec<u8>,
@@ -98,7 +99,7 @@ impl PartialEq for BlobPropValue {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NumPropValue {
     pub value:  f64,
     pub min:    f64,
@@ -107,7 +108,7 @@ pub struct NumPropValue {
     pub format: Arc<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PropValue {
     Text(Arc<String>),
     Switch(bool),
@@ -277,14 +278,14 @@ impl PropValue {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PropElement {
     pub name:  Arc<String>,
     pub label: Option<Arc<String>>,
     pub value: PropValue,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Property {
     pub device:    Arc<String>,
     pub name:      Arc<String>,

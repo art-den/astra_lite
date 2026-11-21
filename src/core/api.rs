@@ -45,7 +45,7 @@ fn busy_domain_of(cmd: &Command) -> Option<BusyDomain> {
         | Command::StopActiveMode
         | Command::ContinueAbortedMode
         | Command::GetSnapshot
-        | Command::Query(Query::Devices) | Command::Query(Query::CameraCaps)
+        | Command::Query(Query::Devices | Query::CameraCaps | Query::IndiProperties { .. })
         | Command::SetCameraDevice{..} | Command::SetMountDevice{..}
         | Command::SetFocuserDevice{..} | Command::SetFilterWheelDevice{..}
         | Command::OpenImageFile{..}
@@ -486,6 +486,24 @@ pub enum Query {
     /// Capabilities of the currently selected camera (the capability calls
     /// the camera panel made on the camera object directly before this API).
     CameraCaps,
+    /// INDI device/property registry for the INDI GUI panel (`since` =
+    /// incremental fetch by change_id).
+    IndiProperties { since: Option<u64> },
+}
+
+/// INDI device with the panel's sort keys (camera caps); zeros when unavailable.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct IndiDeviceEntry {
+    pub device:         indi::ExportDevice,
+    pub pixel_size_um:  (f64, f64),
+    pub max_frame_size: (u32, u32),
+}
+
+/// Payload of `QueryReply::IndiProperties`.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct IndiPropertiesData {
+    pub devices:    Vec<IndiDeviceEntry>,
+    pub properties: Vec<indi::Property>,
 }
 
 /// Answer to a [`Query`].
@@ -493,6 +511,7 @@ pub enum Query {
 pub enum QueryReply {
     Devices(Vec<DeviceInfo>),
     CameraCaps(CameraCaps),
+    IndiProperties(IndiPropertiesData),
 }
 
 /// Serializable `RangeInclusive<f64>`.
@@ -606,7 +625,7 @@ impl Engine {
         log::debug!("Engine command: {:?}", cmd);
         // Read-only queries must not advance `seq` (polling would look like a change)
         let read_only = matches!(cmd, Command::GetSnapshot
-            | Command::Query(Query::Devices | Query::CameraCaps)
+            | Command::Query(Query::Devices | Query::CameraCaps | Query::IndiProperties { .. })
             | Command::BuildDarkLibraryProgram { .. });
         let reply = self.exec_command_inner(cmd)?;
         if !read_only {
@@ -1127,6 +1146,22 @@ impl Engine {
                         let camera = self.cur_devices.camera_or_err()?;
                         QueryReply::CameraCaps(CameraCaps::of(&*camera))
                     }
+                    Query::IndiProperties { since } => {
+                        let indi = self.hal.indi_impl().indi();
+                        let (devices, properties) = indi.get_properties_list(since);
+                        // Sort keys (pixel size / max frame) are read here for the panel; non-CCD devices yield zeros.
+                        let devices = devices
+                            .into_iter()
+                            .map(|dev| IndiDeviceEntry {
+                                pixel_size_um: indi.camera_get_pixel_size_um(&dev.name, indi::CamCcd::Main).unwrap_or_default(),
+                                max_frame_size: indi.camera_get_max_frame_size(&dev.name, indi::CamCcd::Main)
+                                    .map(|(w, h)| (w as u32, h as u32))
+                                    .unwrap_or_default(),
+                                device: dev,
+                            })
+                            .collect();
+                        QueryReply::IndiProperties(IndiPropertiesData { devices, properties })
+                    }
                 };
                 Ok(Reply::Query(Box::new(reply)))
             }
@@ -1579,6 +1614,18 @@ mod tests {
         // No camera: `CameraCaps` fails explicitly
         assert!(engine.exec_command(Command::Query(Query::CameraCaps)).is_err());
 
+        // INDI not connected: empty device/property lists, not an error
+        match engine.exec_command(Command::Query(Query::IndiProperties { since: None })).unwrap() {
+            Reply::Query(q) => match *q {
+                QueryReply::IndiProperties(data) => {
+                    assert!(data.devices.is_empty());
+                    assert!(data.properties.is_empty());
+                }
+                _ => panic!("expected QueryReply::IndiProperties"),
+            },
+            _ => panic!("expected Reply::Query"),
+        }
+
         engine.stop();
     }
 
@@ -1587,6 +1634,8 @@ mod tests {
         roundtrip(Command::GetSnapshot);
         roundtrip(Command::Query(Query::Devices));
         roundtrip(Command::Query(Query::CameraCaps));
+        roundtrip(Command::Query(Query::IndiProperties { since: Some(7) }));
+        roundtrip(QueryReply::IndiProperties(IndiPropertiesData { devices: Vec::new(), properties: Vec::new() }));
         roundtrip(QueryReply::Devices(vec![DeviceInfo {
             id:    "indi_simulator_ccd".to_string(),
             name:  "indi_simulator_ccd".to_string(),
