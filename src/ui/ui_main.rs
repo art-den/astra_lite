@@ -3,7 +3,7 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     rc::Rc,
-    sync::{Arc, RwLock},
+    sync::Arc,
     time::Duration,
 };
 
@@ -13,7 +13,7 @@ use serde::{Serialize, Deserialize};
 use crate::{
     core::{
         api::{Command, Reply}, engine::*, events::*, snapshot::StateSnapshot,
-    }, hal::events::HalEvent, options::*,
+    }, hal::events::HalEvent,
     utils::{io_utils::*, log_utils::log_if_error},
 };
 use super::{gtk_utils::*, module::*, utils::*};
@@ -54,7 +54,6 @@ pub fn init_ui(
         widgets,
         logs_dir:       logs_dir.to_path_buf(),
         engine:         Arc::clone(engine),
-        options:        Arc::clone(&engine.options),
         modules:        RefCell::new(UiModules::new()),
         ui_options:     RefCell::new(ui_options),
         progress:       RefCell::new(None),
@@ -230,7 +229,6 @@ struct Widgets {
 pub struct MainUi {
     widgets:        Widgets,
     logs_dir:       PathBuf,
-    options:        Arc<RwLock<Options>>,
     modules:        RefCell<UiModules>,
     ui_options:     RefCell<UiOptions>,
     progress:       RefCell<Option<Progress>>,
@@ -424,7 +422,8 @@ impl MainUi {
                 if !self_.close_win_flag.get() {
                     return glib::ControlFlow::Continue;
                 }
-                if self_.engine.modes().active.kind() != ModeKind::Waiting {
+                // Decision site: fresh snapshot, never the display cache
+                if self_.fresh_snapshot().mode.kind != ModeKind::Waiting {
                     return glib::ControlFlow::Continue;
                 }
                 self_.widgets.window.close();
@@ -472,7 +471,8 @@ impl MainUi {
     }
 
     fn handler_close_window(self: &Rc<Self>) -> glib::Propagation {
-        let mode = self.engine.modes().active.kind();
+        // Decision site: fresh snapshot, never the display cache
+        let mode = self.fresh_snapshot().mode.kind;
 
         if mode != ModeKind::Waiting {
             let dialog = gtk::MessageDialog::builder()
@@ -737,28 +737,28 @@ impl MainUi {
     }
 
     fn correct_widgets_props(&self) {
-        let modes = self.engine.modes();
-        let can_be_continued = modes.aborted
+        let snap = self.snapshot();
+        let can_be_continued = snap.mode.aborted
             .as_ref()
-            .map(|m| m.can_be_continued_after_stop())
+            .map(|m| m.can_continue)
             .unwrap_or(false);
         enable_actions(&self.widgets.window, &[
-            ("stop",     modes.active.can_be_stopped()),
+            ("stop",     snap.mode.can_stop),
             ("continue", can_be_continued),
         ]);
     }
 
     fn show_mode_caption(&self) {
-        let modes = self.engine.modes();
-        let is_cur_mode_active = modes.active.kind() != ModeKind::Waiting;
+        let snap = self.snapshot();
+        let is_cur_mode_active = snap.mode.kind != ModeKind::Waiting;
         let mut caption = String::new();
-        if let (false, Some(finished)) = (is_cur_mode_active, &modes.finished) {
-            caption += &(finished.progress_string() + " (finished)");
+        if let (false, Some(finished)) = (is_cur_mode_active, snap.mode.finished.as_ref()) {
+            caption += &(finished.progress_string.clone().unwrap_or_default() + " (finished)");
         } else {
-            caption += &modes.active.progress_string();
-            if let Some(aborted) = &modes.aborted {
+            caption += &snap.mode.progress_string.clone().unwrap_or_default();
+            if let Some(aborted) = &snap.mode.aborted {
                 caption += " + ";
-                caption += &aborted.progress_string();
+                caption += &aborted.progress_string.clone().unwrap_or_default();
                 caption += " (aborted)";
             }
         }
@@ -833,9 +833,9 @@ impl MainUi {
     }
 
     pub fn show_all_options(&self) {
-        let options = self.options.read().unwrap();
+        let snap = self.snapshot();
         let modules = self.modules.borrow();
-        modules.show_options(&options);
+        modules.show_options(&snap.options);
     }
 
     pub fn set_module_panel_visible(&self, panel_widget: &gtk::Widget, is_visible: bool) {
