@@ -1239,7 +1239,7 @@ impl MapUi {
     }
 
     fn goto_coordinate(self: &Rc<Self>, coord: &EqCoord, only_goto: bool) {
-        self.main_ui.get_all_options();
+        self.main_ui.check_all_options_committed();
 
         let config = if only_goto {
             GotoConfig::OnlyGoto

@@ -266,7 +266,7 @@ impl PlateSolveUi {
     }
 
     fn handler_action_capture_platesolve(self: &Rc<Self>) {
-        self.main_ui.get_all_options();
+        self.main_ui.check_all_options_committed();
 
         exec_and_show_error(Some(&self.window), || {
             self.engine.exec_command(Command::Start(StartMode::CaptureAndPlatesolve))?;
@@ -275,7 +275,7 @@ impl PlateSolveUi {
     }
 
     fn handler_action_plate_solve_and_goto(&self) {
-        self.main_ui.get_all_options();
+        self.main_ui.check_all_options_committed();
 
         exec_and_show_error(Some(&self.window), || {
             self.engine.exec_command(Command::Start(StartMode::GotoImage))?;

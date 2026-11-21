@@ -270,7 +270,7 @@ impl PolarAlignUi {
     }
 
     fn handler_action_start_polar_align(&self) {
-        self.main_ui.get_all_options();
+        self.main_ui.check_all_options_committed();
 
         // Pre-start mode check
 
@@ -318,7 +318,7 @@ impl PolarAlignUi {
     }
 
     fn handler_action_restart_polar_align(&self) {
-        self.main_ui.get_all_options();
+        self.main_ui.check_all_options_committed();
         exec_and_show_error(Some(&self.window), || {
             self.engine.exec_command(Command::Mode(ModeCommand::PolarAlign(PolarAlignCommand::Restart)))?;
             Ok(())

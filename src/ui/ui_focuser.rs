@@ -669,7 +669,7 @@ impl FocuserUi {
     }
 
     fn handler_action_manual_focus(&self) {
-        self.main_ui.get_all_options();
+        self.main_ui.check_all_options_committed();
 
         exec_and_show_error(Some(&self.window), || {
             self.engine.exec_command(Command::Start(StartMode::Focusing))?;
