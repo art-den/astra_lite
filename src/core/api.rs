@@ -5,11 +5,11 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use super::{
-    commands::{ModeCommand, ModeCommandReply},
     engine::{BusyDomain, Engine},
     events::Event,
     mode_darks_lib::{DarkLibMode, MasterFileCreationProgramItem},
     mode_goto::GotoConfig,
+    mode_polar_align::{PolarAlignCommand, PolarAlignState},
 };
 
 /// Raw INDI property commands
@@ -57,6 +57,19 @@ fn busy_domain_of(cmd: &Command) -> Option<BusyDomain> {
         | Command::SetGuidingFocalLen{..} | Command::SetFocuserOptions{..}
         | Command::SetPlateSolverOptions{..} | Command::SetGuidingOptions{..} => None,
     }
+}
+
+/// A command for the active mode (plain-data rule: see [`Command`]).
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum ModeCommand {
+    PolarAlign(PolarAlignCommand),
+}
+
+/// Reply to a mode command.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum ModeCommandReply {
+    Empty,
+    PolarAlignState(PolarAlignState),
 }
 
 /// Telescope (mount) control commands.
@@ -164,9 +177,9 @@ pub enum ConnectCommand {
 /// Single serializable entry point for engine state mutations issued by the UI
 /// (and later by a future web server).
 ///
-/// Rule (same as in `commands.rs`): commands and replies and every type they
-/// reference must be plain data (`Serialize + Deserialize`, no `Arc<dyn ...>`,
-/// Rc, closures, locks or references; paths are `String`).
+/// Rule: commands and replies and every type they reference must be plain
+/// data (`Serialize + Deserialize`, no `Arc<dyn ...>`, Rc, closures, locks or
+/// references; paths are `String`).
 ///
 /// Only mutations go through here. Read-only access (HAL device lists,
 /// `options.read()`, mode queries) stays as is until the snapshot/query API.
@@ -648,7 +661,6 @@ mod tests {
     use serde::de::DeserializeOwned;
 
     use super::*;
-    use crate::core::mode_polar_align::{PolarAlignCommand, PolarAlignState};
 
     fn roundtrip<T: Serialize + DeserializeOwned + std::fmt::Debug>(value: T) {
         let json = serde_json::to_string(&value).unwrap();

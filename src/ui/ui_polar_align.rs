@@ -2,7 +2,7 @@ use std::{rc::Rc, sync::Arc};
 use gtk::{glib::{self, clone}, pango, prelude::*};
 use macros::FromBuilder;
 use crate::{
-    core::{api::{Command, Reply, StartMode}, commands::{ModeCommand, ModeCommandReply}, engine::{Engine, ModeKind}, events::*, mode_polar_align::{PolarAlignCommand, PolarAlignMode, PolarAlignState, PolarAlignmentEvent}},
+    core::{api::{Command, ModeCommand, ModeCommandReply, Reply, StartMode}, engine::{Engine, ModeKind}, events::*, mode_polar_align::{PolarAlignCommand, PolarAlignMode, PolarAlignState, PolarAlignmentEvent}},
     hal::{DeviceType, events::HalEvent},
     options::*,
     sky_math::math::*,

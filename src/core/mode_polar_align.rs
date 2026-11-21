@@ -8,7 +8,7 @@ use crate::{
 };
 use ::indi::degree_to_str;
 
-use super::{commands::*, consts::*, events::*, utils::{check_telescope_is_at_desired_position, gain_to_value}};
+use super::{api::{ModeCommand, ModeCommandReply}, consts::*, events::*, utils::{check_telescope_is_at_desired_position, gain_to_value}};
 
 ///////////////////////////////////////////////////////////////////////////////
 

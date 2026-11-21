@@ -9,7 +9,7 @@ use crate::{
 };
 
 use super::{
-    api::Command,
+    api::{Command, ModeCommand, ModeCommandReply},
     events::*,
     frame_processing::*,
     mode_platesolve::*,
@@ -17,7 +17,6 @@ use super::{
     mode_focusing::*,
     mode_goto::*,
     mode_mnt_calib::*,
-    commands::*,
     mode_polar_align::PolarAlignMode,
     mode_camera::*,
     mode_waiting::*
