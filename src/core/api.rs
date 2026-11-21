@@ -74,6 +74,30 @@ fn busy_domain_of(cmd: &Command) -> Option<BusyDomain> {
     }
 }
 
+/// New absolute target for `FocuserCommand::MoveBy` (clamp-and-move semantics):
+/// `Ok(None)` when the focuser is already at the range boundary in the
+/// requested direction. Guards `f64::clamp` against NaN/inverted-range panics.
+fn focuser_move_by_target(
+    pos:    f64,
+    offset: f64,
+    start:  f64,
+    end:    f64,
+) -> eyre::Result<Option<f64>> {
+    if !pos.is_finite() || !start.is_finite() || !end.is_finite() || start > end {
+        eyre::bail!("Focuser MoveBy: invalid position {pos} or range {start}..{end}");
+    }
+    let target = pos + offset;
+    if target.is_nan() {
+        eyre::bail!("Focuser MoveBy: NaN offset {offset}");
+    }
+    let target = f64::clamp(target, start, end);
+    if target == pos {
+        Ok(None)
+    } else {
+        Ok(Some(target))
+    }
+}
+
 /// Read-only commands must not advance `seq` (polling would look like a change).
 /// Applies on both the `exec_command` and the `submit_command` paths.
 pub(crate) fn is_read_only(cmd: &Command) -> bool {
@@ -630,8 +654,9 @@ impl CameraCaps {
 pub enum Reply {
     Empty,
     Mode(ModeCommandReply),
-    /// New absolute position after `FocuserCommand::MoveBy`;
-    /// `None` when the move was skipped.
+    /// New absolute position after `FocuserCommand::MoveBy` (the target is
+    /// clamped to the device range);
+    /// `None` when already at the range boundary in the requested direction.
     FocuserMove { new_position: Option<f64> },
     /// Answer to `Command::BuildDarkLibraryProgram` (`mode` echoes the spec variant).
     DarkLibraryProgram {
@@ -1133,14 +1158,17 @@ impl Engine {
                 let focuser = self.cur_devices.focuser_or_err()?;
                 match focuser_cmd {
                     FocuserCommand::MoveBy(offset) => {
-                        let mut value = focuser.abs_position()?;
+                        let pos = focuser.abs_position()?;
                         let range = focuser.abs_position_range()?;
-                        value += offset;
-                        if f64::clamp(value, *range.start(), *range.end()) == value {
-                            return Ok(Reply::FocuserMove { new_position: None });
+                        let target = focuser_move_by_target(
+                            pos, offset, *range.start(), *range.end())?;
+                        match target {
+                            None => Ok(Reply::FocuserMove { new_position: None }),
+                            Some(target) => {
+                                focuser.set_abs_position(target)?;
+                                Ok(Reply::FocuserMove { new_position: Some(target) })
+                            }
                         }
-                        focuser.set_abs_position(value)?;
-                        Ok(Reply::FocuserMove { new_position: Some(value) })
                     }
                     FocuserCommand::SetAbs(value) => {
                         focuser.set_abs_position(value)?;
@@ -1488,6 +1516,27 @@ mod tests {
         ] {
             roundtrip(reply);
         }
+    }
+
+    #[test]
+    fn focuser_move_by_target_clamps_and_errors() {
+        // Normal moves inside the range
+        assert_eq!(focuser_move_by_target(100.0, 20.0, 0.0, 1000.0).unwrap(),
+            Some(120.0));
+        assert_eq!(focuser_move_by_target(100.0, -20.0, 0.0, 1000.0).unwrap(),
+            Some(80.0));
+        // Clamped to the boundary and driven there
+        assert_eq!(focuser_move_by_target(990.0, 50.0, 0.0, 1000.0).unwrap(),
+            Some(1000.0));
+        assert_eq!(focuser_move_by_target(-10.0, -5.0, -5.0, 1000.0).unwrap(),
+            Some(-5.0));
+        // Already at the boundary in the requested direction -> skip
+        assert_eq!(focuser_move_by_target(1000.0, 50.0, 0.0, 1000.0).unwrap(), None);
+        assert_eq!(focuser_move_by_target(0.0, -50.0, 0.0, 1000.0).unwrap(), None);
+        // Bad device state must be an error, never a `f64::clamp` panic
+        assert!(focuser_move_by_target(f64::NAN, 10.0, 0.0, 1000.0).is_err());
+        assert!(focuser_move_by_target(100.0, 10.0, 500.0, 100.0).is_err());
+        assert!(focuser_move_by_target(100.0, f64::NAN, 0.0, 1000.0).is_err());
     }
 
     #[test]
