@@ -14,12 +14,13 @@ use super::{gtk_utils::*, module::*, ui_main::*, utils::*};
 
 pub fn init_ui(
     window:    &gtk::ApplicationWindow,
-    _main_ui:  &Rc<MainUi>,
+    main_ui:   &Rc<MainUi>,
     engine:    &Arc<Engine>,
 ) -> Rc<dyn UiModule> {
     let widgets = Widgets::from_builder_str(include_str!(r"resources/platesolve.ui"));
     let obj = Rc::new(PlateSolveUi {
         widgets,
+        main_ui:         Rc::clone(main_ui),
         window:          window.clone(),
         engine:          Arc::clone(engine),
         delayed_actions: DelayedActions::new(200),
@@ -66,6 +67,7 @@ struct Widgets {
 
 struct PlateSolveUi {
     widgets:         Widgets,
+    main_ui:         Rc<MainUi>,
     window:          gtk::ApplicationWindow,
     engine:          Arc<Engine>,
     delayed_actions: DelayedActions<DelayedAction>,
@@ -111,9 +113,7 @@ impl UiModule for PlateSolveUi {
                 self.delayed_actions.schedule(DelayedAction::CorrectWidgetsProps);
             }
             Event::CameraDeviceChanged(_) => {
-                let options = self.engine.options.read().unwrap();
-                self.show_options(&options);
-                drop(options);
+                self.show_options(&self.main_ui.snapshot().options);
                 self.correct_widgets_props();
             }
             Event::MountDeviceChanged(_) => {
@@ -262,19 +262,12 @@ impl PlateSolveUi {
     }
 
     fn correct_widgets_props(&self) {
-        let camera = self.engine.cur_devices.camera();
-        let mount = self.engine.cur_devices.telescope();
+        let snap = self.main_ui.snapshot();
 
-        let cam_active = camera
-            .as_ref()
-            .and_then(|cam| cam.is_active().ok())
-            .unwrap_or(false);
-        let mnt_active = mount
-            .and_then(|cam| cam.is_active().ok())
-            .unwrap_or(false);
+        let cam_active = snap.devices.camera.as_ref().is_some_and(|c| c.is_active);
+        let mnt_active = snap.devices.mount.as_ref().is_some_and(|m| m.is_active);
 
-        let modes = self.engine.modes();
-        let mode_kind = modes.active.kind();
+        let mode_kind = snap.mode.kind;
         let waiting = mode_kind == ModeKind::Waiting;
         let live_view = mode_kind == ModeKind::LiveView;
         let single_shot = mode_kind == ModeKind::SingleShot;
@@ -283,7 +276,9 @@ impl PlateSolveUi {
             mnt_active && cam_active &&
             (waiting || single_shot || live_view);
 
-        if let Some(camera) = camera {
+        // Exception (follow-up `Query::CameraCaps` cache): live camera
+        // capability read for the platesolve exposure spinbutton
+        if let Some(camera) = self.engine.cur_devices.camera() {
             let exp_range = camera.exposure_range().ok();
             correct_spinbutton_by_range(&self.widgets.spb_exp, exp_range, 1, Some(1.0));
         }

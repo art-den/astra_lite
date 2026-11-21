@@ -603,7 +603,8 @@ impl MapUi {
     }
 
     fn create_observer(&self) -> Observer {
-        let sky_map_options = self.engine.options.read().unwrap().site.clone();
+        // Fresh: site lat/long commits are eventless
+        let sky_map_options = &self.main_ui.fresh_snapshot().options.site;
         Observer {
             latitude: degree_to_radian(sky_map_options.latitude),
             longitude: degree_to_radian(sky_map_options.longitude),
@@ -642,10 +643,16 @@ impl MapUi {
             let cam_frame = if show_ccd {
                 || -> Option<CameraFov> {
                     let camera = self.engine.cur_devices.camera()?;
-                    if !camera.is_active().unwrap_or(false) { return None; }
-                    let options = self.engine.options.read().unwrap();
+                    // Fresh: the skymap repaint is timer-driven, the event
+                    // display cache may lag behind eventless options commits
+                    let snap = self.main_ui.fresh_snapshot();
+                    if !snap.devices.camera.as_ref().is_some_and(|c| c.is_active) {
+                        return None;
+                    }
+                    let options = &snap.options;
                     let focal_len = options.telescope.real_focal_length();
                     if focal_len <= 0.1 { return None; }
+                    // Exception: live camera capability reads (ccd size, pixel size)
                     let (sensor_width, sensor_height) = camera.ccd_size().ok()?;
                     let (pixel_width_um, pixel_height_um) = camera.pixel_size_um().ok()?;
                     let (width_mm, height_mm) = options.cam.calc_active_zone_mm(
@@ -668,6 +675,7 @@ impl MapUi {
             };
 
             let telescope_pos = || -> Option<EqCoord> {
+                // Exception (follow-up `Query::MountNav`): live mount coord read
                 let telescope = self.engine.cur_devices.telescope()?;
                 let (ra, dec) = telescope.eq_coord().ok()?;
                 Some(EqCoord {

@@ -11,8 +11,8 @@ use crate::{
 use super::{gtk_utils::*, module::*, ui_main::MainUi, utils::DelayedActions};
 
 pub fn init_ui(
-    window: &gtk::ApplicationWindow,
-    _main_ui: &Rc<MainUi>,
+    window:   &gtk::ApplicationWindow,
+    main_ui:  &Rc<MainUi>,
     engine:   &Arc<Engine>,
 ) -> Rc<dyn UiModule> {
     let mut ui_options = UiOptions::default();
@@ -32,6 +32,7 @@ pub fn init_ui(
 
     let obj = Rc::new(DarksLibraryUI {
         widgets,
+        main_ui:                Rc::clone(main_ui),
         window:                 window.clone(),
         engine:                 Arc::clone(engine),
         ui_options:             RefCell::new(ui_options),
@@ -175,6 +176,7 @@ struct Widgets {
 
 pub struct DarksLibraryUI {
     widgets:      Widgets,
+    main_ui:      Rc<MainUi>,
     window:       gtk::ApplicationWindow,
     engine:       Arc<Engine>,
     ui_options:   RefCell<UiOptions>,
@@ -623,7 +625,7 @@ impl DarksLibraryUI {
     }
 
     fn correct_widgets_enable_state(&self) {
-        let mode_kind = self.engine.modes().active.kind();
+        let mode_kind = self.main_ui.snapshot().mode.kind;
         let is_waiting = mode_kind == ModeKind::Waiting;
         let is_live_view = mode_kind == ModeKind::LiveView;
         let saving_defect_pixels =
@@ -833,10 +835,11 @@ impl DarksLibraryUI {
     }
 
     fn handler_action_open_dark_lib_folder(&self) {
-        let options = self.engine.options.read().unwrap();
-        let lib_path = &options.calibr.dark_library_path.to_str().unwrap_or_default();
-        let uri = "file:///".to_string() + lib_path;
-        drop(options);
+        // Fresh: `SetDarkLibraryPath` is eventless
+        let lib_path = self.main_ui.fresh_snapshot()
+            .options.calibr.dark_library_path.to_str().unwrap_or_default()
+            .to_string();
+        let uri = "file:///".to_string() + &lib_path;
         _ = gtk::show_uri_on_window(
             Option::<&gtk::Window>::None,
             uri.as_str(),
