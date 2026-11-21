@@ -750,7 +750,7 @@ impl DarksLibraryUI {
 
     fn show_info(&self) {
         // No camera: nothing to show (as before)
-        if self.engine.cur_devices.camera().is_none() { return; }
+        if self.main_ui.snapshot().devices.camera.is_none() { return; }
 
         let ui_options = self.ui_options.borrow();
         for spec in [
