@@ -1164,8 +1164,7 @@ impl PreviewUi {
     }
 
     fn draw_preview_image(&self, area: &gtk::DrawingArea, cr: &cairo::Context) {
-        // Fresh: `Preview::Set*` commits are eventless, the cache may lag
-        let options = self.main_ui.fresh_snapshot().options.preview.clone();
+        let options = self.main_ui.snapshot_for_paint().options.preview.clone();
         let pp = options.preview_params();
 
         let stars = match options.source {
@@ -1790,8 +1789,7 @@ impl PreviewUi {
         area: &gtk::DrawingArea,
         cr:   &cairo::Context
     ) ->eyre::Result<()> {
-        // Fresh: `Preview::Set*` commits are eventless, the cache may lag
-        let source = self.main_ui.fresh_snapshot().options.preview.source;
+        let source = self.main_ui.snapshot_for_paint().options.preview.source;
         let hist = match source {
             PreviewSource::OrigFrame =>
                 self.engine.preview.raw_hist.read().unwrap(),

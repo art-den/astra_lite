@@ -491,6 +491,11 @@ impl Engine {
         self.seq.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Current snapshot change counter for seq-driven UI caches.
+    pub(crate) fn seq(&self) -> u64 {
+        self.seq.load(Ordering::Relaxed)
+    }
+
     /// Serializable engine state for `Command::GetSnapshot`.
     /// Fields may come from slightly different moments (a torn snapshot is
     /// acceptable for UI display); the `seq` double-read below prevents the

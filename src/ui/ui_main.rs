@@ -285,6 +285,19 @@ impl MainUi {
         Self::exec_get_snapshot(&self.engine)
     }
 
+    /// Snapshot for paint paths: refetch only when `seq` moved since the
+    /// cached build, otherwise reuse the display cache. Safe for eventless
+    /// option commits because every mutating command bumps `seq`.
+    pub fn snapshot_for_paint(&self) -> Arc<StateSnapshot> {
+        let cached = self.snapshot();
+        if cached.seq == self.engine.seq() {
+            return cached;
+        }
+        let fresh = Self::exec_get_snapshot(&self.engine);
+        *self.snapshot.borrow_mut() = Arc::clone(&fresh);
+        fresh
+    }
+
     fn refresh_snapshot_cache(&self) {
         let snap = Self::exec_get_snapshot(&self.engine);
         *self.snapshot.borrow_mut() = snap;

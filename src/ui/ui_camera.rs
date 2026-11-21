@@ -1777,8 +1777,7 @@ impl CameraUi {
         area: &gtk::DrawingArea,
         cr:   &cairo::Context
     ) {
-        // Decision site of the shot progress overlay: fresh snapshot
-        let snap = self.main_ui.fresh_snapshot();
+        let snap = self.main_ui.snapshot_for_paint();
         let Some(cur_exposure) = snap.mode.cur_exposure else {
             return;
         };

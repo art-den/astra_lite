@@ -643,9 +643,7 @@ impl MapUi {
             let cam_frame = if show_ccd {
                 || -> Option<CameraFov> {
                     let camera = self.engine.cur_devices.camera()?;
-                    // Fresh: the skymap repaint is timer-driven, the event
-                    // display cache may lag behind eventless options commits
-                    let snap = self.main_ui.fresh_snapshot();
+                    let snap = self.main_ui.snapshot_for_paint();
                     if !snap.devices.camera.as_ref().is_some_and(|c| c.is_active) {
                         return None;
                     }
