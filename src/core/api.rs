@@ -18,7 +18,7 @@ use super::{
 /// Raw INDI property commands
 use crate::{
     guiding::external_guider::ExtGuiderType,
-    hal::{Camera, DeviceInfo, DeviceType, FrameType, TelescopeMoveDir},
+    hal::{Camera, DeviceInfo, DeviceType, FrameType, TelescopeMoveDir, TelescopeSite},
     options::{
         Binning, Crop, Gain, GuidingMode, PlateSolverType, PolarAlignDir, PreviewColorMode,
         PreviewScale, PreviewSource, StarRecognSensitivity,
@@ -45,7 +45,7 @@ fn busy_domain_of(cmd: &Command) -> Option<BusyDomain> {
         | Command::StopActiveMode
         | Command::ContinueAbortedMode
         | Command::GetSnapshot
-        | Command::Query(Query::Devices | Query::CameraCaps | Query::IndiProperties { .. } | Query::IndiDrivers)
+        | Command::Query(Query::Devices | Query::CameraCaps | Query::IndiProperties { .. } | Query::IndiDrivers | Query::AllMountSites)
         | Command::SetCameraDevice{..} | Command::SetMountDevice{..}
         | Command::SetFocuserDevice{..} | Command::SetFilterWheelDevice{..}
         | Command::OpenImageFile{..}
@@ -70,6 +70,14 @@ fn busy_domain_of(cmd: &Command) -> Option<BusyDomain> {
         // Read-only query: pure computation + capability read, no camera exclusivity
         | Command::BuildDarkLibraryProgram{..} => None,
     }
+}
+
+/// Read-only commands must not advance `seq` (polling would look like a change).
+/// Applies on both the `exec_command` and the `submit_command` paths.
+pub(crate) fn is_read_only(cmd: &Command) -> bool {
+    matches!(cmd, Command::GetSnapshot
+        | Command::Query(Query::Devices | Query::CameraCaps | Query::IndiProperties { .. } | Query::IndiDrivers | Query::AllMountSites)
+        | Command::BuildDarkLibraryProgram { .. })
 }
 
 /// A command for the active mode (plain-data rule: see [`Command`]).
@@ -491,6 +499,17 @@ pub enum Query {
     IndiProperties { since: Option<u64> },
     /// Grouped INDI driver registry (device driver lists).
     IndiDrivers,
+    /// Sites of all connected telescopes. Makes blocking `site()` HAL
+    /// calls: must go through `submit_command`, not the caller's thread.
+    AllMountSites,
+}
+
+/// Site of one telescope, for the `Query::AllMountSites` reply.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct MountSite {
+    pub id:   String,
+    pub name: String,
+    pub site: TelescopeSite,
 }
 
 /// INDI device with the panel's sort keys (camera caps); zeros when unavailable.
@@ -515,6 +534,7 @@ pub enum QueryReply {
     CameraCaps(CameraCaps),
     IndiProperties(IndiPropertiesData),
     IndiDrivers(indi::Drivers),
+    AllMountSites(Vec<MountSite>),
 }
 
 /// Serializable `RangeInclusive<f64>`.
@@ -626,10 +646,7 @@ impl Engine {
     /// `Command` docs threading contract).
     pub fn exec_command(self: &Arc<Self>, cmd: Command) -> eyre::Result<Reply> {
         log::debug!("Engine command: {:?}", cmd);
-        // Read-only queries must not advance `seq` (polling would look like a change)
-        let read_only = matches!(cmd, Command::GetSnapshot
-            | Command::Query(Query::Devices | Query::CameraCaps | Query::IndiProperties { .. } | Query::IndiDrivers)
-            | Command::BuildDarkLibraryProgram { .. });
+        let read_only = is_read_only(&cmd);
         let reply = self.exec_command_inner(cmd)?;
         if !read_only {
             self.bump_seq();
@@ -1166,6 +1183,16 @@ impl Engine {
                         QueryReply::IndiProperties(IndiPropertiesData { devices, properties })
                     }
                     Query::IndiDrivers => QueryReply::IndiDrivers(self.hal.indi_impl().drivers().clone()),
+                    Query::AllMountSites => {
+                        let mut sites = Vec::new();
+                        for dev in self.hal.devices(DeviceType::TELESCOPE)? {
+                            if let Ok(telescope) = self.hal.telescope(&dev.id)
+                                && let Ok(site) = telescope.site() {
+                                    sites.push(MountSite { id: dev.id, name: telescope.name().to_string(), site });
+                                }
+                        }
+                        QueryReply::AllMountSites(sites)
+                    }
                 };
                 Ok(Reply::Query(Box::new(reply)))
             }
@@ -1630,6 +1657,15 @@ mod tests {
             _ => panic!("expected Reply::Query"),
         }
 
+        // No telescopes: empty site list, not an error
+        match engine.exec_command(Command::Query(Query::AllMountSites)).unwrap() {
+            Reply::Query(q) => match *q {
+                QueryReply::AllMountSites(sites) => assert!(sites.is_empty()),
+                _ => panic!("expected QueryReply::AllMountSites"),
+            },
+            _ => panic!("expected Reply::Query"),
+        }
+
         // Driver registry read must not fail even with INDI not connected
         // (content depends on the local indiserver, so not asserted)
         match engine.exec_command(Command::Query(Query::IndiDrivers)).unwrap() {
@@ -1650,6 +1686,12 @@ mod tests {
         roundtrip(Command::Query(Query::CameraCaps));
         roundtrip(Command::Query(Query::IndiProperties { since: Some(7) }));
         roundtrip(Command::Query(Query::IndiDrivers));
+        roundtrip(Command::Query(Query::AllMountSites));
+        roundtrip(QueryReply::AllMountSites(vec![MountSite {
+            id:   "indi_sim_mount".to_string(),
+            name: "INDI Simulator Mount".to_string(),
+            site: TelescopeSite { latitude: 55.7, longitude: 37.6, elevation: 150.0 },
+        }]));
         roundtrip(QueryReply::IndiDrivers(indi::Drivers { groups: Vec::new() }));
         roundtrip(QueryReply::IndiProperties(IndiPropertiesData { devices: Vec::new(), properties: Vec::new() }));
         roundtrip(QueryReply::Devices(vec![DeviceInfo {

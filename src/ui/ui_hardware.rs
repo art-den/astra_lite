@@ -12,7 +12,7 @@ use itertools::Itertools;
 use chrono::prelude::*;
 use macros::FromBuilder;
 use crate::{
-    core::{api::{Command, ConnectCommand, GuiderCommand, IndiCommand, IndiSelPatch, Query, QueryReply, Reply}, engine::Engine, events::Event}, guiding::phd2, hal::{DeviceType, HalState, events::HalEvent}, options::*, utils::log_utils::log_if_error,
+    core::{api::{Command, ConnectCommand, GuiderCommand, IndiCommand, IndiSelPatch, MountSite, Query, QueryReply, Reply}, engine::Engine, events::Event}, guiding::phd2, hal::{HalState, events::HalEvent}, options::*, utils::log_utils::log_if_error,
 };
 use ::indi::{self, value_to_sexagesimal};
 use super::{gtk_utils::*, indi_panel_widget::*, module::*, ui_main::*};
@@ -207,6 +207,7 @@ enum ConnectPending {
     Plain,
     IndiConnect,
     Guider,
+    GetSites,
 }
 
 impl Drop for HardwareUi {
@@ -330,13 +331,23 @@ impl UiModule for HardwareUi {
                 };
                 match result {
                     Err(err_msg) => show_error_message(Some(&self.window), "Error", err_msg),
-                    Ok(_) => match pending {
+                    Ok(reply) => match pending {
                         ConnectPending::Plain => {}
                         ConnectPending::IndiConnect => {
                             let remote = self.main_ui.snapshot().options.indi.remote;
                             self.is_remote.set(remote);
                         }
                         ConnectPending::Guider => self.correct_widgets_by_cur_state(),
+                        ConnectPending::GetSites => {
+                            let sites = match reply {
+                                Reply::Query(q) => match &**q {
+                                    QueryReply::AllMountSites(sites) => sites.clone(),
+                                    _ => Vec::new(),
+                                },
+                                _ => Vec::new(),
+                            };
+                            self.apply_mount_sites(&sites);
+                        }
                     },
                 }
             }
@@ -1095,52 +1106,49 @@ impl HardwareUi {
     }
 
     fn handler_action_get_site_from_devices(self: &Rc<Self>) {
-        exec_and_show_error(Some(&self.window), || {
-            // Exception (follow-up `Query::AllMountSites`): live HAL reads of
-            // every telescope's site; the snapshot API has no mount site query yet
-            let devices = self.engine.hal.devices(DeviceType::TELESCOPE)?;
+        // Blocking `site()` HAL calls: run on the command queue thread
+        self.submit_connect_cmd(Command::Query(Query::AllMountSites), ConnectPending::GetSites);
+    }
 
-            let result: Vec<_> = devices
-                .iter()
-                .filter_map(|dev| {
-                    let telescope = self.engine.hal.telescope(&dev.id).ok()?;
-                    let site = telescope.site().ok()?;
-                    Some((telescope, site))
-                })
-                .filter(|(_, site)| site.latitude != 0.0 && site.longitude != 0.0)
-                .collect();
+    fn apply_mount_sites(&self, entries: &[MountSite]) {
+        let result: Vec<&MountSite> = entries
+            .iter()
+            .filter(|e| e.site.latitude != 0.0 && e.site.longitude != 0.0)
+            .collect();
 
-            if result.is_empty() {
-                eyre::bail!("No geographic data found in connected devices!");
+        if result.is_empty() {
+            show_error_message(Some(&self.window), "Error", "No geographic data found in connected devices!");
+            return;
+        }
+
+        if result.len() == 1 {
+            let site = &result[0].site;
+            self.widgets.site.e_lat.set_text(&indi::value_to_sexagesimal(site.latitude, true, 6));
+            self.widgets.site.e_long.set_text(&indi::value_to_sexagesimal(site.longitude, true, 6));
+        } else {
+            let menu = gtk::Menu::new();
+            let e_lat = self.widgets.site.e_lat.clone();
+            let e_long = self.widgets.site.e_long.clone();
+            for entry in result {
+                let mi_text = format!(
+                    "{} {} ({})",
+                    indi::value_to_sexagesimal(entry.site.latitude, true, 6),
+                    indi::value_to_sexagesimal(entry.site.longitude, true, 6),
+                    entry.name
+                );
+                let menu_item = gtk::MenuItem::builder().label(mi_text).build();
+                menu.append(&menu_item);
+                let site = entry.site.clone();
+                menu_item.connect_activate(
+                    clone!(@weak e_lat, @weak e_long => move |_| {
+                        e_lat.set_text(&indi::value_to_sexagesimal(site.latitude, true, 6));
+                        e_long.set_text(&indi::value_to_sexagesimal(site.longitude, true, 6));
+                    })
+                );
             }
-
-            if result.len() == 1 {
-                let (_, first_site) = &result[0];
-                self.widgets.site.e_lat.set_text(&indi::value_to_sexagesimal(first_site.latitude, true, 6));
-                self.widgets.site.e_long.set_text(&indi::value_to_sexagesimal(first_site.longitude, true, 6));
-            } else {
-                let menu = gtk::Menu::new();
-                for (telescope, site) in result {
-                    let mi_text = format!(
-                        "{} {} ({})",
-                        indi::value_to_sexagesimal(site.latitude, true, 6),
-                        indi::value_to_sexagesimal(site.longitude, true, 6),
-                        telescope.name()
-                    );
-                    let menu_item = gtk::MenuItem::builder().label(mi_text).build();
-                    menu.append(&menu_item);
-                    menu_item.connect_activate(
-                        clone!(@weak self as self_ => move |_| {
-                            self_.widgets.site.e_lat.set_text(&indi::value_to_sexagesimal(site.latitude, true, 6));
-                            self_.widgets.site.e_long.set_text(&indi::value_to_sexagesimal(site.longitude, true, 6));
-                        })
-                    );
-                }
-                menu.set_attach_widget(Some(&self.widgets.site.btn_get_site));
-                menu.show_all();
-                menu.popup_easy(gtk::gdk::ffi::GDK_BUTTON_SECONDARY as u32, 0);
-            }
-            Ok(())
-        });
+            menu.set_attach_widget(Some(&self.widgets.site.btn_get_site));
+            menu.show_all();
+            menu.popup_easy(gtk::gdk::ffi::GDK_BUTTON_SECONDARY as u32, 0);
+        }
     }
 }

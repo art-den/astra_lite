@@ -597,6 +597,7 @@ pub enum TelescopeState {
     Moved,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TelescopeSite {
     pub latitude: f64,
     pub longitude: f64,
