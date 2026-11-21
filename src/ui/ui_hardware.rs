@@ -12,7 +12,7 @@ use itertools::Itertools;
 use chrono::prelude::*;
 use macros::FromBuilder;
 use crate::{
-    core::{api::{Command, ConnectCommand, GuiderCommand, IndiCommand, IndiSelPatch}, engine::Engine, events::Event}, guiding::phd2, hal::{DeviceType, HalImpl, HalState, events::HalEvent}, options::*, utils::log_utils::log_if_error,
+    core::{api::{Command, ConnectCommand, GuiderCommand, IndiCommand, IndiSelPatch}, engine::Engine, events::Event}, guiding::phd2, hal::{DeviceType, HalState, events::HalEvent}, options::*, utils::log_utils::log_if_error,
 };
 use ::indi::{self, value_to_sexagesimal};
 use super::{gtk_utils::*, indi_panel_widget::*, module::*, ui_main::*};
@@ -23,6 +23,7 @@ pub fn init_ui(
     engine:  &Arc<Engine>,
 ) -> Rc<dyn UiModule> {
     let indi_hal = engine.hal.indi_impl();
+    // Exception (follow-up `Query::IndiDrivers`): grouped driver registry read
     let drivers = indi_hal.drivers();
 
     if drivers.groups.is_empty() {
@@ -312,7 +313,7 @@ impl UiModule for HardwareUi {
                     Ok(_) => match pending {
                         ConnectPending::Plain => {}
                         ConnectPending::IndiConnect => {
-                            let remote = self.engine.options.read().unwrap().indi.remote;
+                            let remote = self.main_ui.snapshot().options.indi.remote;
                             self.is_remote.set(remote);
                         }
                         ConnectPending::Guider => self.correct_widgets_by_cur_state(),
@@ -329,10 +330,10 @@ impl UiModule for HardwareUi {
                 if let HalState::Error(err) = &state {
                     self.add_log_record(&Some(Utc::now()), "", err)
                 }
-                *self.indi_state.borrow_mut() = self.engine.hal.indi_impl().state().clone();
+                *self.indi_state.borrow_mut() = self.main_ui.snapshot().devices.indi_state.clone();
 
                 #[cfg(windows)] {
-                    *self.aa_state.borrow_mut() = self.engine.hal.ascom_alpaca_impl().state().clone();
+                    *self.aa_state.borrow_mut() = self.main_ui.snapshot().devices.alpaca_state.clone();
                 }
 
                 self.correct_widgets_by_cur_state();
@@ -692,7 +693,7 @@ impl HardwareUi {
 
         let indi_connected = *indi_state == HalState::Connected;
         let indi_disconnected = matches!(*indi_state, HalState::Disconnected|HalState::Error(_));
-        let phd2_working = self.engine.ext_guider.phd2_conn().is_working();
+        let phd2_working = self.main_ui.snapshot().devices.phd2_working;
         enable_actions(&self.window, &[
             ("conn_indi",    conn_en(&indi_state)),
             ("disconn_indi", disconn_en(&indi_state)),
@@ -729,6 +730,7 @@ impl HardwareUi {
         let aux1_sensitive = !remote && indi_disconnected && !is_combobox_empty(&self.widgets.indi_drv.cb_aux1_drivers);
         let aux2_sensitive = !remote && indi_disconnected && !is_combobox_empty(&self.widgets.indi_drv.cb_aux2_drivers);
 
+        // Exception (follow-up `Query::IndiDrivers`): grouped driver registry read
         let indi_drivers = self.engine.hal.indi_impl().drivers();
 
         self.widgets.indi_drv.chb_remote.set_sensitive(!indi_drivers.groups.is_empty() && indi_disconnected);
@@ -759,7 +761,9 @@ impl HardwareUi {
 
     fn handler_action_conn_indi(&self) {
         let cmd = {
-            let options = self.engine.options.read().unwrap();
+            // Fresh: connect payload must see the latest eventless widget commits
+            let snap = self.main_ui.fresh_snapshot();
+            let options = &snap.options;
             ConnectCommand::ConnectIndi {
                 remote:    options.indi.remote,
                 address:   options.indi.address.clone(),
@@ -786,7 +790,8 @@ impl HardwareUi {
 
     #[cfg(windows)]
     fn handler_action_conn_aa(&self) {
-        let address = self.engine.options.read().unwrap().ascom_alpaca.address.clone();
+        // Fresh: connect payload must see the latest eventless widget commits
+        let address = self.main_ui.fresh_snapshot().options.ascom_alpaca.address.clone();
         self.submit_connect_cmd(
             Command::Connect(ConnectCommand::ConnectAlpaca { address }),
             ConnectPending::Plain
@@ -840,6 +845,7 @@ impl HardwareUi {
             group_name: &str,
             active:     &Option<String>
         ) {
+            // Exception (follow-up `Query::IndiDrivers`): grouped driver registry read
             let indi_drivers = data.engine.hal.indi_impl().drivers();
             let Ok(group) = indi_drivers.get_group_by_name(group_name) else { return; };
             let model = gtk::TreeStore::new(&[String::static_type(), String::static_type()]);
@@ -872,14 +878,14 @@ impl HardwareUi {
             cb.set_active_iter(active_iter.as_ref());
         }
 
-        let options = self.engine.options.read().unwrap();
-        fill_cb_list(self, &self.widgets.indi_drv.cb_mount_drivers,     "Telescopes",    &options.indi.mount);
-        fill_cb_list(self, &self.widgets.indi_drv.cb_camera_drivers,    "CCDs",          &options.indi.camera);
-        fill_cb_list(self, &self.widgets.indi_drv.cb_guid_cam_drivers,  "CCDs",          &options.indi.guid_cam);
-        fill_cb_list(self, &self.widgets.indi_drv.cb_focuser_drivers,   "Focusers",      &options.indi.focuser);
-        fill_cb_list(self, &self.widgets.indi_drv.cb_flt_wheel_drivers, "Filter Wheels", &options.indi.flt_wheel);
-        fill_cb_list(self, &self.widgets.indi_drv.cb_aux1_drivers,      "Auxiliary",     &options.indi.aux1);
-        fill_cb_list(self, &self.widgets.indi_drv.cb_aux2_drivers,      "Auxiliary",     &options.indi.aux2);
+        let snap = self.main_ui.snapshot();
+        fill_cb_list(self, &self.widgets.indi_drv.cb_mount_drivers,     "Telescopes",    &snap.options.indi.mount);
+        fill_cb_list(self, &self.widgets.indi_drv.cb_camera_drivers,    "CCDs",          &snap.options.indi.camera);
+        fill_cb_list(self, &self.widgets.indi_drv.cb_guid_cam_drivers,  "CCDs",          &snap.options.indi.guid_cam);
+        fill_cb_list(self, &self.widgets.indi_drv.cb_focuser_drivers,   "Focusers",      &snap.options.indi.focuser);
+        fill_cb_list(self, &self.widgets.indi_drv.cb_flt_wheel_drivers, "Filter Wheels", &snap.options.indi.flt_wheel);
+        fill_cb_list(self, &self.widgets.indi_drv.cb_aux1_drivers,      "Auxiliary",     &snap.options.indi.aux1);
+        fill_cb_list(self, &self.widgets.indi_drv.cb_aux2_drivers,      "Auxiliary",     &snap.options.indi.aux2);
     }
 
     fn add_log_record(
@@ -997,7 +1003,8 @@ impl HardwareUi {
     }
 
     fn update_window_title(&self) {
-        let options = self.engine.options.read().unwrap();
+        let snap = self.main_ui.snapshot();
+        let options = &snap.options;
         let indi_state = self.indi_state.borrow();
         let aa_state = self.aa_state.borrow();
 
@@ -1014,7 +1021,6 @@ impl HardwareUi {
                 .map(|(str, v)| format!("{}: {}", str, v))
                 .join(", ");
 
-            drop(options);
             self.main_ui.set_dev_list_and_conn_status(
                 dev_list,
                 indi_state.to_str(true).to_string()
@@ -1067,6 +1073,8 @@ impl HardwareUi {
 
     fn handler_action_get_site_from_devices(self: &Rc<Self>) {
         exec_and_show_error(Some(&self.window), || {
+            // Exception (follow-up `Query::AllMountSites`): live HAL reads of
+            // every telescope's site; the snapshot API has no mount site query yet
             let devices = self.engine.hal.devices(DeviceType::TELESCOPE)?;
 
             let result: Vec<_> = devices
