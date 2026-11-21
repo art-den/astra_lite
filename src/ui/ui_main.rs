@@ -85,7 +85,7 @@ pub fn init_ui(
     let plate_solve   = super::ui_plate_solve  ::init_ui(&main_ui.widgets.window, &main_ui, engine);
     let polar_align   = super::ui_polar_align  ::init_ui(&main_ui.widgets.window, &main_ui, engine);
     let map           = super::ui_skymap       ::init_ui(&main_ui.widgets.window, &main_ui, engine);
-    let debug         = super::ui_debug        ::init_ui(&engine.options);
+    let debug         = super::ui_debug        ::init_ui(engine);
 
     // Module init may mutate engine options through the facade (hardware panel
     // forces INDI remote mode); refresh the display cache before first show

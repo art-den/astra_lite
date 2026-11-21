@@ -397,6 +397,9 @@ pub struct PolarAlignPatch {
     #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "de_patch_opt")]
     pub speed:        Option<Option<String>>,
     pub auto_refresh: Option<bool>,
+    /// Debug-only simulated mount errors (see the develop mode panel)
+    pub sim_alt_err:  Option<f64>,
+    pub sim_az_err:   Option<f64>,
 }
 
 /// See [`CoolingPatch`].
@@ -1064,6 +1067,8 @@ impl Engine {
                 if let Some(v) = patch.direction    { options.polar_align.direction = v; }
                 if let Some(v) = patch.speed        { options.polar_align.speed = v; }
                 if let Some(v) = patch.auto_refresh { options.polar_align.auto_refresh = v; }
+                if let Some(v) = patch.sim_alt_err  { options.polar_align.sim_alt_err = v; }
+                if let Some(v) = patch.sim_az_err   { options.polar_align.sim_az_err = v; }
                 Ok(Reply::Empty)
             }
             Command::SetGuidingOptions(patch) => {
@@ -1545,6 +1550,7 @@ mod tests {
             Command::SetPolarAlignOptions(PolarAlignPatch {
                 angle: Some(30.0), direction: Some(PolarAlignDir::East),
                 speed: Some(Some("2".to_string())), auto_refresh: Some(false),
+                sim_alt_err: Some(1.25), sim_az_err: Some(-3.5),
             }),
             Command::SetPolarAlignOptions(PolarAlignPatch { speed: Some(None), ..Default::default() }),
             Command::SetGuidingOptions(GuidingPatch {

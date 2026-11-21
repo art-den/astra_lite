@@ -1,15 +1,20 @@
-use std::{rc::Rc, sync::{Arc, RwLock}};
+use std::{cell::Cell, rc::Rc, sync::Arc};
 use gtk::{prelude::*, pango, glib::{self, clone}};
 
-use crate::{options::*};
+use crate::{
+    core::{api::{Command, PolarAlignPatch}, engine::Engine},
+    options::*,
+    utils::log_utils::log_if_error,
+};
 
 use super::module::*;
 
 
-pub fn init_ui(options: &Arc<RwLock<Options>>) -> Rc<dyn UiModule> {
+pub fn init_ui(engine: &Arc<Engine>) -> Rc<dyn UiModule> {
     let obj = Rc::new(DebugUi {
         widgets: Widgets::new(),
-        options: Arc::clone(options),
+        engine: Arc::clone(engine),
+        opts_syncing: Cell::new(false),
     });
     obj.connect_widgets_events();
     obj
@@ -121,8 +126,10 @@ impl Widgets {
 }
 
 struct DebugUi {
-    widgets: Widgets,
-    options: Arc<RwLock<Options>>,
+    widgets:      Widgets,
+    engine:       Arc<Engine>,
+    // Suppresses command handlers while widgets mirror the options
+    opts_syncing: Cell<bool>,
 }
 
 impl Drop for DebugUi {
@@ -133,8 +140,10 @@ impl Drop for DebugUi {
 
 impl UiModule for DebugUi {
     fn show_options(&self, options: &Options) {
+        let prev = self.opts_syncing.replace(true);
         self.widgets.spb_sim_alt_err.set_value(options.polar_align.sim_alt_err);
         self.widgets.spb_sim_az_err .set_value(options.polar_align.sim_az_err);
+        self.opts_syncing.set(prev);
     }
 
     fn panels(&self) -> Vec<Panel> {
@@ -153,15 +162,25 @@ impl DebugUi {
     fn connect_widgets_events(self: &Rc<Self>) {
         self.widgets.spb_sim_alt_err.connect_value_changed(
             clone!(@weak self as self_ => move |spb| {
-                let Ok(mut options) = self_.options.try_write() else { return; };
-                options.polar_align.sim_alt_err = spb.value();
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(Command::SetPolarAlignOptions(
+                        PolarAlignPatch { sim_alt_err: Some(spb.value()), ..Default::default() }
+                    )),
+                    "Set sim alt err"
+                );
             })
         );
 
         self.widgets.spb_sim_az_err.connect_value_changed(
             clone!(@weak self as self_ => move |spb| {
-                let Ok(mut options) = self_.options.try_write() else { return; };
-                options.polar_align.sim_az_err = spb.value();
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(Command::SetPolarAlignOptions(
+                        PolarAlignPatch { sim_az_err: Some(spb.value()), ..Default::default() }
+                    )),
+                    "Set sim az err"
+                );
             })
         );
     }
