@@ -1101,6 +1101,17 @@ impl HardwareUi {
         );
     }
 
+    fn commit_site(&self, lat: &str, lon: &str) {
+        log_if_error(
+            &self.engine.exec_command(Command::SetSiteLatitude { sexagesimal: lat.to_string() }),
+            "Set site latitude"
+        );
+        log_if_error(
+            &self.engine.exec_command(Command::SetSiteLongitude { sexagesimal: lon.to_string() }),
+            "Set site longitude"
+        );
+    }
+
     fn submit_connect_cmd(&self, cmd: Command, pending: ConnectPending) {
         match self.engine.submit_command(cmd) {
             Ok(id) => { _ = self.pending_cmds.borrow_mut().insert(id, pending); }
@@ -1124,14 +1135,20 @@ impl HardwareUi {
             return;
         }
 
+        // Commit the site explicitly: `set_text` must not be the commit path
+        // (no `changed` signal when the entries already hold the same text)
         if result.len() == 1 {
             let site = &result[0].site;
-            self.widgets.site.e_lat.set_text(&indi::value_to_sexagesimal(site.latitude, true, 6));
-            self.widgets.site.e_long.set_text(&indi::value_to_sexagesimal(site.longitude, true, 6));
+            let lat = indi::value_to_sexagesimal(site.latitude, true, 6);
+            let lon = indi::value_to_sexagesimal(site.longitude, true, 6);
+            self.widgets.site.e_lat.set_text(&lat);
+            self.widgets.site.e_long.set_text(&lon);
+            self.commit_site(&lat, &lon);
         } else {
             let menu = gtk::Menu::new();
             let e_lat = self.widgets.site.e_lat.clone();
             let e_long = self.widgets.site.e_long.clone();
+            let engine = Arc::clone(&self.engine);
             for entry in result {
                 let mi_text = format!(
                     "{} {} ({})",
@@ -1143,9 +1160,23 @@ impl HardwareUi {
                 menu.append(&menu_item);
                 let site = entry.site.clone();
                 menu_item.connect_activate(
-                    clone!(@weak e_lat, @weak e_long => move |_| {
-                        e_lat.set_text(&indi::value_to_sexagesimal(site.latitude, true, 6));
-                        e_long.set_text(&indi::value_to_sexagesimal(site.longitude, true, 6));
+                    clone!(@weak e_lat, @weak e_long, @strong engine => move |_| {
+                        let lat = indi::value_to_sexagesimal(site.latitude, true, 6);
+                        let lon = indi::value_to_sexagesimal(site.longitude, true, 6);
+                        e_lat.set_text(&lat);
+                        e_long.set_text(&lon);
+                        log_if_error(
+                            &engine.exec_command(
+                                Command::SetSiteLatitude { sexagesimal: lat }
+                            ),
+                            "Set site latitude"
+                        );
+                        log_if_error(
+                            &engine.exec_command(
+                                Command::SetSiteLongitude { sexagesimal: lon }
+                            ),
+                            "Set site longitude"
+                        );
                     })
                 );
             }
