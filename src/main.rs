@@ -4,7 +4,7 @@ use std::{path::Path, sync::Arc, time::Duration};
 use gtk::{prelude::*, glib, glib::clone};
 use astra_lite::{ui, ui::gtk_utils::{exec_and_show_error, open_logs_folder}};
 use astra_lite::{
-    core::engine::Engine, options::*, utils::{io_utils::*, log_utils::*}
+    core::{api::Command, engine::Engine}, options::*, utils::{io_utils::*, log_utils::*}
 };
 
 // Option used to launch a separate instance that only shows the panic dialog
@@ -227,19 +227,20 @@ fn app_shutdown_handler(_app: &gtk::Application, engine: &Arc<Engine>) {
     drop(options);
     log::info!("Options saved");
 
-    // Shutdown engine
+    // Shutdown engine through the facade (see the `Command` shutdown contract)
 
     log::info!("engine shutting down...");
-    engine.shutdown();
+    log_if_error(
+        &engine.exec_command(Command::Shutdown { force: true }),
+        "Engine shutdown command"
+    );
     log::info!("engine stopped");
 
     // Mandatory: shutdown mutates per-camera options in memory, only a save
     // after it captures them
 
     log::info!("Saving options...");
-    let options = engine.options.read().unwrap();
-    _ = save_json_to_config::<Options>(&options, "options");
-    drop(options);
+    log_if_error(&engine.exec_command(Command::SaveOptions), "Save options command");
     log::info!("Options saved");
 
     dbg!(Arc::strong_count(engine));
