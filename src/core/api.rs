@@ -56,6 +56,7 @@ fn busy_domain_of(cmd: &Command) -> Option<BusyDomain> {
         | Command::SetRawFramesOptions(..)
         | Command::SetLiveViewEnabled{..} | Command::SetLiveStackingOptions(..)
         | Command::SetQualityOptions(..) | Command::SetCalibrOptions(..)
+        | Command::SetDarkLibraryPath{..}
         | Command::SetTelescopeFocalLen{..} | Command::SetBarlow{..}
         | Command::SetGuidingFocalLen{..} | Command::SetFocuserOptions(..)
         | Command::SetPlateSolverOptions(..) | Command::SetPolarAlignOptions(..)
@@ -435,6 +436,7 @@ pub enum Command {
     SetLiveStackingOptions(LiveStackingPatch),
     SetQualityOptions(QualityPatch),
     SetCalibrOptions(CalibrPatch),
+    SetDarkLibraryPath { path: String },
     // Optics
     SetTelescopeFocalLen { focal_len: f64 },
     SetBarlow { barlow: f64 },
@@ -684,6 +686,10 @@ impl Engine {
                     options.calibr.flat_frame_fname = PathBuf::from(v);
                 }
                 if let Some(v) = patch.hot_pixels       { options.calibr.hot_pixels = v; }
+                Ok(Reply::Empty)
+            }
+            Command::SetDarkLibraryPath { path } => {
+                self.options.write().unwrap().calibr.dark_library_path = PathBuf::from(path);
                 Ok(Reply::Empty)
             }
             Command::SetTelescopeFocalLen { focal_len } => {

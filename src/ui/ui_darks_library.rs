@@ -70,7 +70,7 @@ struct UiOptions {
 #[derive(FromBuilder)]
 struct CommonWidgets {
     bx:               gtk::Box,
-    fch_dark_library: gtk::FileChooser,
+    fch_dark_library: gtk::FileChooserButton,
     nb_modes:         gtk::Notebook,
 }
 
@@ -482,6 +482,19 @@ impl DarksLibraryUI {
     }
 
     fn connect_widgets_events(self: &Rc<Self>) {
+        self.widgets.common.fch_dark_library.connect_file_set(
+            clone!(@weak self as self_ => move |fch| {
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetDarkLibraryPath {
+                            path: fch.filename().unwrap_or_default().to_string_lossy().into_owned()
+                        }
+                    ),
+                    "Set dark library path"
+                );
+            })
+        );
+
         // Any widget signal invalidates a program waiting to start (its Build
         // may still be queued in the engine FIFO)
         let connect_checkbtn = |checkbox: &gtk::CheckButton| {
