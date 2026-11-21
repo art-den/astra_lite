@@ -24,10 +24,18 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::guiding::external_guider::ExtGuiderState;
+use crate::hal::{FocuserState, HalState, TelescopeState};
 use crate::options::Options;
 
 use super::engine::{BusyDomain, EngineModes, ModeBox, ModeKind};
 use super::events::Progress;
+
+/// Maps a failed trait-object state read (`state()`/`is_active()` under ASCOM
+/// can fail) into `None` with a log line, as required by the snapshot DTOs.
+pub(crate) fn opt_logged<T>(what: &str, result: eyre::Result<T>) -> Option<T> {
+    result.map_err(|err| log::warn!("Snapshot: {what}: {err:#}")).ok()
+}
 
 /// Everything the UI needs to render engine state, read atomically enough for
 /// display (see the module docs about snapshot tearing and `seq`).
@@ -41,6 +49,47 @@ pub struct StateSnapshot {
     /// Device busy domains currently held by in-progress commands.
     pub busy:    Vec<BusyDomain>,
     pub options: Options,
+    pub devices: ConnectedDevicesState,
+    pub live_stacking: LiveStackingNums,
+}
+
+/// A connected (selected into `cur_devices`) device of the engine.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct DeviceRef {
+    pub id:        String,
+    pub is_active: bool,
+    /// Device-specific state; `None` for devices without a `state()` API
+    /// (camera, filter wheel) or when the read failed (logged).
+    pub state:     Option<DeviceState>,
+}
+
+/// Serializable union of the HAL trait `state()` results.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum DeviceState {
+    Telescope(TelescopeState),
+    Focuser(FocuserState),
+}
+
+/// Connected devices plus the per-backend connection states and guider state.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ConnectedDevicesState {
+    pub camera:       Option<DeviceRef>,
+    pub mount:        Option<DeviceRef>,
+    pub focuser:      Option<DeviceRef>,
+    pub filter_wheel: Option<DeviceRef>,
+    pub indi_state:   HalState,
+    #[cfg(windows)]
+    pub alpaca_state: HalState,
+    pub guider:           Option<ExtGuiderState>,
+    pub guider_connected: bool,
+    pub phd2_working:     bool,
+}
+
+/// Numeric live stacking state (image data stays on the direct image channel).
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct LiveStackingNums {
+    pub total_exposure: f64,
+    pub time_cnt:       f64,
 }
 
 /// The active mode plus the `finished`/`aborted` summaries the panels show.

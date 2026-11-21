@@ -14,7 +14,8 @@ use super::{
     api::{Command, ModeCommand, ModeCommandReply},
     events::*,
     frame_processing::*,
-    snapshot::{ModeState, StateSnapshot},
+    snapshot::{ConnectedDevicesState, DeviceRef, DeviceState, LiveStackingNums,
+        ModeState, StateSnapshot, opt_logged},
     mode_platesolve::*,
     mode_darks_lib::*,
     mode_focusing::*,
@@ -397,7 +398,50 @@ impl Engine {
                 options.clone(),
             )
         };
-        StateSnapshot { seq, mode, busy, options }
+        // Scope 2: device `Arc`s (the `cur_devices` accessors hold the registry
+        // mutex only while cloning); `state()`/`is_active()` run with no engine
+        // locks held (COM calls under ASCOM)
+        // Scope 3: live stacking numbers, `stacker` before `time_cnt`
+        // (same order as `LiveStacking::prepare_for_work`)
+        let total_exposure = self.live_stacking.stacker.read().unwrap().total_exposure();
+        let time_cnt = *self.live_stacking.time_cnt.lock().unwrap();
+        // Scope 4: guider reads lock `ext_guider` only, never together with
+        // `modes` (see the deadlock note in `snapshot.rs`)
+        let guider = self.ext_guider.state();
+        let guider_connected = self.ext_guider.is_connected();
+        let phd2_working = self.ext_guider.phd2_conn().is_working();
+        let devices = ConnectedDevicesState {
+            camera: self.cur_devices.camera().map(|cam| DeviceRef {
+                id: cam.id().to_string(),
+                is_active: opt_logged("camera is_active", cam.is_active()).unwrap_or(false),
+                state: None,
+            }),
+            mount: self.cur_devices.telescope().map(|mnt| DeviceRef {
+                id: mnt.id().to_string(),
+                is_active: opt_logged("mount is_active", mnt.is_active()).unwrap_or(false),
+                state: opt_logged("mount state", mnt.state()).map(DeviceState::Telescope),
+            }),
+            focuser: self.cur_devices.focuser().map(|foc| DeviceRef {
+                id: foc.id().to_string(),
+                is_active: opt_logged("focuser is_active", foc.is_active()).unwrap_or(false),
+                state: opt_logged("focuser state", foc.state()).map(DeviceState::Focuser),
+            }),
+            filter_wheel: self.cur_devices.filter_wheel().map(|flt| DeviceRef {
+                id: flt.id().to_string(),
+                is_active: opt_logged("flt wheel is_active", flt.is_active()).unwrap_or(false),
+                state: None,
+            }),
+            indi_state: self.hal.indi_impl().state(),
+            #[cfg(windows)]
+            alpaca_state: self.hal.ascom_alpaca_impl().state(),
+            guider,
+            guider_connected,
+            phd2_working,
+        };
+        StateSnapshot {
+            seq, mode, busy, options, devices,
+            live_stacking: LiveStackingNums { total_exposure, time_cnt },
+        }
     }
 
     /// On error aborts the active mode and sends `Event::Error`.

@@ -95,7 +95,7 @@ use super::hal::hal_ascom::AscomHalImpl;
 use super::hal::hal_ascom_alpaca::AscomAlpacaHalImpl;
 
 bitflags! {
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
     pub struct DeviceType: u32 {
         const CAMERA    = (1 << 0);
         const TELESCOPE = (1 << 1);
@@ -104,7 +104,7 @@ bitflags! {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceInfo {
     /// Unique backend key, stable and safe to persist; used to look the device up
     pub id:    String,
@@ -129,7 +129,7 @@ pub struct CameraInfo {
     pub ccd:  CcdPurpose,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum HalState {
     ImplNotDefined,
     Connecting,
@@ -585,7 +585,7 @@ pub enum TelescopeMoveDir {
     NorthWest, NorthEast, SouthWest, SouthEast,
 }
 
-#[derive(Clone, Copy, Eq, PartialEq, Default)]
+#[derive(Clone, Copy, Eq, PartialEq, Default, Debug, Serialize, Deserialize)]
 pub enum TelescopeState {
     #[default]
     Stopped,
@@ -640,7 +640,7 @@ pub trait Telescope : Device {
 ///////////////////////////////////////////////////////////////////////////////
 // Focuser
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum FocuserState {
     Stopped,
     Moving,

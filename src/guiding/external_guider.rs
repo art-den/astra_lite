@@ -2,6 +2,8 @@
 
 use std::sync::{Arc, Mutex};
 
+use serde::{Deserialize, Serialize};
+
 use super::phd2;
 
 pub enum ExtGuiderType {
@@ -20,7 +22,7 @@ pub enum ExtGuiderEvent {
 
 pub type ExtGuiderEventFn = Box<dyn Fn(ExtGuiderEvent) + Send + Sync + 'static>;
 
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ExtGuiderState {
     Stopped,
     Calibrating,
