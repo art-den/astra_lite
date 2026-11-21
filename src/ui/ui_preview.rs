@@ -2103,7 +2103,6 @@ impl PreviewUi {
                 exec_and_show_error(Some(&self_.window), || {
                     let Some(file_name) = file_chooser.file() else { return Ok(()); };
                     let Some(file_name) = file_name.path() else { return Ok(()); };
-                    self_.main_ui.check_all_options_committed();
                     self_.engine.exec_command(Command::OpenImageFile {
                         path: file_name.to_string_lossy().into_owned()
                     })?;

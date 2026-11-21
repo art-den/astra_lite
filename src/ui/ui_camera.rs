@@ -1725,7 +1725,6 @@ impl CameraUi {
     }
 
     fn start_live_view(&self) {
-        self.main_ui.check_all_options_committed();
         exec_and_show_error(Some(&self.window), || {
             self.engine.exec_command(Command::Start(StartMode::LiveView))?;
             Ok(())
@@ -1733,7 +1732,6 @@ impl CameraUi {
     }
 
     fn handler_action_take_shot(&self) {
-        self.main_ui.check_all_options_committed();
         exec_and_show_error(Some(&self.window), || {
             self.engine.exec_command(Command::Start(StartMode::SingleShot))?;
             Ok(())
@@ -1777,7 +1775,6 @@ impl CameraUi {
             return;
         }
         if self.engine.options.read().unwrap().cam.live_view {
-            self.main_ui.check_all_options_committed();
             self.start_live_view();
         } else {
             log_if_error(
@@ -1799,8 +1796,6 @@ impl CameraUi {
     }
 
     fn handler_action_start_live_stacking(self: &Rc<Self>) {
-        self.main_ui.check_all_options_committed();
-
         let ok = exec_and_show_error(Some(&self.window), || {
             self.engine.check_before_saving_raw_or_live_stacking()?;
             Ok(())
@@ -1827,7 +1822,6 @@ impl CameraUi {
     }
 
     fn handler_action_continue_live_stacking(&self) {
-        self.main_ui.check_all_options_committed();
         exec_and_show_error(Some(&self.window), || {
             self.engine.check_before_saving_raw_or_live_stacking()?;
             self.engine.exec_command(Command::ContinueAbortedMode)?;
@@ -1970,8 +1964,6 @@ impl CameraUi {
     }
 
     fn handler_action_start_save_raw_frames(self: &Rc<Self>) {
-        self.main_ui.check_all_options_committed();
-
         let ok = exec_and_show_error(Some(&self.window), || {
             self.engine.check_before_saving_raw_or_live_stacking()?;
             Ok(())
@@ -1991,7 +1983,6 @@ impl CameraUi {
     }
 
     fn handler_action_continue_save_raw_frames(&self) {
-        self.main_ui.check_all_options_committed();
         exec_and_show_error(Some(&self.window), || {
             self.engine.check_before_saving_raw_or_live_stacking()?;
             self.engine.exec_command(Command::ContinueAbortedMode)?;

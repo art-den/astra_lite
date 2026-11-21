@@ -12,15 +12,14 @@ use ::indi::degree_to_str_short;
 use super::{gtk_utils::{self, *}, module::*, ui_main::*, utils::*};
 
 pub fn init_ui(
-    window:  &gtk::ApplicationWindow,
-    main_ui: &Rc<MainUi>,
-    engine:  &Arc<Engine>,
+    window:    &gtk::ApplicationWindow,
+    _main_ui:  &Rc<MainUi>,
+    engine:    &Arc<Engine>,
 ) -> Rc<dyn UiModule> {
     let widgets = Widgets::from_builder_str(include_str!(r"resources/polar_align.ui"));
     let obj = Rc::new(PolarAlignUi {
         widgets,
         window:          window.clone(),
-        main_ui:         Rc::clone(main_ui),
         engine:          Arc::clone(engine),
         delayed_actions: DelayedActions::new(200),
         opts_syncing:    Cell::new(false),
@@ -74,7 +73,6 @@ struct Widgets {
 
 struct PolarAlignUi {
     widgets:         Widgets,
-    main_ui:         Rc<MainUi>,
     window:          gtk::ApplicationWindow,
     engine:          Arc<Engine>,
     delayed_actions: DelayedActions<DelayedAction>,
@@ -336,8 +334,6 @@ impl PolarAlignUi {
     }
 
     fn handler_action_start_polar_align(&self) {
-        self.main_ui.check_all_options_committed();
-
         // Pre-start mode check
 
         let check_result = PolarAlignMode::check_before_start(
@@ -384,7 +380,6 @@ impl PolarAlignUi {
     }
 
     fn handler_action_restart_polar_align(&self) {
-        self.main_ui.check_all_options_committed();
         exec_and_show_error(Some(&self.window), || {
             self.engine.exec_command(Command::Mode(ModeCommand::PolarAlign(PolarAlignCommand::Restart)))?;
             Ok(())

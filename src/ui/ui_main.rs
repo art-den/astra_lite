@@ -463,8 +463,6 @@ impl MainUi {
         _ = save_json_to_config::<UiOptions>(&options, MainUi::CONF_FN);
         drop(options);
 
-        self.check_all_options_committed();
-
         let modules = self.modules.borrow();
         modules.on_app_closing();
         drop(modules);
@@ -776,59 +774,6 @@ impl MainUi {
         modules.show_options(&options);
     }
 
-    pub fn get_all_options(&self) {
-        if let Ok(mut options) = self.options.try_write() {
-            let modules = self.modules.borrow();
-            modules.get_options(&mut options);
-        } else {
-            log::error!("Failed to unlock options for modification!");
-        }
-    }
-
-    /// Transitional checker for the immediate-commit invariant: in debug builds
-    /// it applies the widget flush to a *clone* of `Options` and logs every
-    /// JSON path where the clone diverges from the live options, i.e. fields
-    /// whose panel does not commit them via `Command` yet.
-    /// Release builds keep the old flush behavior until the channel is removed.
-    pub fn check_all_options_committed(&self) {
-        if !cfg!(debug_assertions) {
-            self.get_all_options();
-            return;
-        }
-
-        let Ok(options) = self.options.try_read() else {
-            log::error!("Failed to unlock options for checker!");
-            return;
-        };
-        let live = match serde_json::to_value(&*options) {
-            Ok(v)     => v,
-            Err(err)  => { log::error!("Options checker: serialize failed: {err}"); return; }
-        };
-        drop(options);
-
-        let mut flashed: Options = match serde_json::from_value(live.clone()) {
-            Ok(v)     => v,
-            Err(err)  => { log::error!("Options checker: deserialize failed: {err}"); return; }
-        };
-        {
-            let modules = self.modules.borrow();
-            modules.get_options(&mut flashed);
-        }
-        let flashed = match serde_json::to_value(&flashed) {
-            Ok(v)     => v,
-            Err(err)  => { log::error!("Options checker: serialize failed: {err}"); return; }
-        };
-
-        let mut diffs = Vec::new();
-        diff_json("", &live, &flashed, &mut diffs);
-        if !diffs.is_empty() {
-            log::error!("Options checker: {} uncommitted field(s):", diffs.len());
-            for diff in diffs {
-                log::error!("Options checker: {diff}");
-            }
-        }
-    }
-
     pub fn set_module_panel_visible(&self, panel_widget: &gtk::Widget, is_visible: bool) {
         let modules = self.modules.borrow();
         for module in modules.items() {
@@ -841,21 +786,3 @@ impl MainUi {
     }
 }
 
-/// Recursively compares two serialized `Options` trees, collecting divergent paths.
-fn diff_json(path: &str, live: &serde_json::Value, flashed: &serde_json::Value, diffs: &mut Vec<String>) {
-    if let (serde_json::Value::Object(a), serde_json::Value::Object(b)) = (live, flashed) {
-        let mut keys: Vec<&String> = a.keys().chain(b.keys()).collect();
-        keys.sort();
-        keys.dedup();
-        for key in keys {
-            let sub_path = if path.is_empty() { key.clone() } else { format!("{path}.{key}") };
-            let a_v = a.get(key).cloned().unwrap_or(serde_json::Value::Null);
-            let b_v = b.get(key).cloned().unwrap_or(serde_json::Value::Null);
-            diff_json(&sub_path, &a_v, &b_v, diffs);
-        }
-        return;
-    }
-    if live != flashed {
-        diffs.push(format!("{path}: live={live} widget={flashed}"));
-    }
-}

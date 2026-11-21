@@ -13,15 +13,14 @@ use super::{gtk_utils::*, module::*, ui_main::*, utils::*};
 
 
 pub fn init_ui(
-    window:  &gtk::ApplicationWindow,
-    main_ui: &Rc<MainUi>,
-    engine:  &Arc<Engine>,
+    window:    &gtk::ApplicationWindow,
+    _main_ui:  &Rc<MainUi>,
+    engine:    &Arc<Engine>,
 ) -> Rc<dyn UiModule> {
     let widgets = Widgets::from_builder_str(include_str!(r"resources/platesolve.ui"));
     let obj = Rc::new(PlateSolveUi {
         widgets,
         window:          window.clone(),
-        main_ui:         Rc::clone(main_ui),
         engine:          Arc::clone(engine),
         delayed_actions: DelayedActions::new(200),
         opts_syncing:    Cell::new(false),
@@ -67,7 +66,6 @@ struct Widgets {
 
 struct PlateSolveUi {
     widgets:         Widgets,
-    main_ui:         Rc<MainUi>,
     window:          gtk::ApplicationWindow,
     engine:          Arc<Engine>,
     delayed_actions: DelayedActions<DelayedAction>,
@@ -311,8 +309,6 @@ impl PlateSolveUi {
     }
 
     fn handler_action_capture_platesolve(self: &Rc<Self>) {
-        self.main_ui.check_all_options_committed();
-
         exec_and_show_error(Some(&self.window), || {
             self.engine.exec_command(Command::Start(StartMode::CaptureAndPlatesolve))?;
             Ok(())
@@ -320,8 +316,6 @@ impl PlateSolveUi {
     }
 
     fn handler_action_plate_solve_and_goto(&self) {
-        self.main_ui.check_all_options_committed();
-
         exec_and_show_error(Some(&self.window), || {
             self.engine.exec_command(Command::Start(StartMode::GotoImage))?;
             Ok(())
