@@ -59,6 +59,9 @@ fn busy_domain_of(cmd: &Command) -> Option<BusyDomain> {
         | Command::SetTelescopeFocalLen{..} | Command::SetBarlow{..}
         | Command::SetGuidingFocalLen{..} | Command::SetFocuserOptions(..)
         | Command::SetPlateSolverOptions(..) | Command::SetGuidingOptions(..)
+        | Command::SetIndiSelection(..) | Command::SetAlpacaAddress{..}
+        | Command::SetSiteLatitude{..} | Command::SetSiteLongitude{..}
+        | Command::SetTelescopeFromPlateSolve{..}
         // Read-only query: pure computation + capability read, no camera exclusivity
         | Command::BuildDarkLibraryProgram{..} => None,
     }
@@ -301,6 +304,29 @@ pub struct GuidingPatch {
     pub calibr_gain:     Option<Gain>,
 }
 
+/// Partial update of the INDI connection selection (see [`CoolingPatch`]).
+/// Driver fields are double `Option` (see [`de_patch_opt`]): `null` deselects.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(default)]
+pub struct IndiSelPatch {
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "de_patch_opt")]
+    pub mount:     Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "de_patch_opt")]
+    pub camera:    Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "de_patch_opt")]
+    pub guid_cam:  Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "de_patch_opt")]
+    pub focuser:   Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "de_patch_opt")]
+    pub flt_wheel: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "de_patch_opt")]
+    pub aux1:      Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "de_patch_opt")]
+    pub aux2:      Option<Option<String>>,
+    pub remote:    Option<bool>,
+    pub address:   Option<String>,
+}
+
 /// Single serializable entry point for engine state mutations issued by the UI
 /// (and later by a future web server).
 ///
@@ -377,6 +403,12 @@ pub enum Command {
     SetFocuserOptions(FocuserPatch),
     SetPlateSolverOptions(PlateSolverPatch),
     SetGuidingOptions(GuidingPatch),
+    // Hardware panel: connection selection, site, misc telescope options
+    SetIndiSelection(IndiSelPatch),
+    SetAlpacaAddress     { address: String },
+    SetSiteLatitude      { sexagesimal: String },
+    SetSiteLongitude     { sexagesimal: String },
+    SetTelescopeFromPlateSolve { enabled: bool },
     OpenImageFile { path: String },
     /// Build the master file creation program for a dark library spec
     /// (read-only query, see `busy_domain_of`).
@@ -675,6 +707,40 @@ impl Engine {
                 if let Some(v) = patch.calibr_gain {
                     options.guiding.main_cam.calibr_gain = v;
                 }
+                Ok(Reply::Empty)
+            }
+            Command::SetIndiSelection(patch) => {
+                let mut options = self.options.write().unwrap();
+                if let Some(v) = patch.mount     { options.indi.mount = v; }
+                if let Some(v) = patch.camera    { options.indi.camera = v; }
+                if let Some(v) = patch.guid_cam  { options.indi.guid_cam = v; }
+                if let Some(v) = patch.focuser   { options.indi.focuser = v; }
+                if let Some(v) = patch.flt_wheel { options.indi.flt_wheel = v; }
+                if let Some(v) = patch.aux1      { options.indi.aux1 = v; }
+                if let Some(v) = patch.aux2      { options.indi.aux2 = v; }
+                if let Some(v) = patch.remote    { options.indi.remote = v; }
+                if let Some(v) = patch.address   { options.indi.address = v; }
+                Ok(Reply::Empty)
+            }
+            Command::SetAlpacaAddress { address } => {
+                self.options.write().unwrap().ascom_alpaca.address = address;
+                Ok(Reply::Empty)
+            }
+            // Unparseable sexagesimal text keeps the old value (panel fallback semantics)
+            Command::SetSiteLatitude { sexagesimal } => {
+                if let Some(v) = ::indi::sexagesimal_to_value(&sexagesimal) {
+                    self.options.write().unwrap().site.latitude = v;
+                }
+                Ok(Reply::Empty)
+            }
+            Command::SetSiteLongitude { sexagesimal } => {
+                if let Some(v) = ::indi::sexagesimal_to_value(&sexagesimal) {
+                    self.options.write().unwrap().site.longitude = v;
+                }
+                Ok(Reply::Empty)
+            }
+            Command::SetTelescopeFromPlateSolve { enabled } => {
+                self.options.write().unwrap().telescope.from_platesolve = enabled;
                 Ok(Reply::Empty)
             }
             Command::OpenImageFile { path } => {
@@ -1135,5 +1201,37 @@ mod tests {
         assert_eq!(options.live.save_minutes, 7);
         assert!(options.live.use_cnt);
         assert_eq!(options.live.out_dir, PathBuf::from("/tmp/live_out"));
+    }
+
+    #[test]
+    fn site_and_indi_selection_commands() {
+        let engine = Engine::new();
+
+        // Unparseable sexagesimal text keeps the old value (panel fallback semantics)
+        assert!(engine.exec_command(Command::SetSiteLatitude {
+            sexagesimal: "nonsense".to_string()
+        }).is_ok());
+        assert_eq!(engine.options.read().unwrap().site.latitude, 0.0);
+        assert!(engine.exec_command(Command::SetSiteLongitude {
+            sexagesimal: "-10:30".to_string()
+        }).is_ok());
+        assert_eq!(engine.options.read().unwrap().site.longitude, -10.5);
+
+        // JSON `null` deselects a driver, a value selects it
+        let p: IndiSelPatch = serde_json::from_str(r#"{"mount": null}"#).unwrap();
+        assert_eq!(p.mount, Some(None));
+        assert!(engine.exec_command(Command::SetIndiSelection(IndiSelPatch {
+            mount: Some(Some("indi_simulator_mount".to_string())),
+            ..Default::default()
+        })).is_ok());
+        assert_eq!(
+            engine.options.read().unwrap().indi.mount.as_deref(),
+            Some("indi_simulator_mount")
+        );
+        assert!(engine.exec_command(Command::SetIndiSelection(IndiSelPatch {
+            mount: Some(None),
+            ..Default::default()
+        })).is_ok());
+        assert_eq!(engine.options.read().unwrap().indi.mount, None);
     }
 }

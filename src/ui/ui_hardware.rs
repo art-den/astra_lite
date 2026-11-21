@@ -12,7 +12,7 @@ use itertools::Itertools;
 use chrono::prelude::*;
 use macros::FromBuilder;
 use crate::{
-    core::{api::{Command, ConnectCommand, GuiderCommand, IndiCommand}, engine::Engine, events::Event}, guiding::phd2, hal::{DeviceType, HalImpl, HalState, events::HalEvent}, options::*, utils::log_utils::log_if_error,
+    core::{api::{Command, ConnectCommand, GuiderCommand, IndiCommand, IndiSelPatch}, engine::Engine, events::Event}, guiding::phd2, hal::{DeviceType, HalImpl, HalState, events::HalEvent}, options::*, utils::log_utils::log_if_error,
 };
 use ::indi::{self, sexagesimal_to_value, value_to_sexagesimal};
 use super::{gtk_utils::*, indi_panel_widget::*, module::*, ui_main::*};
@@ -292,13 +292,8 @@ impl UiModule for HardwareUi {
         self.engine.ext_guider.phd2_conn().disconnect_all_event_handlers();
     }
 
-    fn on_tab_changed(&self, from: TabPage, to: TabPage) {
+    fn on_tab_changed(&self, _from: TabPage, to: TabPage) {
         self.indi_widget.set_enabled(to == TabPage::Hardware);
-        if from == TabPage::Hardware {
-            let mut options = self.engine.options.write().unwrap();
-            self.get_telescope_options(&mut options);
-            self.get_site_options(&mut options);
-        }
     }
 
 
@@ -407,9 +402,91 @@ impl HardwareUi {
             connect_action(&self.window, self, "disconn_aa", HardwareUi::handler_action_disconn_aa);
         }
 
+        self.connect_driver_cb(&self.widgets.indi_drv.cb_mount_drivers,     |p, v| p.mount = v);
+        self.connect_driver_cb(&self.widgets.indi_drv.cb_camera_drivers,    |p, v| p.camera = v);
+        self.connect_driver_cb(&self.widgets.indi_drv.cb_guid_cam_drivers,  |p, v| p.guid_cam = v);
+        self.connect_driver_cb(&self.widgets.indi_drv.cb_focuser_drivers,   |p, v| p.focuser = v);
+        self.connect_driver_cb(&self.widgets.indi_drv.cb_flt_wheel_drivers, |p, v| p.flt_wheel = v);
+        self.connect_driver_cb(&self.widgets.indi_drv.cb_aux1_drivers,      |p, v| p.aux1 = v);
+        self.connect_driver_cb(&self.widgets.indi_drv.cb_aux2_drivers,      |p, v| p.aux2 = v);
+
         self.widgets.indi_drv.chb_remote.connect_active_notify(
-            clone!(@weak self as self_ => move |_| {
+            clone!(@weak self as self_ => move |chb| {
+                if !self_.opts_syncing.get() {
+                    log_if_error(
+                        &self_.engine.exec_command(
+                            Command::SetIndiSelection(IndiSelPatch {
+                                remote: Some(chb.is_active()),
+                                ..Default::default()
+                            })
+                        ),
+                        "Set INDI remote mode"
+                    );
+                }
                 self_.correct_widgets_by_cur_state();
+            })
+        );
+
+        self.widgets.indi_drv.e_remote_addr.connect_changed(
+            clone!(@weak self as self_ => move |e| {
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetIndiSelection(IndiSelPatch {
+                            address: Some(e.text().into()),
+                            ..Default::default()
+                        })
+                    ),
+                    "Set INDI address"
+                );
+            })
+        );
+
+        self.widgets.aa_drv.e_addr.connect_changed(
+            clone!(@weak self as self_ => move |e| {
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetAlpacaAddress { address: e.text().into() }
+                    ),
+                    "Set Alpaca address"
+                );
+            })
+        );
+
+        self.widgets.site.e_lat.connect_changed(
+            clone!(@weak self as self_ => move |e| {
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetSiteLatitude { sexagesimal: e.text().into() }
+                    ),
+                    "Set site latitude"
+                );
+            })
+        );
+
+        self.widgets.site.e_long.connect_changed(
+            clone!(@weak self as self_ => move |e| {
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetSiteLongitude { sexagesimal: e.text().into() }
+                    ),
+                    "Set site longitude"
+                );
+            })
+        );
+
+        self.widgets.telescope.chb_corr_foc_len.connect_active_notify(
+            clone!(@weak self as self_ => move |chb| {
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetTelescopeFromPlateSolve { enabled: chb.is_active() }
+                    ),
+                    "Set telescope from platesolve"
+                );
             })
         );
 
@@ -776,6 +853,24 @@ impl HardwareUi {
             Command::Guider(GuiderCommand::DisconnectPhd2),
             ConnectPending::Guider
         );
+    }
+
+    /// Commits a driver combobox selection to Options immediately
+    /// (double-Option patch field: cleared selection = `None`).
+    fn connect_driver_cb(
+        self: &Rc<Self>,
+        cb: &gtk::ComboBox,
+        set_field: impl Fn(&mut IndiSelPatch, Option<Option<String>>) + 'static,
+    ) {
+        cb.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
+            if self_.opts_syncing.get() { return; }
+            let mut patch = IndiSelPatch::default();
+            set_field(&mut patch, Some(cb.active_id().map(|id| id.to_string())));
+            log_if_error(
+                &self_.engine.exec_command(Command::SetIndiSelection(patch)),
+                "Set INDI driver selection"
+            );
+        }));
     }
 
     fn fill_devices_name(&self) {
