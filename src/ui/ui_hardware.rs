@@ -354,6 +354,15 @@ impl UiModule for HardwareUi {
                 if let HalState::Error(err) = &state {
                     self.add_log_record(&Some(Utc::now()), "", err)
                 }
+                if matches!(state, HalState::Disconnected) {
+                    // Pending commands can never complete after disconnect
+                    let aborted = self.pending_cmds.borrow_mut().drain().count();
+                    for _ in 0..aborted {
+                        show_error_message(
+                            Some(&self.window), "Error", "command aborted (disconnected)"
+                        );
+                    }
+                }
                 *self.indi_state.borrow_mut() = self.main_ui.snapshot().devices.indi_state.clone();
 
                 #[cfg(windows)] {
