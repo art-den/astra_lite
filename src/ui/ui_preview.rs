@@ -419,9 +419,6 @@ impl UiModule for PreviewUi {
     }
 
     fn on_app_closing(&self) {
-        _ = self.engine.stop_img_process_thread();
-        self.engine.abort_active_mode();
-
         self.get_ui_options_from_widgets();
 
         let ui_options = self.ui_options.borrow();

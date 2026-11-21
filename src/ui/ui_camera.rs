@@ -7,7 +7,7 @@ use crate::{
             CalibrPatch, CameraCaps, CamReadoutPatch, Command, CoolingPatch, LiveStackingPatch,
             QualityPatch, Query, QueryReply, RawFramesPatch, Reply, StartMode,
         },
-        cur_devices::CurDevices, engine::*, events::*, frame_processing::*, utils::{FileNameArg, FileNameUtils}}, hal::{DeviceType, FrameType, HalState, events::HalEvent}, image::{info::*, raw::CalibrMethods}, options::*, utils::log_utils::log_if_error,
+        engine::*, events::*, frame_processing::*, utils::{FileNameArg, FileNameUtils}}, hal::{DeviceType, FrameType, HalState, events::HalEvent}, image::{info::*, raw::CalibrMethods}, options::*, utils::log_utils::log_if_error,
 };
 use super::{gtk_utils::*, module::*, ui_main::*, ui_start_dialog::StartDialog, utils::*};
 
@@ -377,19 +377,6 @@ impl UiModule for CameraUi {
                 flags:  PanelFlags::NO_EXPANDER,
             },
         ]
-    }
-
-    fn on_app_closing(&self) {
-        _ = self.engine.stop_img_process_thread();
-
-        self.engine.abort_active_mode();
-
-        // Stores current options for current camera
-
-        let mut options = self.engine.options.write().unwrap();
-        let cam_id = options.cam.device_id.clone();
-        CurDevices::store_separated_options_for_specific_camera(&mut options, &cam_id);
-        drop(options);
     }
 
     fn on_event(&self, event: &Event) {

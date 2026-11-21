@@ -295,19 +295,6 @@ impl UiModule for HardwareUi {
         self.correct_widgets_by_cur_state();
     }
 
-    fn on_app_closing(&self) {
-        if !self.is_remote.get() {
-            let indi = self.engine.hal.indi_impl().indi();
-            _ = indi.command_enable_all_devices(false, true, Some(2000));
-        }
-
-        log::info!("Stop connection to PHD2...");
-        _ = self.engine.ext_guider.phd2_conn().stop();
-        log::info!("Done!");
-
-        self.engine.ext_guider.phd2_conn().disconnect_all_event_handlers();
-    }
-
     fn on_tab_changed(&self, _from: TabPage, to: TabPage) {
         self.indi_widget.set_enabled(to == TabPage::Hardware);
     }

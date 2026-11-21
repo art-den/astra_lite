@@ -210,6 +210,7 @@ pub struct Engine {
     /// Monotonic change counter for snapshot consumers ('refetch only on change').
     /// Opaque: double counting is allowed, only monotonicity matters.
     seq:                AtomicU64,
+    shutdown_called:    AtomicBool,
 }
 
 impl Drop for Engine {
@@ -254,6 +255,7 @@ impl Engine {
                 next_id: AtomicU64::new(1),
             },
             seq: AtomicU64::new(0),
+            shutdown_called: AtomicBool::new(false),
             events,
         });
 
@@ -307,6 +309,51 @@ impl Engine {
         Ok(BusyGuard { flags: &self.device_busy, domain, seq: &self.seq })
     }
 
+    /// Unconditional full engine shutdown: the one authoritative teardown
+    /// sequence for the whole engine and its devices. Idempotent (repeat calls
+    /// are no-ops). Every step is best-effort: step errors are logged, never
+    /// propagated, and never abort the sequence. Persisting `Options` is the
+    /// caller's responsibility AFTER this call (step 3 mutates per-camera
+    /// options in memory). `stop()` is the internal final step that breaks
+    /// the engine self-reference cycles.
+    pub fn shutdown(self: &Arc<Self>) {
+        if self.shutdown_called.swap(true, Ordering::SeqCst) {
+            log::info!("Engine::shutdown() already called: skipping");
+            return;
+        }
+        log::info!("Engine shutdown...");
+
+        log::info!("Stop image processing thread...");
+        log_if_error(&self.stop_img_process_thread(), "Stop image processing thread");
+
+        log::info!("Abort active mode...");
+        self.abort_active_mode();
+
+        log::info!("Store separated options for current camera...");
+        {
+            let mut options = self.options.write().unwrap();
+            let cam_id = options.cam.device_id.clone();
+            CurDevices::store_separated_options_for_specific_camera(&mut options, &cam_id);
+        }
+
+        // Live option (not a cached one); guard released before the blocking INDI call
+        if !self.options.read().unwrap().indi.remote {
+            log::info!("Disable all INDI devices...");
+            let indi = self.hal.indi_impl().indi();
+            log_if_error(
+                &indi.command_enable_all_devices(false, true, Some(2000)),
+                "Disable all INDI devices"
+            );
+        }
+
+        log::info!("Stop connection to PHD2...");
+        _ = self.ext_guider.phd2_conn().stop();
+
+        self.stop();
+    }
+
+    /// Final teardown breaking the engine self-reference cycles; called from
+    /// [`Engine::shutdown`]. Direct calls are only for tests and safety nets.
     pub fn stop(self: &Arc<Self>) {
         self.timer.clear();
         self.ext_guider.disconnect_events_handler();
@@ -1224,6 +1271,14 @@ mod tests {
         assert!(seq_of(&engine) > seq0, "`ProgressChanges` must bump seq");
 
         engine.stop();
+    }
+
+    #[test]
+    fn shutdown_is_idempotent() {
+        let engine = Engine::new();
+        engine.shutdown();
+        engine.shutdown();
+        assert_eq!(engine.snapshot().mode.kind, ModeKind::Waiting);
     }
 }
 

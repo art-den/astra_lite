@@ -97,6 +97,8 @@ pub trait UiModule {
     fn panels(&self) -> Vec<Panel>;
     fn on_show_options_first_time(&self) {}
     fn on_full_screen(&self, _full_screen: bool) {}
+    /// Save panel-local `UiOptions` only; engine/device teardown lives in
+    /// `Engine::shutdown()`.
     fn on_app_closing(&self) {}
     fn on_tab_changed(&self, _from: TabPage, _to: TabPage) {}
     fn on_250ms_timer(&self) {}

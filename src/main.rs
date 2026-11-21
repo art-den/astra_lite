@@ -218,7 +218,8 @@ fn app_activate_handler(app: &gtk::Application) {
 fn app_shutdown_handler(_app: &gtk::Application, engine: &Arc<Engine>) {
     log::info!("Application shutdown signal");
 
-    // Save options
+    // Safety-net save before shutdown (a panic in a shutdown step must not
+    // lose the options); the authoritative save is after shutdown below
 
     log::info!("Saving options...");
     let options = engine.options.read().unwrap();
@@ -226,11 +227,20 @@ fn app_shutdown_handler(_app: &gtk::Application, engine: &Arc<Engine>) {
     drop(options);
     log::info!("Options saved");
 
-    // Stop engine
+    // Shutdown engine
 
-    log::info!("engine stopping...");
-    engine.stop();
+    log::info!("engine shutting down...");
+    engine.shutdown();
     log::info!("engine stopped");
+
+    // Mandatory: shutdown mutates per-camera options in memory, only a save
+    // after it captures them
+
+    log::info!("Saving options...");
+    let options = engine.options.read().unwrap();
+    _ = save_json_to_config::<Options>(&options, "options");
+    drop(options);
+    log::info!("Options saved");
 
     dbg!(Arc::strong_count(engine));
 }
