@@ -17,14 +17,34 @@ use crate::{
 use ::indi::{self, value_to_sexagesimal};
 use super::{gtk_utils::*, indi_panel_widget::*, module::*, ui_main::*};
 
+/// INDI driver registry via the engine facade (read-only query).
+fn query_indi_drivers(engine: &Arc<Engine>) -> indi::Drivers {
+    match engine.exec_command(Command::Query(Query::IndiDrivers)) {
+        Ok(Reply::Query(q)) => match *q {
+            QueryReply::IndiDrivers(drivers) => drivers,
+            _ => {
+                log::error!("IndiDrivers query: unexpected query reply");
+                indi::Drivers { groups: Vec::new() }
+            }
+        },
+        Ok(_) => {
+            log::error!("IndiDrivers query: unexpected reply");
+            indi::Drivers { groups: Vec::new() }
+        }
+        Err(e) => {
+            log::error!("IndiDrivers query failed: {e:#}");
+            indi::Drivers { groups: Vec::new() }
+        }
+    }
+}
+
 pub fn init_ui(
     window:  &gtk::ApplicationWindow,
     main_ui: &Rc<MainUi>,
     engine:  &Arc<Engine>,
 ) -> Rc<dyn UiModule> {
     let indi_hal = engine.hal.indi_impl();
-    // Exception (follow-up `Query::IndiDrivers`): grouped driver registry read
-    let drivers = indi_hal.drivers();
+    let drivers = query_indi_drivers(engine);
 
     if drivers.groups.is_empty() {
         let mut options = engine.options.write().unwrap();
@@ -730,8 +750,7 @@ impl HardwareUi {
         let aux1_sensitive = !remote && indi_disconnected && !is_combobox_empty(&self.widgets.indi_drv.cb_aux1_drivers);
         let aux2_sensitive = !remote && indi_disconnected && !is_combobox_empty(&self.widgets.indi_drv.cb_aux2_drivers);
 
-        // Exception (follow-up `Query::IndiDrivers`): grouped driver registry read
-        let indi_drivers = self.engine.hal.indi_impl().drivers();
+        let indi_drivers = query_indi_drivers(&self.engine);
 
         self.widgets.indi_drv.chb_remote.set_sensitive(!indi_drivers.groups.is_empty() && indi_disconnected);
         self.widgets.indi_drv.l_mount_drivers.set_sensitive(mnt_sensitive);
@@ -840,14 +859,12 @@ impl HardwareUi {
 
     fn fill_devices_name(&self) {
         fn fill_cb_list(
-            data:       &HardwareUi,
+            drivers:    &indi::Drivers,
             cb:         &gtk::ComboBox,
             group_name: &str,
             active:     &Option<String>
         ) {
-            // Exception (follow-up `Query::IndiDrivers`): grouped driver registry read
-            let indi_drivers = data.engine.hal.indi_impl().drivers();
-            let Ok(group) = indi_drivers.get_group_by_name(group_name) else { return; };
+            let Ok(group) = drivers.get_group_by_name(group_name) else { return; };
             let model = gtk::TreeStore::new(&[String::static_type(), String::static_type()]);
             let mut manufacturer_nodes = HashMap::<&str, gtk::TreeIter>::new();
             model.insert_with_values(None, None, &[(0, &""), (1, &"--")]);
@@ -878,14 +895,15 @@ impl HardwareUi {
             cb.set_active_iter(active_iter.as_ref());
         }
 
+        let drivers = query_indi_drivers(&self.engine);
         let snap = self.main_ui.snapshot();
-        fill_cb_list(self, &self.widgets.indi_drv.cb_mount_drivers,     "Telescopes",    &snap.options.indi.mount);
-        fill_cb_list(self, &self.widgets.indi_drv.cb_camera_drivers,    "CCDs",          &snap.options.indi.camera);
-        fill_cb_list(self, &self.widgets.indi_drv.cb_guid_cam_drivers,  "CCDs",          &snap.options.indi.guid_cam);
-        fill_cb_list(self, &self.widgets.indi_drv.cb_focuser_drivers,   "Focusers",      &snap.options.indi.focuser);
-        fill_cb_list(self, &self.widgets.indi_drv.cb_flt_wheel_drivers, "Filter Wheels", &snap.options.indi.flt_wheel);
-        fill_cb_list(self, &self.widgets.indi_drv.cb_aux1_drivers,      "Auxiliary",     &snap.options.indi.aux1);
-        fill_cb_list(self, &self.widgets.indi_drv.cb_aux2_drivers,      "Auxiliary",     &snap.options.indi.aux2);
+        fill_cb_list(&drivers, &self.widgets.indi_drv.cb_mount_drivers,     "Telescopes",    &snap.options.indi.mount);
+        fill_cb_list(&drivers, &self.widgets.indi_drv.cb_camera_drivers,    "CCDs",          &snap.options.indi.camera);
+        fill_cb_list(&drivers, &self.widgets.indi_drv.cb_guid_cam_drivers,  "CCDs",          &snap.options.indi.guid_cam);
+        fill_cb_list(&drivers, &self.widgets.indi_drv.cb_focuser_drivers,   "Focusers",      &snap.options.indi.focuser);
+        fill_cb_list(&drivers, &self.widgets.indi_drv.cb_flt_wheel_drivers, "Filter Wheels", &snap.options.indi.flt_wheel);
+        fill_cb_list(&drivers, &self.widgets.indi_drv.cb_aux1_drivers,      "Auxiliary",     &snap.options.indi.aux1);
+        fill_cb_list(&drivers, &self.widgets.indi_drv.cb_aux2_drivers,      "Auxiliary",     &snap.options.indi.aux2);
     }
 
     fn add_log_record(

@@ -45,7 +45,7 @@ fn busy_domain_of(cmd: &Command) -> Option<BusyDomain> {
         | Command::StopActiveMode
         | Command::ContinueAbortedMode
         | Command::GetSnapshot
-        | Command::Query(Query::Devices | Query::CameraCaps | Query::IndiProperties { .. })
+        | Command::Query(Query::Devices | Query::CameraCaps | Query::IndiProperties { .. } | Query::IndiDrivers)
         | Command::SetCameraDevice{..} | Command::SetMountDevice{..}
         | Command::SetFocuserDevice{..} | Command::SetFilterWheelDevice{..}
         | Command::OpenImageFile{..}
@@ -489,6 +489,8 @@ pub enum Query {
     /// INDI device/property registry for the INDI GUI panel (`since` =
     /// incremental fetch by change_id).
     IndiProperties { since: Option<u64> },
+    /// Grouped INDI driver registry (device driver lists).
+    IndiDrivers,
 }
 
 /// INDI device with the panel's sort keys (camera caps); zeros when unavailable.
@@ -512,6 +514,7 @@ pub enum QueryReply {
     Devices(Vec<DeviceInfo>),
     CameraCaps(CameraCaps),
     IndiProperties(IndiPropertiesData),
+    IndiDrivers(indi::Drivers),
 }
 
 /// Serializable `RangeInclusive<f64>`.
@@ -625,7 +628,7 @@ impl Engine {
         log::debug!("Engine command: {:?}", cmd);
         // Read-only queries must not advance `seq` (polling would look like a change)
         let read_only = matches!(cmd, Command::GetSnapshot
-            | Command::Query(Query::Devices | Query::CameraCaps | Query::IndiProperties { .. })
+            | Command::Query(Query::Devices | Query::CameraCaps | Query::IndiProperties { .. } | Query::IndiDrivers)
             | Command::BuildDarkLibraryProgram { .. });
         let reply = self.exec_command_inner(cmd)?;
         if !read_only {
@@ -1162,6 +1165,7 @@ impl Engine {
                             .collect();
                         QueryReply::IndiProperties(IndiPropertiesData { devices, properties })
                     }
+                    Query::IndiDrivers => QueryReply::IndiDrivers(self.hal.indi_impl().drivers().clone()),
                 };
                 Ok(Reply::Query(Box::new(reply)))
             }
@@ -1626,6 +1630,16 @@ mod tests {
             _ => panic!("expected Reply::Query"),
         }
 
+        // Driver registry read must not fail even with INDI not connected
+        // (content depends on the local indiserver, so not asserted)
+        match engine.exec_command(Command::Query(Query::IndiDrivers)).unwrap() {
+            Reply::Query(q) => match *q {
+                QueryReply::IndiDrivers(_) => {}
+                _ => panic!("expected QueryReply::IndiDrivers"),
+            },
+            _ => panic!("expected Reply::Query"),
+        }
+
         engine.stop();
     }
 
@@ -1635,6 +1649,8 @@ mod tests {
         roundtrip(Command::Query(Query::Devices));
         roundtrip(Command::Query(Query::CameraCaps));
         roundtrip(Command::Query(Query::IndiProperties { since: Some(7) }));
+        roundtrip(Command::Query(Query::IndiDrivers));
+        roundtrip(QueryReply::IndiDrivers(indi::Drivers { groups: Vec::new() }));
         roundtrip(QueryReply::IndiProperties(IndiPropertiesData { devices: Vec::new(), properties: Vec::new() }));
         roundtrip(QueryReply::Devices(vec![DeviceInfo {
             id:    "indi_simulator_ccd".to_string(),
