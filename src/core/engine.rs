@@ -2,6 +2,7 @@ use std::{
     any::Any, fmt::Display, path::Path,
     sync::{Arc, Mutex, RwLock, RwLockReadGuard, Weak, mpsc,
         atomic::{AtomicBool, AtomicU64, Ordering}},
+    time::{Duration, Instant},
 };
 
 use serde::{Deserialize, Serialize};
@@ -113,6 +114,10 @@ struct CommandQueue {
 
 const BUSY_DOMAIN_COUNT: usize = 7;
 
+/// Bounded waits in `Engine::shutdown` before the device teardown
+const QUEUE_WORKER_STOP_TIMEOUT: Duration = Duration::from_secs(3);
+const FRAME_THREAD_STOP_TIMEOUT: Duration = Duration::from_secs(3);
+
 struct DeviceBusyFlags {
     flags: [AtomicBool; BUSY_DOMAIN_COUNT],
 }
@@ -211,6 +216,12 @@ pub struct Engine {
     /// Opaque: double counting is allowed, only monotonicity matters.
     seq:                AtomicU64,
     shutdown_called:    AtomicBool,
+    /// Set at the very start of `shutdown()`: the queue worker drops the
+    /// remaining queued commands instead of executing them.
+    queue_shutdown:     AtomicBool,
+    /// Set by `command_queue_loop` around `exec_command` (shutdown bounded wait).
+    worker_busy:        AtomicBool,
+    queue_worker_id:    Mutex<Option<std::thread::ThreadId>>,
 }
 
 impl Drop for Engine {
@@ -256,6 +267,9 @@ impl Engine {
             },
             seq: AtomicU64::new(0),
             shutdown_called: AtomicBool::new(false),
+            queue_shutdown: AtomicBool::new(false),
+            worker_busy: AtomicBool::new(false),
+            queue_worker_id: Mutex::new(None),
             events,
         });
 
@@ -271,11 +285,38 @@ impl Engine {
         this
     }
 
+    /// Bounded wait for the queue worker to finish the command in flight.
+    /// Returns `false` on timeout.
+    fn wait_cmd_worker_idle(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        while self.worker_busy.load(Ordering::Acquire) {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        true
+    }
+
     fn command_queue_loop(rx: mpsc::Receiver<QueuedCommand>, engine: Weak<Engine>) {
+        if let Some(engine) = engine.upgrade() {
+            *engine.queue_worker_id.lock().unwrap() = Some(std::thread::current().id());
+        }
         while let Ok(qc) = rx.recv() {
             let Some(engine) = engine.upgrade() else { break };
+            if engine.queue_shutdown.load(Ordering::Acquire) {
+                // Commands queued after shutdown started must not run after
+                // the device teardown (see `Engine::shutdown`)
+                engine.events.send(Event::CommandReply {
+                    id:     qc.id,
+                    result: Err("engine shutting down".to_string()),
+                });
+                continue;
+            }
+            engine.worker_busy.store(true, Ordering::Release);
             // `exec_command` is the single place that bumps `seq` for commands
             let result = engine.exec_command(qc.cmd);
+            engine.worker_busy.store(false, Ordering::Release);
             engine.events.send(Event::CommandReply {
                 id:     qc.id,
                 result: result.map_err(|err| format!("{err:#}")),
@@ -313,15 +354,37 @@ impl Engine {
     /// caller's responsibility AFTER this call (step 3 mutates per-camera
     /// options in memory). `stop()` is the internal final step that breaks
     /// the engine self-reference cycles.
+    ///
+    /// Ordering vs the command queue: queued commands are dropped (with an
+    /// `Err` reply) and the command in flight on the queue worker is awaited
+    /// (bounded) BEFORE the device teardown, so no device command can run
+    /// after `hal.disconnect_all()`.
     pub fn shutdown(self: &Arc<Self>) {
+        // First: make the queue worker drop the remaining queued commands
+        self.queue_shutdown.store(true, Ordering::SeqCst);
+
         if self.shutdown_called.swap(true, Ordering::SeqCst) {
             log::info!("Engine::shutdown() already called: skipping");
             return;
         }
         log::info!("Engine shutdown...");
 
+        // Let the command in flight on the queue worker finish before the
+        // teardown. Skipped on the worker itself (submit-path `Shutdown`):
+        // waiting there would be a self-deadlock.
+        if Some(std::thread::current().id())
+            != *self.queue_worker_id.lock().unwrap()
+            && !self.wait_cmd_worker_idle(QUEUE_WORKER_STOP_TIMEOUT) {
+                log::warn!("Command queue worker still busy after {QUEUE_WORKER_STOP_TIMEOUT:?}; continuing shutdown");
+            }
+
         log::info!("Stop image processing thread...");
         log_if_error(&self.stop_img_process_thread(), "Stop image processing thread");
+        // `Stop` only enqueues: wait for the thread to actually exit before
+        // `stop()` disables its result handler and disconnects the devices
+        if !self.frame_processing.wait_thread_stopped(FRAME_THREAD_STOP_TIMEOUT) {
+            log::warn!("Image processing thread still running after {FRAME_THREAD_STOP_TIMEOUT:?}; continuing shutdown");
+        }
 
         log::info!("Abort active mode...");
         self.abort_active_mode();
@@ -1276,6 +1339,17 @@ mod tests {
         engine.shutdown();
         engine.shutdown();
         assert_eq!(engine.snapshot().mode.kind, ModeKind::Waiting);
+    }
+
+    #[test]
+    fn shutdown_drains_command_queue() {
+        let engine = Engine::new();
+        engine.shutdown();
+
+        // A command enqueued after shutdown started must be dropped, not run
+        assert!(engine.submit_command(Command::SetExposure { exposure: 42.0 }).is_ok());
+        std::thread::sleep(Duration::from_millis(200));
+        assert_ne!(engine.options.read().unwrap().cam.frame.exposure(), 42.0);
     }
 
     struct FakeMode;

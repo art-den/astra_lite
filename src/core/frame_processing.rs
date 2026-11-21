@@ -1,4 +1,5 @@
-use std::{sync::{Arc, atomic::{AtomicBool, Ordering}}, sync::{mpsc, Mutex}, path::*};
+use std::{sync::{Arc, atomic::{AtomicBool, Ordering}}, sync::{mpsc, Mutex}, path::*,
+    time::{Duration, Instant}};
 
 use chrono::{DateTime, Local};
 use bitflags::bitflags;
@@ -167,14 +168,20 @@ pub enum FrameProcessCommand {
 }
 
 pub struct FrameProcessing {
-    sender:     mpsc::Sender<FrameProcessCommand>,
-    result_fun: Mutex<Option<ResultFun>>,
+    sender:         mpsc::Sender<FrameProcessCommand>,
+    result_fun:     Mutex<Option<ResultFun>>,
+    thread_stopped: Arc<AtomicBool>,
 }
 
 impl FrameProcessing {
     pub fn new() -> Arc<Self> {
         let (sender, receiver) = mpsc::channel();
-        let this = Arc::new(FrameProcessing{ sender, result_fun: Mutex::new(None) });
+        let thread_stopped = Arc::new(AtomicBool::new(false));
+        let this = Arc::new(FrameProcessing {
+            sender,
+            result_fun:     Mutex::new(None),
+            thread_stopped: Arc::clone(&thread_stopped),
+        });
         let weak_this = Arc::downgrade(&this);
         std::thread::spawn(move || {
             log::info!("Thread in FrameProcessing::new started");
@@ -220,10 +227,24 @@ impl FrameProcessing {
                 }
             }
 
+            thread_stopped.store(true, Ordering::Release);
             log::info!("Thread in FrameProcessing::new finished");
         });
 
         this
+    }
+
+    /// Bounded wait for the worker thread to actually exit after a `Stop`
+    /// command. Returns `false` on timeout.
+    pub fn wait_thread_stopped(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        while !self.thread_stopped.load(Ordering::Acquire) {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        true
     }
 
     pub fn connect_result_fun(&self, fun: impl Fn(FrameProcessingReply) + Send + Sync + 'static) {
