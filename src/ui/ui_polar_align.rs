@@ -1,8 +1,8 @@
-use std::{rc::Rc, sync::Arc};
+use std::{cell::Cell, rc::Rc, sync::Arc};
 use gtk::{glib::{self, clone}, pango, prelude::*};
 use macros::FromBuilder;
 use crate::{
-    core::{api::{Command, ModeCommand, ModeCommandReply, Reply, StartMode}, engine::{Engine, ModeKind}, events::*, mode_polar_align::{PolarAlignCommand, PolarAlignMode, PolarAlignState, PolarAlignmentEvent}},
+    core::{api::{Command, ModeCommand, ModeCommandReply, PolarAlignPatch, Reply, StartMode}, engine::{Engine, ModeKind}, events::*, mode_polar_align::{PolarAlignCommand, PolarAlignMode, PolarAlignState, PolarAlignmentEvent}},
     hal::{DeviceType, events::HalEvent},
     options::*,
     sky_math::math::*,
@@ -23,6 +23,7 @@ pub fn init_ui(
         main_ui:         Rc::clone(main_ui),
         engine:          Arc::clone(engine),
         delayed_actions: DelayedActions::new(200),
+        opts_syncing:    Cell::new(false),
     });
 
     obj.init_widgets();
@@ -77,6 +78,7 @@ struct PolarAlignUi {
     window:          gtk::ApplicationWindow,
     engine:          Arc<Engine>,
     delayed_actions: DelayedActions<DelayedAction>,
+    opts_syncing:    Cell<bool>,
 }
 
 impl Drop for PolarAlignUi {
@@ -87,10 +89,12 @@ impl Drop for PolarAlignUi {
 
 impl UiModule for PolarAlignUi {
     fn show_options(&self, options: &Options) {
+        let prev = self.opts_syncing.replace(true);
         self.widgets.spb_angle.set_value(options.polar_align.angle);
         self.widgets.cbx_dir.set_active_id(options.polar_align.direction.to_active_id());
         self.widgets.cbx_speed.set_active_id(options.polar_align.speed.as_deref());
         self.widgets.chb_auto_refresh.set_active(options.polar_align.auto_refresh);
+        self.opts_syncing.set(prev);
     }
 
     fn get_options(&self, options: &mut Options) {
@@ -181,8 +185,66 @@ impl PolarAlignUi {
         connect_action(&self.window, self, "pa_manual_refresh", Self::handler_action_manual_refresh);
 
         self.widgets.chb_auto_refresh.connect_active_notify(
-            clone!(@weak self as self_ => move |_| {
+            clone!(@weak self as self_ => move |chb| {
+                if !self_.opts_syncing.get() {
+                    log_if_error(
+                        &self_.engine.exec_command(
+                            Command::SetPolarAlignOptions(PolarAlignPatch {
+                                auto_refresh: Some(chb.is_active()),
+                                ..Default::default()
+                            })
+                        ),
+                        "Set polar align options"
+                    );
+                }
                 self_.correct_widgets_props();
+            })
+        );
+
+        self.widgets.spb_angle.connect_value_changed(
+            clone!(@weak self as self_ => move |sb| {
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetPolarAlignOptions(PolarAlignPatch {
+                            angle: Some(sb.value()),
+                            ..Default::default()
+                        })
+                    ),
+                    "Set polar align options"
+                );
+            })
+        );
+
+        self.widgets.cbx_dir.connect_active_id_notify(
+            clone!(@weak self as self_ => move |cb| {
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetPolarAlignOptions(PolarAlignPatch {
+                            direction: Some(PolarAlignDir::from_active_id(
+                                cb.active_id().as_deref()
+                            ).unwrap_or(PolarAlignDir::West)),
+                            ..Default::default()
+                        })
+                    ),
+                    "Set polar align options"
+                );
+            })
+        );
+
+        self.widgets.cbx_speed.connect_active_id_notify(
+            clone!(@weak self as self_ => move |cb| {
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetPolarAlignOptions(PolarAlignPatch {
+                            speed: Some(cb.active_id().map(|id| id.to_string())),
+                            ..Default::default()
+                        })
+                    ),
+                    "Set polar align options"
+                );
             })
         );
     }
@@ -244,6 +306,9 @@ impl PolarAlignUi {
     }
 
     fn update_mount_speed_list(&self) {
+        // Guard the whole rebuild: the list reset resets the active selection, and
+        // later `options` is read-locked - the speed handler must not fire here
+        let prev = self.opts_syncing.replace(true);
         if let Some(mount) = self.engine.cur_devices.telescope() {
             let list = mount.slew_speed_list().unwrap_or_default();
             self.widgets.cbx_speed.remove_all();
@@ -267,6 +332,7 @@ impl PolarAlignUi {
         } else {
             self.widgets.cbx_speed.remove_all();
         }
+        self.opts_syncing.set(prev);
     }
 
     fn handler_action_start_polar_align(&self) {

@@ -19,8 +19,8 @@ use crate::{
     guiding::external_guider::ExtGuiderType,
     hal::{FrameType, TelescopeMoveDir},
     options::{
-        Binning, Crop, Gain, GuidingMode, PreviewColorMode, PreviewScale, PreviewSource,
-        StarRecognSensitivity,
+        Binning, Crop, Gain, GuidingMode, PlateSolverType, PolarAlignDir, PreviewColorMode,
+        PreviewScale, PreviewSource, StarRecognSensitivity,
     },
     sky_math::math::EqCoord,
 };
@@ -58,7 +58,8 @@ fn busy_domain_of(cmd: &Command) -> Option<BusyDomain> {
         | Command::SetQualityOptions(..) | Command::SetCalibrOptions(..)
         | Command::SetTelescopeFocalLen{..} | Command::SetBarlow{..}
         | Command::SetGuidingFocalLen{..} | Command::SetFocuserOptions(..)
-        | Command::SetPlateSolverOptions(..) | Command::SetGuidingOptions(..)
+        | Command::SetPlateSolverOptions(..) | Command::SetPolarAlignOptions(..)
+        | Command::SetGuidingOptions(..)
         | Command::SetIndiSelection(..) | Command::SetAlpacaAddress{..}
         | Command::SetSiteLatitude{..} | Command::SetSiteLongitude{..}
         | Command::SetTelescopeFromPlateSolve{..} | Command::SetMountOptions(..)
@@ -300,9 +301,24 @@ pub struct FocuserPatch {
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 #[serde(default)]
 pub struct PlateSolverPatch {
-    pub exposure: Option<f64>,
-    pub gain:     Option<Gain>,
-    pub bin:      Option<Binning>,
+    pub exposure:      Option<f64>,
+    pub gain:          Option<Gain>,
+    pub bin:           Option<Binning>,
+    pub solver:        Option<PlateSolverType>,
+    pub timeout:       Option<u32>,
+    pub blind_timeout: Option<u32>,
+}
+
+/// See [`CoolingPatch`].
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(default)]
+pub struct PolarAlignPatch {
+    pub angle:        Option<f64>,
+    pub direction:    Option<PolarAlignDir>,
+    /// Double `Option` patch field: absent in JSON = unchanged, `null` = set to `None`.
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "de_patch_opt")]
+    pub speed:        Option<Option<String>>,
+    pub auto_refresh: Option<bool>,
 }
 
 /// See [`CoolingPatch`].
@@ -427,6 +443,7 @@ pub enum Command {
     Preview(PreviewCommand),
     SetFocuserOptions(FocuserPatch),
     SetPlateSolverOptions(PlateSolverPatch),
+    SetPolarAlignOptions(PolarAlignPatch),
     SetGuidingOptions(GuidingPatch),
     // Hardware panel: connection selection, site, misc telescope options
     SetIndiSelection(IndiSelPatch),
@@ -728,10 +745,25 @@ impl Engine {
                 Ok(Reply::Empty)
             }
             Command::SetPlateSolverOptions(patch) => {
+                if patch.timeout.map_or(false, |v| v < 1)
+                    || patch.blind_timeout.map_or(false, |v| v < 1) {
+                        return Err(eyre::eyre!("plate solve timeout must be >= 1 sec"));
+                    }
                 let mut options = self.options.write().unwrap();
-                if let Some(v) = patch.exposure { options.plate_solver.exposure = v; }
-                if let Some(v) = patch.gain     { options.plate_solver.gain = v; }
-                if let Some(v) = patch.bin      { options.plate_solver.bin = v; }
+                if let Some(v) = patch.exposure      { options.plate_solver.exposure = v; }
+                if let Some(v) = patch.gain          { options.plate_solver.gain = v; }
+                if let Some(v) = patch.bin           { options.plate_solver.bin = v; }
+                if let Some(v) = patch.solver        { options.plate_solver.solver = v; }
+                if let Some(v) = patch.timeout       { options.plate_solver.timeout = v; }
+                if let Some(v) = patch.blind_timeout { options.plate_solver.blind_timeout = v; }
+                Ok(Reply::Empty)
+            }
+            Command::SetPolarAlignOptions(patch) => {
+                let mut options = self.options.write().unwrap();
+                if let Some(v) = patch.angle        { options.polar_align.angle = v; }
+                if let Some(v) = patch.direction    { options.polar_align.direction = v; }
+                if let Some(v) = patch.speed        { options.polar_align.speed = v; }
+                if let Some(v) = patch.auto_refresh { options.polar_align.auto_refresh = v; }
                 Ok(Reply::Empty)
             }
             Command::SetGuidingOptions(patch) => {
@@ -1146,7 +1178,14 @@ mod tests {
             Command::SetFocuserOptions(FocuserPatch { gain: Some(Gain::P50), ..Default::default() }),
             Command::SetPlateSolverOptions(PlateSolverPatch {
                 exposure: Some(5.0), gain: Some(Gain::Same), bin: Some(Binning::Bin2),
+                solver: Some(PlateSolverType::Astrometry),
+                timeout: Some(10), blind_timeout: Some(30),
             }),
+            Command::SetPolarAlignOptions(PolarAlignPatch {
+                angle: Some(30.0), direction: Some(PolarAlignDir::East),
+                speed: Some(Some("2".to_string())), auto_refresh: Some(false),
+            }),
+            Command::SetPolarAlignOptions(PolarAlignPatch { speed: Some(None), ..Default::default() }),
             Command::SetGuidingOptions(GuidingPatch {
                 calibr_exposure: Some(3.5), calibr_gain: Some(Gain::Max),
                 mode: Some(GuidingMode::MainCamera), dith_period: Some(2),
@@ -1302,5 +1341,25 @@ mod tests {
             ..Default::default()
         })).is_ok());
         assert_eq!(engine.options.read().unwrap().indi.mount, None);
+    }
+
+    #[test]
+    fn plate_solver_timeout_validation() {
+        let engine = Engine::new();
+        assert!(engine.exec_command(Command::SetPlateSolverOptions(PlateSolverPatch {
+            timeout: Some(0),
+            ..Default::default()
+        })).is_err());
+        assert_eq!(engine.options.read().unwrap().plate_solver.timeout, 10);
+        assert!(engine.exec_command(Command::SetPlateSolverOptions(PlateSolverPatch {
+            blind_timeout: Some(0),
+            ..Default::default()
+        })).is_err());
+        assert_eq!(engine.options.read().unwrap().plate_solver.blind_timeout, 30);
+        assert!(engine.exec_command(Command::SetPlateSolverOptions(PlateSolverPatch {
+            timeout: Some(15),
+            ..Default::default()
+        })).is_ok());
+        assert_eq!(engine.options.read().unwrap().plate_solver.timeout, 15);
     }
 }

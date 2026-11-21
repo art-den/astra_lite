@@ -217,6 +217,51 @@ impl PlateSolveUi {
                 );
             })
         );
+
+        self.widgets.cbx_solver.connect_active_id_notify(
+            clone!(@weak self as self_ => move |cb| {
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetPlateSolverOptions(PlateSolverPatch {
+                            solver: Some(PlateSolverType::from_active_id(cb.active_id().as_deref())),
+                            ..Default::default()
+                        })
+                    ),
+                    "Set plate solver options"
+                );
+            })
+        );
+
+        self.widgets.spb_timeout.connect_value_changed(
+            clone!(@weak self as self_ => move |sb| {
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetPlateSolverOptions(PlateSolverPatch {
+                            timeout: Some(sb.value() as _),
+                            ..Default::default()
+                        })
+                    ),
+                    "Set plate solver options"
+                );
+            })
+        );
+
+        self.widgets.spb_blind_timeout.connect_value_changed(
+            clone!(@weak self as self_ => move |sb| {
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetPlateSolverOptions(PlateSolverPatch {
+                            blind_timeout: Some(sb.value() as _),
+                            ..Default::default()
+                        })
+                    ),
+                    "Set plate solver options"
+                );
+            })
+        );
     }
 
     fn connect_delayed_actions_events(self: &Rc<Self>) {
