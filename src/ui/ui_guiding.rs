@@ -3,7 +3,10 @@ use gtk::{prelude::*, glib, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
-    core::{api::{Command, GuidingPatch, StartMode}, engine::*, events::*}, guiding::external_guider::*, hal::events::HalEvent, options::*,
+    core::{
+        api::{Command, GuidingPatch, Query, QueryReply, Reply, StartMode},
+        engine::*, events::*,
+    }, guiding::external_guider::*, hal::events::HalEvent, options::*,
     utils::log_utils::log_if_error
 };
 
@@ -138,9 +141,8 @@ impl UiModule for GuidingUi {
                 self.correct_widgets_props();
             }
             Event::CameraDeviceChanged(_) => {
-                let options = self.engine.options.read().unwrap();
-                self.show_options(&options);
-                drop(options);
+                let snap = self.main_ui.snapshot();
+                self.show_options(&snap.options);
                 self.correct_widgets_props_impl();
             }
             Event::Guider(evt) => {
@@ -304,9 +306,7 @@ impl GuidingUi {
     }
 
     fn correct_widgets_props_impl(&self) {
-        let modes = self.engine.modes();
-        let mode_kind = modes.active.kind();
-        drop(modes);
+        let mode_kind = self.main_ui.snapshot().mode.kind;
         let can_change_mode =
             mode_kind == ModeKind::Waiting ||
             mode_kind == ModeKind::SingleShot ||
@@ -317,9 +317,13 @@ impl GuidingUi {
         let by_main_cam = self.widgets.rbtn_guide_main_cam.is_active();
         let by_ext = self.widgets.rbtn_guide_ext.is_active();
 
-        if let Ok(camera) = self.engine.cur_devices.camera_or_err() {
-            let exp_range = camera.exposure_range().ok();
-            correct_spinbutton_by_range(&self.widgets.spb_mnt_cal_exp, exp_range, 1, Some(1.0));
+        // Camera exposure range via the query API; no camera => leave the
+        // spinbutton uncorrected (old `camera_or_err` skip semantics)
+        if let Ok(Reply::Query(q)) = self.engine.exec_command(Command::Query(Query::CameraCaps)) {
+            if let QueryReply::CameraCaps(caps) = *q {
+                let exp_range = caps.exposure_range.map(|r| r.start..=r.end);
+                correct_spinbutton_by_range(&self.widgets.spb_mnt_cal_exp, exp_range, 1, Some(1.0));
+            }
         }
 
         self.widgets.grd.set_sensitive(true);
@@ -370,7 +374,8 @@ impl GuidingUi {
             ExtGuiderEvent::DitheringFinishedWithErr(err) =>
                 self.show_ext_guider_error(err),
             ExtGuiderEvent::Connected => {
-                if let Some(state) = self.engine.ext_guider.state() {
+                // Guider state from the snapshot (refreshed before fan-out)
+                if let Some(state) = self.main_ui.snapshot().devices.guider {
                     self.show_ext_guider_state(&state);
                 }
             }
