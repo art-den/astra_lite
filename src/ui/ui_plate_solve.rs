@@ -3,7 +3,7 @@ use gtk::{glib, prelude::*, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
-    core::{api::{Command, PlateSolverPatch, StartMode}, engine::{Engine, ModeKind}, events::*},
+    core::{api::{Command, PlateSolverPatch, StartMode}, engine::Engine, events::*},
     hal::{DeviceType, events::HalEvent},
     options::*,
     utils::log_utils::log_if_error,
@@ -267,14 +267,8 @@ impl PlateSolveUi {
         let cam_active = snap.devices.camera.as_ref().is_some_and(|c| c.is_active);
         let mnt_active = snap.devices.mount.as_ref().is_some_and(|m| m.is_active);
 
-        let mode_kind = snap.mode.kind;
-        let waiting = mode_kind == ModeKind::Waiting;
-        let live_view = mode_kind == ModeKind::LiveView;
-        let single_shot = mode_kind == ModeKind::SingleShot;
-
         let plate_solve_sensitive =
-            mnt_active && cam_active &&
-            (waiting || single_shot || live_view);
+            mnt_active && cam_active && snap.permissions.can_change_mode;
 
         // Exception (follow-up `Query::CameraCaps` cache): live camera
         // capability read for the platesolve exposure spinbutton

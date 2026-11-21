@@ -5,7 +5,7 @@ use macros::FromBuilder;
 use crate::{
     core::{
         api::{Command, MountCommand, MountPatch, Query, QueryReply, Reply},
-        engine::{Engine, ModeKind}, events::*, snapshot::DeviceState,
+        engine::Engine, events::*, snapshot::DeviceState,
     },
     hal::{DeviceType, HalState, TelescopeMoveDir, TelescopeState, events::HalEvent},
     options::*,
@@ -382,14 +382,7 @@ impl MountUi {
         let snap = self.main_ui.snapshot();
         let mnt_active = snap.devices.mount.as_ref().is_some_and(|m| m.is_active);
 
-        let mode_kind = snap.mode.kind;
-        let waiting = mode_kind == ModeKind::Waiting;
-        let live_view = mode_kind == ModeKind::LiveView;
-        let single_shot = mode_kind == ModeKind::SingleShot;
-
-        let mount_ctrl_sensitive =
-            mnt_active &&
-            (waiting || single_shot || live_view);
+        let mount_ctrl_sensitive = mnt_active && snap.permissions.can_change_mode;
 
         let move_enabled = !self.widgets.chb_parked.is_active() && mount_ctrl_sensitive;
 

@@ -306,12 +306,9 @@ impl GuidingUi {
     }
 
     fn correct_widgets_props_impl(&self) {
-        let mode_kind = self.main_ui.snapshot().mode.kind;
-        let can_change_mode =
-            mode_kind == ModeKind::Waiting ||
-            mode_kind == ModeKind::SingleShot ||
-            mode_kind == ModeKind::LiveView;
-        let dither_calibr = mode_kind == ModeKind::DitherCalibr;
+        let perms = &self.main_ui.snapshot().permissions;
+        let can_change_mode = perms.can_change_mode;
+        let dither_calibr = perms.dither_calibr;
 
         let disabled = self.widgets.rbtn_no_guiding.is_active();
         let by_main_cam = self.widgets.rbtn_guide_main_cam.is_active();

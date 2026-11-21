@@ -625,18 +625,12 @@ impl DarksLibraryUI {
     }
 
     fn correct_widgets_enable_state(&self) {
-        let mode_kind = self.main_ui.snapshot().mode.kind;
-        let is_waiting = mode_kind == ModeKind::Waiting;
-        let is_live_view = mode_kind == ModeKind::LiveView;
-        let saving_defect_pixels =
-            mode_kind == ModeKind::DefectPixels ||
-            mode_kind == ModeKind::CreatingDefectPixels;
-        let saving_master_darks =
-            mode_kind == ModeKind::MasterDark ||
-            mode_kind == ModeKind::CreatingMasterDarks;
-        let saving_master_biases =
-            mode_kind == ModeKind::MasterBias ||
-            mode_kind == ModeKind::CreatingMasterBiases;
+        let perms = &self.main_ui.snapshot().permissions;
+        let is_waiting = perms.waiting;
+        let is_live_view = perms.liveview_active;
+        let saving_defect_pixels = perms.saving_defect_pixels;
+        let saving_master_darks = perms.saving_master_darks;
+        let saving_master_biases = perms.saving_master_biases;
 
         //self.widgets.common.fch_dark_library.set_sensitive(true);
 

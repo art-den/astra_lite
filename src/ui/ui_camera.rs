@@ -1302,9 +1302,7 @@ impl CameraUi {
             DelayedAction::StartLiveView => {
                 // Decision site: fresh snapshot, never the display cache
                 let snap = self.main_ui.fresh_snapshot();
-                let live_view_flag = snap.options.cam.live_view;
-                let mode_kind = snap.mode.kind;
-                if live_view_flag && mode_kind == ModeKind::Waiting {
+                if snap.options.cam.live_view && snap.permissions.waiting {
                     self.start_live_view();
                 }
             }
@@ -1414,20 +1412,14 @@ impl CameraUi {
         let frame_mode_is_flat = frame_mode == FrameType::Flats;
         let frame_mode_is_dark = frame_mode == FrameType::Darks;
 
-        let mode_kind = snap.mode.kind;
-        let waiting = mode_kind == ModeKind::Waiting;
-        let single_shot = mode_kind == ModeKind::SingleShot;
-        let liveview_active = mode_kind == ModeKind::LiveView;
-        let saving_frames = mode_kind == ModeKind::SavingRawFrames;
-        let saving_frames_paused = snap.mode.aborted
-            .as_ref()
-            .map(|mode| mode.kind == ModeKind::SavingRawFrames)
-            .unwrap_or(false);
-        let live_active = mode_kind == ModeKind::LiveStacking;
-        let livestacking_paused = snap.mode.aborted
-            .as_ref()
-            .map(|mode| mode.kind == ModeKind::LiveStacking)
-            .unwrap_or(false);
+        let perms = &snap.permissions;
+        let waiting = perms.waiting;
+        let single_shot = perms.single_shot;
+        let liveview_active = perms.liveview_active;
+        let saving_frames = perms.saving_frames;
+        let saving_frames_paused = perms.saving_frames_paused;
+        let live_active = perms.live_active;
+        let livestacking_paused = perms.live_stacking_paused;
 
         let save_raw_btn_cap = match frame_mode {
             FrameType::Lights => "Start save\nLIGHTS",
@@ -1439,11 +1431,11 @@ impl CameraUi {
 
         let cam_active = cam_ref.is_active;
 
-        let can_change_cam_opts = !saving_frames && !live_active;
-        let can_change_mode = waiting || single_shot || liveview_active;
-        let can_change_frame_opts = waiting || liveview_active;
-        let can_change_live_stacking_opts = waiting || liveview_active;
-        let can_change_cal_ops = !liveview_active;
+        let can_change_cam_opts = perms.can_change_cam_opts;
+        let can_change_mode = perms.can_change_mode;
+        let can_change_frame_opts = perms.can_change_frame_opts;
+        let can_change_live_stacking_opts = perms.can_change_live_stacking_opts;
+        let can_change_cal_ops = perms.can_change_cal_ops;
 
         self.main_ui.set_module_panel_visible(self.widgets.info.bx.upcast_ref(), cam_active);
 

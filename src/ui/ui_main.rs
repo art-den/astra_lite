@@ -423,7 +423,7 @@ impl MainUi {
                     return glib::ControlFlow::Continue;
                 }
                 // Decision site: fresh snapshot, never the display cache
-                if self_.fresh_snapshot().mode.kind != ModeKind::Waiting {
+                if !self_.fresh_snapshot().permissions.waiting {
                     return glib::ControlFlow::Continue;
                 }
                 self_.widgets.window.close();
@@ -472,9 +472,9 @@ impl MainUi {
 
     fn handler_close_window(self: &Rc<Self>) -> glib::Propagation {
         // Decision site: fresh snapshot, never the display cache
-        let mode = self.fresh_snapshot().mode.kind;
+        let waiting = self.fresh_snapshot().permissions.waiting;
 
-        if mode != ModeKind::Waiting {
+        if !waiting {
             let dialog = gtk::MessageDialog::builder()
                 .transient_for(&self.widgets.window)
                 .title("Operation is in progress")
@@ -750,7 +750,7 @@ impl MainUi {
 
     fn show_mode_caption(&self) {
         let snap = self.snapshot();
-        let is_cur_mode_active = snap.mode.kind != ModeKind::Waiting;
+        let is_cur_mode_active = !snap.permissions.waiting;
         let mut caption = String::new();
         if let (false, Some(finished)) = (is_cur_mode_active, snap.mode.finished.as_ref()) {
             caption += &(finished.progress_string.clone().unwrap_or_default() + " (finished)");

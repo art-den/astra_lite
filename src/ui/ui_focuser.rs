@@ -5,7 +5,7 @@ use macros::FromBuilder;
 use crate::{
     core::{
         api::{Command, FocuserCommand, FocuserPatch, Query, QueryReply, Reply, StartMode},
-        engine::{Engine, ModeKind}, events::*, mode_focusing::*, snapshot::DeviceState,
+        engine::Engine, events::*, mode_focusing::*, snapshot::DeviceState,
     },
     hal::{DeviceType, FocuserState, HalState, events::HalEvent},
     options::*,
@@ -533,7 +533,6 @@ impl FocuserUi {
 
     fn correct_widgets_props(&self) {
         let snap = self.main_ui.snapshot();
-        let mode_kind = snap.mode.kind;
 
         // Exception (follow-up `Query::FocuserCaps`): live camera capability
         // read for the focuser exposure spinbutton
@@ -542,11 +541,8 @@ impl FocuserUi {
             correct_spinbutton_by_range(&self.widgets.spb_exp, exp_range, 1, Some(1.0));
         }
 
-        let waiting = mode_kind == ModeKind::Waiting;
-        let live_view = mode_kind == ModeKind::LiveView;
-        let single_shot = mode_kind == ModeKind::SingleShot;
-        let focusing = mode_kind == ModeKind::Focusing;
-        let can_change_mode = waiting || live_view || single_shot;
+        let focusing = snap.permissions.focusing;
+        let can_change_mode = snap.permissions.can_change_mode;
 
         let device_enabled = snap.devices.focuser.as_ref().is_some_and(|f| f.is_active);
 

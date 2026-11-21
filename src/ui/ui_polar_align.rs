@@ -243,16 +243,12 @@ impl PolarAlignUi {
         let cam_active = snap.devices.camera.as_ref().is_some_and(|c| c.is_active);
         let mnt_active = snap.devices.mount.as_ref().is_some_and(|m| m.is_active);
 
-        let mode_kind = snap.mode.kind;
-        let waiting = mode_kind == ModeKind::Waiting;
-        let live_view = mode_kind == ModeKind::LiveView;
-        let single_shot = mode_kind == ModeKind::SingleShot;
-        let polar_align = mode_kind == ModeKind::PolarAlignment;
+        let polar_align = snap.permissions.polar_align;
 
         let polar_alignment_can_be_started =
             !polar_align &&
             mnt_active && cam_active &&
-            (waiting || single_shot || live_view);
+            snap.permissions.can_change_mode;
 
         self.widgets.chb_auto_refresh.set_sensitive(!polar_align);
 
