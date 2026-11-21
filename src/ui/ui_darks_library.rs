@@ -8,10 +8,11 @@ use crate::{
     utils::{io_utils::*, log_utils::log_if_error}
 };
 
-use super::{gtk_utils::*, module::*, utils::DelayedActions};
+use super::{gtk_utils::*, module::*, ui_main::MainUi, utils::DelayedActions};
 
 pub fn init_ui(
     window: &gtk::ApplicationWindow,
+    _main_ui: &Rc<MainUi>,
     engine:   &Arc<Engine>,
 ) -> Rc<dyn UiModule> {
     let mut ui_options = UiOptions::default();

@@ -11,7 +11,9 @@ use gtk::{prelude::*, glib, glib::clone, cairo};
 use macros::FromBuilder;
 use serde::{Serialize, Deserialize};
 use crate::{
-    core::{api::Command, engine::*, events::*}, hal::events::HalEvent, options::*,
+    core::{
+        api::{Command, Reply}, engine::*, events::*, snapshot::StateSnapshot,
+    }, hal::events::HalEvent, options::*,
     utils::{io_utils::*, log_utils::log_if_error},
 };
 use super::{gtk_utils::*, module::*, utils::*};
@@ -45,6 +47,9 @@ pub fn init_ui(
         load_json_from_config_file(&mut ui_options, MainUi::CONF_FN)
     });
 
+    // Initial display-cache content; refreshed on events (see `MainUi::snapshot`)
+    let snapshot = MainUi::exec_get_snapshot(engine);
+
     let main_ui = Rc::new(MainUi {
         widgets,
         logs_dir:       logs_dir.to_path_buf(),
@@ -53,6 +58,8 @@ pub fn init_ui(
         modules:        RefCell::new(UiModules::new()),
         ui_options:     RefCell::new(ui_options),
         progress:       RefCell::new(None),
+        snapshot:       RefCell::new(snapshot),
+        snapshot_dirty: Cell::new(false),
         close_win_flag: Cell::new(false),
         prev_tab_page:  Cell::new(TabPage::Hardware),
         conn_string:    RefCell::new(String::new()),
@@ -70,10 +77,10 @@ pub fn init_ui(
 
     let hardware      = super::ui_hardware     ::init_ui(&main_ui.widgets.window, &main_ui, engine);
     let camera        = super::ui_camera       ::init_ui(&main_ui.widgets.window, &main_ui, engine);
-    let darks_library = super::ui_darks_library::init_ui(&main_ui.widgets.window, engine);
+    let darks_library = super::ui_darks_library::init_ui(&main_ui.widgets.window, &main_ui, engine);
     let preview       = super::ui_preview      ::init_ui(&main_ui.widgets.window, &main_ui, engine);
     let focuser       = super::ui_focuser      ::init_ui(&main_ui.widgets.window, &main_ui, engine);
-    let fw_wheel      = super::ui_flt_wheel    ::init_ui(&main_ui.widgets.window, engine);
+    let fw_wheel      = super::ui_flt_wheel    ::init_ui(&main_ui.widgets.window, &main_ui, engine);
     let guiding       = super::ui_guiding      ::init_ui(&main_ui.widgets.window, &main_ui, engine);
     let mount         = super::ui_mount        ::init_ui(&main_ui.widgets.window, &main_ui, engine);
     let plate_solve   = super::ui_plate_solve  ::init_ui(&main_ui.widgets.window, &main_ui, engine);
@@ -235,7 +242,12 @@ pub struct MainUi {
     perf_string:    RefCell<String>,
     expanders:      RefCell<Vec<(String, gtk::Expander, bool)>>,
     closed:         Cell<bool>,
-    self_:          RefCell<Option<Rc<MainUi>>>
+    self_:          RefCell<Option<Rc<MainUi>>>,
+    /// Engine state snapshot FOR DISPLAY ONLY: refreshed synchronously before
+    /// module fan-out in `process_core_event`/`process_hal_event` (coalesced
+    /// for image events). Decision sites must use `fresh_snapshot()`.
+    snapshot:       RefCell<Arc<StateSnapshot>>,
+    snapshot_dirty: Cell<bool>,
 }
 
 impl Drop for MainUi {
@@ -251,6 +263,44 @@ enum MainThreadEvent {
 
 impl MainUi {
     const CONF_FN: &'static str = "ui_common";
+
+    /// Exec `GetSnapshot`; the command reads engine memory only and cannot fail.
+    pub fn exec_get_snapshot(engine: &Arc<Engine>) -> Arc<StateSnapshot> {
+        match engine.exec_command(Command::GetSnapshot) {
+            Ok(Reply::Snapshot(snap)) => Arc::from(*snap),
+            other => panic!("GetSnapshot is infallible, got: {other:?}"),
+        }
+    }
+
+    /// Cached engine state for DISPLAY only; see the `snapshot` field docs.
+    pub fn snapshot(&self) -> Arc<StateSnapshot> {
+        Arc::clone(&self.snapshot.borrow())
+    }
+
+    /// Fresh synchronous snapshot for decision sites (close, delayed starts,
+    /// shot state). Never use the display cache there.
+    pub fn fresh_snapshot(&self) -> Arc<StateSnapshot> {
+        Self::exec_get_snapshot(&self.engine)
+    }
+
+    fn refresh_snapshot_cache(&self) {
+        let snap = Self::exec_get_snapshot(&self.engine);
+        *self.snapshot.borrow_mut() = snap;
+    }
+
+    /// Coalesced refetch for image-carrying events: those draw from their
+    /// payload and the image channel, but the cache must not go stale.
+    fn schedule_snapshot_refresh(self: &Rc<Self>) {
+        if self.snapshot_dirty.replace(true) {
+            return;
+        }
+        glib::idle_add_local_once(
+            clone!(@weak self as self_ => move || {
+                self_.snapshot_dirty.set(false);
+                self_.refresh_snapshot_cache();
+            })
+        );
+    }
 
     fn connect_widgets_events(self: &Rc<Self>) {
         self.widgets.mi_dark_theme.connect_activate(
@@ -563,7 +613,15 @@ impl MainUi {
         }
     }
 
-    fn process_core_event(&self, core_event: &Event) {
+    fn process_core_event(self: &Rc<Self>, core_event: &Event) {
+        // The cache must be current BEFORE the fan-out: a panel may redraw
+        // from it exactly because of this event
+        match core_event {
+            // Image events draw from their payload + image channel, not cache
+            Event::FrameProcessing(_) => self.schedule_snapshot_refresh(),
+            _ => self.refresh_snapshot_cache(),
+        }
+
         let modules = self.modules.borrow();
         modules.on_core_event(core_event);
         drop(modules);
@@ -592,7 +650,13 @@ impl MainUi {
         }
     }
 
-    fn process_hal_event(&self, hal_event: &HalEvent) {
+    fn process_hal_event(self: &Rc<Self>, hal_event: &HalEvent) {
+        // See `process_core_event()` for the cache refresh policy
+        match hal_event {
+            HalEvent::CameraShotResult {..} => self.schedule_snapshot_refresh(),
+            _ => self.refresh_snapshot_cache(),
+        }
+
         let modules = self.modules.borrow();
         modules.on_hal_event(hal_event);
     }

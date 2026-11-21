@@ -8,12 +8,13 @@ use crate::{
     core::{api::{Command, FilterWheelCommand}, engine::Engine, events::Event},
     hal::{DeviceType, HalState, events::HalEvent},
     options::Options,
-    ui::{gtk_utils, module::*, utils::{DelayedActions, ExclusiveCaller, fill_devices_list_into_combobox}},
+    ui::{gtk_utils, module::*, ui_main::MainUi, utils::{DelayedActions, ExclusiveCaller, fill_devices_list_into_combobox}},
     utils::log_utils::log_if_error,
 };
 
 pub fn init_ui(
     window: &gtk::ApplicationWindow,
+    _main_ui: &Rc<MainUi>,
     engine: &Arc<Engine>,
 ) -> Rc<dyn UiModule> {
     let widgets = Widgets::from_builder_str(include_str!(r"resources/flt_wheel.ui"));
