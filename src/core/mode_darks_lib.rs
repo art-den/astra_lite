@@ -236,8 +236,10 @@ impl Default for MasterBiasesOptions {
     }
 }
 
+/// Round up to the next multiple of 5; saturates instead of overflowing on
+/// absurd values (hand-edited config / web input, `panic = "abort"`).
 pub(crate) fn multiple_of_5(v: usize) -> usize {
-    ((v + 4) / 5) * 5
+    usize::saturating_add(v, 4) / 5 * 5
 }
 
 /// Values list when the item is used and non-empty, otherwise the default.
@@ -342,6 +344,10 @@ fn build_defect_pixels_program(
             let frame_count = match opts.frm_cnt_mode {
                 FramesCountMode::Count => multiple_of_5(opts.frames_count),
                 FramesCountMode::Time => {
+                    if !exposure.is_finite() || exposure <= 0.0
+                        || !opts.integr_time.is_finite() {
+                        continue;
+                    }
                     multiple_of_5((60.0 * opts.integr_time / exposure) as usize)
                 }
             };
@@ -384,8 +390,13 @@ fn build_master_darks_program(
                         for offset in &offsets {
                             let mut frame_count = match opts.frm_cnt_mode {
                                 FramesCountMode::Count => opts.frames_count,
-                                FramesCountMode::Time =>
-                                    (60.0 * opts.integr_time / *exp) as usize,
+                                FramesCountMode::Time => {
+                                    if !exp.is_finite() || *exp <= 0.0
+                                        || !opts.integr_time.is_finite() {
+                                        continue;
+                                    }
+                                    (60.0 * opts.integr_time / *exp) as usize
+                                }
                             };
                             if frame_count == 0 { continue; }
 
@@ -428,8 +439,11 @@ fn build_master_biases_program(
     let binnings = resolve_binnings(&opts.binning, cam_opts);
     let crops = resolve_crops(&opts.crop, cam_opts);
 
-    // No zero-count skip here (unlike dp/darks): reachable via a hand-edited config
     let count = multiple_of_5(opts.frames_count);
+    // Zero count would build a master from a partial stack (see dp/darks skips)
+    if count == 0 {
+        return result;
+    }
 
     for t in &temperatures {
         for bin in &binnings {
@@ -872,15 +886,71 @@ mod tests {
     }
 
     #[test]
-    fn biases_zero_frames_count_builds_item() {
-        // No zero skip for biases, unlike dp/darks
+    fn biases_zero_frames_count_skipped() {
+        // Same zero skip as dp/darks: a zero-count item would build a master
+        // from a partial stack
         let spec = DarkLibSpec::MasterBiases(MasterBiasesOptions {
             frames_count: 0,
             ..Default::default()
         });
+        assert!(build_program(&spec, &cam_opts(), false).is_empty());
+    }
+
+    // Robustness against non-finite / absurd values (no panic, no inf casts)
+
+    #[test]
+    fn multiple_of_5_saturates() {
+        assert_eq!(multiple_of_5(0), 0);
+        assert_eq!(multiple_of_5(7), 10);
+        assert_eq!(multiple_of_5(usize::MAX - 2), usize::MAX);
+        assert_eq!(multiple_of_5(usize::MAX), usize::MAX);
+    }
+
+    #[test]
+    fn dp_time_mode_bad_exposure_skipped() {
+        for exposure in [0.0, -5.0, f64::NAN, f64::INFINITY] {
+            let spec = DarkLibSpec::DefectPixels(DefectPixelsOptions {
+                integr_time:   60.0,
+                exposure_used: true,
+                exposure,
+                ..Default::default()
+            });
+            assert!(build_program(&spec, &cam_opts(), false).is_empty(),
+                "exposure {exposure} must skip the item");
+        }
+    }
+
+    #[test]
+    fn darks_time_mode_bad_exposure_skipped() {
+        let spec = DarkLibSpec::MasterDarks(MasterDarksOptions {
+            integr_time: 60.0,
+            exposure:    ValuesItem { used: true, values: vec![0.0, f64::NAN] },
+            ..Default::default()
+        });
+        assert!(build_program(&spec, &cam_opts(), false).is_empty());
+    }
+
+    #[test]
+    fn dp_count_mode_huge_frames_count_saturates() {
+        let spec = DarkLibSpec::DefectPixels(DefectPixelsOptions {
+            frm_cnt_mode: FramesCountMode::Count,
+            frames_count: usize::MAX,
+            ..Default::default()
+        });
         let program = build_program(&spec, &cam_opts(), false);
         assert_eq!(program.len(), 1);
-        assert_eq!(program[0].count, 0);
+        assert_eq!(program[0].count, usize::MAX);
+    }
+
+    #[test]
+    fn darks_time_mode_huge_integr_time_saturates() {
+        let spec = DarkLibSpec::MasterDarks(MasterDarksOptions {
+            integr_time: f64::MAX, // 60 * MAX / 30 -> inf -> saturating cast
+            ..Default::default()
+        });
+        let program = build_program(&spec, &cam_opts(), false);
+        assert_eq!(program.len(), 1);
+        assert_eq!(program[0].count, usize::MAX);
     }
 
     #[test]
