@@ -405,16 +405,131 @@ impl FocuserUi {
             self_.update_focuser_value(self_.step_large.get());
         }));
 
-        self.widgets.chb_temp.connect_active_notify(clone!(@weak self as self_ => move |_| {
+        self.widgets.chb_temp.connect_active_notify(clone!(@weak self as self_ => move |chb| {
+            if !self_.opts_syncing.get() {
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetFocuserOptions(FocuserPatch {
+                            on_temp_change: Some(chb.is_active()),
+                            ..Default::default()
+                        })
+                    ),
+                    "Set focuser options"
+                );
+            }
             self_.correct_widgets_props();
         }));
 
-        self.widgets.chb_fwhm.connect_active_notify(clone!(@weak self as self_ => move |_| {
+        self.widgets.spb_temp.connect_value_changed(clone!(@weak self as self_ => move |sb| {
+            if self_.opts_syncing.get() { return; }
+            log_if_error(
+                &self_.engine.exec_command(
+                    Command::SetFocuserOptions(FocuserPatch {
+                        max_temp_change: Some(sb.value()),
+                        ..Default::default()
+                    })
+                ),
+                "Set focuser options"
+            );
+        }));
+
+        self.widgets.chb_fwhm.connect_active_notify(clone!(@weak self as self_ => move |chb| {
+            if !self_.opts_syncing.get() {
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetFocuserOptions(FocuserPatch {
+                            on_fwhm_change: Some(chb.is_active()),
+                            ..Default::default()
+                        })
+                    ),
+                    "Set focuser options"
+                );
+            }
             self_.correct_widgets_props();
         }));
 
-        self.widgets.chb_period.connect_active_notify(clone!(@weak self as self_ => move |_| {
+        self.widgets.cb_fwhm.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
+            if self_.opts_syncing.get() { return; }
+            log_if_error(
+                &self_.engine.exec_command(
+                    Command::SetFocuserOptions(FocuserPatch {
+                        max_fwhm_change: Some(
+                            cb.active_id().and_then(|v| v.parse().ok()).unwrap_or(20)
+                        ),
+                        ..Default::default()
+                    })
+                ),
+                "Set focuser options"
+            );
+        }));
+
+        self.widgets.chb_period.connect_active_notify(clone!(@weak self as self_ => move |chb| {
+            if !self_.opts_syncing.get() {
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetFocuserOptions(FocuserPatch {
+                            periodically: Some(chb.is_active()),
+                            ..Default::default()
+                        })
+                    ),
+                    "Set focuser options"
+                );
+            }
             self_.correct_widgets_props();
+        }));
+
+        self.widgets.cb_period.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
+            if self_.opts_syncing.get() { return; }
+            log_if_error(
+                &self_.engine.exec_command(
+                    Command::SetFocuserOptions(FocuserPatch {
+                        period_minutes: Some(
+                            cb.active_id().and_then(|v| v.parse().ok()).unwrap_or(120)
+                        ),
+                        ..Default::default()
+                    })
+                ),
+                "Set focuser options"
+            );
+        }));
+
+        self.widgets.spb_measures.connect_value_changed(clone!(@weak self as self_ => move |sb| {
+            if self_.opts_syncing.get() { return; }
+            log_if_error(
+                &self_.engine.exec_command(
+                    Command::SetFocuserOptions(FocuserPatch {
+                        measures: Some(sb.value() as u32),
+                        ..Default::default()
+                    })
+                ),
+                "Set focuser options"
+            );
+        }));
+
+        self.widgets.spb_auto_step.connect_value_changed(clone!(@weak self as self_ => move |sb| {
+            if self_.opts_syncing.get() { return; }
+            log_if_error(
+                &self_.engine.exec_command(
+                    Command::SetFocuserOptions(FocuserPatch {
+                        step: Some(sb.value()),
+                        ..Default::default()
+                    })
+                ),
+                "Set focuser options"
+            );
+        }));
+
+        self.widgets.spb_extra_steps.connect_value_changed(clone!(@weak self as self_ => move |sb| {
+            if self_.opts_syncing.get() { return; }
+            log_if_error(
+                &self_.engine.exec_command(
+                    Command::SetFocuserOptions(FocuserPatch {
+                        anti_backlash_steps: Some(sb.value() as usize),
+                        ..Default::default()
+                    })
+                ),
+                "Set focuser options"
+            );
         }));
 
         self.widgets.da_auto.connect_draw(

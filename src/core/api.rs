@@ -283,8 +283,17 @@ pub struct CalibrPatch {
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 #[serde(default)]
 pub struct FocuserPatch {
-    pub exposure: Option<f64>,
-    pub gain:     Option<Gain>,
+    pub exposure:            Option<f64>,
+    pub gain:                Option<Gain>,
+    pub on_temp_change:      Option<bool>,
+    pub max_temp_change:     Option<f64>,
+    pub on_fwhm_change:      Option<bool>,
+    pub max_fwhm_change:     Option<u32>,
+    pub periodically:        Option<bool>,
+    pub period_minutes:      Option<u32>,
+    pub measures:            Option<u32>,
+    pub step:                Option<f64>,
+    pub anti_backlash_steps: Option<usize>,
 }
 
 /// See [`CoolingPatch`].
@@ -688,8 +697,17 @@ impl Engine {
             }
             Command::SetFocuserOptions(patch) => {
                 let mut options = self.options.write().unwrap();
-                if let Some(v) = patch.exposure { options.focuser.exposure = v; }
-                if let Some(v) = patch.gain     { options.focuser.gain = v; }
+                if let Some(v) = patch.exposure            { options.focuser.exposure = v; }
+                if let Some(v) = patch.gain                { options.focuser.gain = v; }
+                if let Some(v) = patch.on_temp_change      { options.focuser.on_temp_change = v; }
+                if let Some(v) = patch.max_temp_change     { options.focuser.max_temp_change = v; }
+                if let Some(v) = patch.on_fwhm_change      { options.focuser.on_fwhm_change = v; }
+                if let Some(v) = patch.max_fwhm_change     { options.focuser.max_fwhm_change = v; }
+                if let Some(v) = patch.periodically        { options.focuser.periodically = v; }
+                if let Some(v) = patch.period_minutes      { options.focuser.period_minutes = v; }
+                if let Some(v) = patch.measures            { options.focuser.measures = v; }
+                if let Some(v) = patch.step                { options.focuser.step = v; }
+                if let Some(v) = patch.anti_backlash_steps { options.focuser.anti_backlash_steps = v; }
                 Ok(Reply::Empty)
             }
             Command::SetPlateSolverOptions(patch) => {
@@ -1080,7 +1098,11 @@ mod tests {
             Command::Preview(PreviewCommand::SetWbBlue { wb_blue: 0.5 }),
             Command::Preview(PreviewCommand::SetStars { stars: true }),
             Command::SetFocuserOptions(FocuserPatch {
-                exposure: Some(2.5), gain: Some(Gain::P50),
+                exposure: Some(2.5), gain: Some(Gain::P50), on_temp_change: Some(true),
+                max_temp_change: Some(1.5), on_fwhm_change: Some(false),
+                max_fwhm_change: Some(20), periodically: Some(true),
+                period_minutes: Some(120), measures: Some(11), step: Some(50.0),
+                anti_backlash_steps: Some(500),
             }),
             Command::SetFocuserOptions(FocuserPatch { gain: Some(Gain::P50), ..Default::default() }),
             Command::SetPlateSolverOptions(PlateSolverPatch {
