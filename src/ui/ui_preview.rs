@@ -404,9 +404,8 @@ impl UiModule for PreviewUi {
     }
 
     fn on_full_screen(&self, full_screen: bool) {
-        let options = self.engine.options.read().unwrap();
-        let preview_scale = options.preview.scale;
-        drop(options);
+        // Fresh: `Preview::Set*` commits are eventless, the cache may lag
+        let preview_scale = self.main_ui.fresh_snapshot().options.preview.scale;
 
         self.widgets.common.pan_preview2.set_visible(!full_screen);
         self.widgets.info.scr_img_info.set_visible(!full_screen);
@@ -893,7 +892,8 @@ impl PreviewUi {
             update_info_panel_vis(true, false, false);
         };
 
-        let source = self.engine.options.read().unwrap().preview.source;
+        // Fresh: `Preview::Set*` commits are eventless, the cache may lag
+        let source = self.main_ui.fresh_snapshot().options.preview.source;
         match source {
             PreviewSource::OrigFrame => {
                 let info = self.engine.preview.info.read().unwrap();
@@ -976,7 +976,8 @@ impl PreviewUi {
     /// Note: this doesn't mark the part image dirty - option-only changes don't
     /// alter the part; new frames do it in show_frame_processing_result.
     fn update_preview(&self, keep_center: Option<(f64, f64)>) {
-        let preview_options = self.engine.options.read().unwrap().preview.clone();
+        // Fresh: `Preview::Set*` commits are eventless, the cache may lag
+        let preview_options = self.main_ui.fresh_snapshot().options.preview.clone();
         let pp = preview_options.preview_params();
 
         let (orig_width, orig_height, is_color_image, levels_locked, camera) = {
@@ -1155,7 +1156,8 @@ impl PreviewUi {
     }
 
     fn draw_preview_image(&self, area: &gtk::DrawingArea, cr: &cairo::Context) {
-        let options = self.engine.options.read().unwrap().preview.clone();
+        // Fresh: `Preview::Set*` commits are eventless, the cache may lag
+        let options = self.main_ui.fresh_snapshot().options.preview.clone();
         let pp = options.preview_params();
 
         let stars = match options.source {
@@ -1502,7 +1504,9 @@ impl PreviewUi {
 
     fn handler_action_save_image_preview(&self) {
         exec_and_show_error(Some(&self.window), || {
-            let options = self.engine.options.read().unwrap();
+            // Exception: image channel reads below; options are fresh
+            let snap = self.main_ui.fresh_snapshot();
+            let options = &snap.options;
             let (image, hist, fn_prefix) = match options.preview.source {
                 PreviewSource::OrigFrame =>
                     (&*self.engine.preview.image, &self.engine.preview.img_hist, "preview"),
@@ -1512,7 +1516,6 @@ impl PreviewUi {
             if image.read().unwrap().is_empty() { return Ok(()); }
             let mut preview_options = options.preview.clone();
             preview_options.scale = PreviewScale::Original;
-            drop(options);
             let def_file_name = format!(
                 "{}_{}.jpg",
                 fn_prefix,
@@ -1551,9 +1554,7 @@ impl PreviewUi {
 
     fn handler_action_save_image_linear(&self) {
         exec_and_show_error(Some(&self.window), || {
-            let options = self.engine.options.read().unwrap();
-            let preview_source = options.preview.source;
-            drop(options);
+            let preview_source = self.main_ui.fresh_snapshot().options.preview.source;
             let ask_to_select_name = |fn_prefix: &str| -> Option<PathBuf> {
                 let def_file_name = format!(
                     "{}_{}.tif",
@@ -1596,13 +1597,14 @@ impl PreviewUi {
     }
 
     fn show_frame_processing_result(&self, result: &FrameProcessNotification) {
-        let options = self.engine.options.read().unwrap();
+        // Fresh: the FrameProcessing cache refresh is coalesced
+        let snap = self.main_ui.fresh_snapshot();
+        let options = &snap.options;
         let is_from_file_image = result.mode_kind == ModeKind::OpeningImgFile;
         if !is_from_file_image && options.cam.device_id != result.camera_id {
             return;
         }
         let live_stacking_preview = options.preview.source == PreviewSource::LiveStacking;
-        drop(options);
 
         let is_mode_current = |live_result: bool| {
             live_result == live_stacking_preview
@@ -1700,14 +1702,14 @@ impl PreviewUi {
     }
 
     fn show_histogram_stat(&self) {
-        let options = self.engine.options.read().unwrap();
-        let hist = match options.preview.source {
+        // Fresh: `Preview::Set*` commits are eventless, the cache may lag
+        let source = self.main_ui.fresh_snapshot().options.preview.source;
+        let hist = match source {
             PreviewSource::OrigFrame =>
                 self.engine.preview.raw_hist.read().unwrap(),
             PreviewSource::LiveStacking =>
                 self.engine.live_stacking.hist.read().unwrap(),
         };
-        drop(options);
         let ui_options = self.ui_options.borrow();
         let max = hist.max as f32;
         let show_chan_data = |
@@ -1782,14 +1784,14 @@ impl PreviewUi {
         area: &gtk::DrawingArea,
         cr:   &cairo::Context
     ) ->eyre::Result<()> {
-        let options = self.engine.options.read().unwrap();
-        let hist = match options.preview.source {
+        // Fresh: `Preview::Set*` commits are eventless, the cache may lag
+        let source = self.main_ui.fresh_snapshot().options.preview.source;
+        let hist = match source {
             PreviewSource::OrigFrame =>
                 self.engine.preview.raw_hist.read().unwrap(),
             PreviewSource::LiveStacking =>
                 self.engine.live_stacking.hist.read().unwrap(),
         };
-        drop(options);
 
         let font_size_pt = 8.0;
         let dpmm = get_widget_dpmm(area);
@@ -2096,7 +2098,7 @@ impl PreviewUi {
     }
 
     fn correct_preview_source(&self) {
-        let mode_kind = self.engine.modes().active.kind();
+        let mode_kind = self.main_ui.snapshot().mode.kind;
         let cb_preview_src_aid = match mode_kind {
             ModeKind::LiveStacking => "live",
             ModeKind::Waiting      => return,
