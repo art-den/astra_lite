@@ -12,7 +12,7 @@ use itertools::Itertools;
 use chrono::prelude::*;
 use macros::FromBuilder;
 use crate::{
-    core::{api::{Command, ConnectCommand, GuiderCommand, IndiCommand, IndiSelPatch}, engine::Engine, events::Event}, guiding::phd2, hal::{DeviceType, HalState, events::HalEvent}, options::*, utils::log_utils::log_if_error,
+    core::{api::{Command, ConnectCommand, GuiderCommand, IndiCommand, IndiSelPatch, Query, QueryReply, Reply}, engine::Engine, events::Event}, guiding::phd2, hal::{DeviceType, HalState, events::HalEvent}, options::*, utils::log_utils::log_if_error,
 };
 use ::indi::{self, value_to_sexagesimal};
 use super::{gtk_utils::*, indi_panel_widget::*, module::*, ui_main::*};
@@ -980,8 +980,13 @@ impl HardwareUi {
         fc.close();
         if resp == gtk::ResponseType::Accept {
             exec_and_show_error(Some(&self.window), || {
-                let indi = self.engine.hal.indi_impl().indi();
-                let (_, all_props) = indi.get_properties_list(None);
+                let all_props = match self.engine.exec_command(Command::Query(Query::IndiProperties { since: None }))? {
+                    Reply::Query(q) => match *q {
+                        QueryReply::IndiProperties(reply) => reply.properties,
+                        _ => return Err(eyre::eyre!("unexpected query reply")),
+                    },
+                    _ => return Err(eyre::eyre!("unexpected reply")),
+                };
                 let file_name = fc.file().expect("File name").path().unwrap().with_extension("txt");
                 let mut file = BufWriter::new(File::create(file_name)?);
                 for prop in all_props {

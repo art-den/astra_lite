@@ -4,7 +4,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration, cell::RefCell, rc::Rc
 use gtk::{prelude::*, glib, glib::clone};
 use itertools::{Itertools, izip};
 use ::indi;
-use crate::core::{api::{Command, IndiCommand}, engine::Engine};
+use crate::core::{api::{Command, IndiCommand, IndiDeviceEntry, Query, QueryReply, Reply}, engine::Engine};
 
 pub struct IndiPanelWidget {
     indi:      Arc<indi::Connection>,
@@ -105,14 +105,14 @@ impl IndiPanelWidget {
         let engine_for_timer = Arc::clone(engine);
         glib::timeout_add_local(
             Duration::from_millis(200),
-            clone!(@weak data, @weak indi => @default-return glib::ControlFlow::Break,
+            clone!(@weak data => @default-return glib::ControlFlow::Break,
             move || {
                 let mut data = data.borrow_mut();
                 if data.enabled && (data.prop_changed || data.list_changed) {
                     let list_changed = data.list_changed;
                     data.prop_changed = false;
                     data.list_changed = false;
-                    Self::show_all_props(&indi, &engine_for_timer, &stack_for_handler, &mut data, list_changed);
+                    Self::show_all_props(&engine_for_timer, &stack_for_handler, &mut data, list_changed);
                 }
                 glib::ControlFlow::Continue
             })
@@ -138,7 +138,7 @@ impl IndiPanelWidget {
             let list_changed = data.list_changed;
             data.list_changed = false;
             data.prop_changed = false;
-            Self::show_all_props(&self.indi, &self.engine, &self.stack, &mut data, list_changed);
+            Self::show_all_props(&self.engine, &self.stack, &mut data, list_changed);
         }
     }
 
@@ -170,15 +170,21 @@ impl IndiPanelWidget {
     /// synced to the model order produced by `cmp_devices`.
     /// The opened page is kept if that device still exists.
     fn show_all_props(
-        indi:        &Arc<indi::Connection>,
         engine:      &Arc<Engine>,
         stack:       &gtk::Stack,
         data:        &mut UiIndiGuiData,
         update_list: bool
     ) {
-        let (mut indi_devices, indi_props) = indi.get_properties_list(
-            if update_list { None } else { Some(data.last_change_id) }
-        );
+        let (mut indi_devices, indi_props) = match engine.exec_command(Command::Query(
+            Query::IndiProperties { since: if update_list { None } else { Some(data.last_change_id) } },
+        )) {
+            Ok(Reply::Query(q)) => match *q {
+                QueryReply::IndiProperties(reply) => (reply.devices, reply.properties),
+                _ => { log::error!("IndiPanelWidget: unexpected query reply"); return; }
+            },
+            Ok(_) => { log::error!("IndiPanelWidget: unexpected reply"); return; }
+            Err(e) => { log::error!("IndiProperties query failed: {e:#}"); return; }
+        };
 
         if update_list {
             let get_device_sort_prio = |interface: indi::DriverInterface| -> usize {
@@ -201,20 +207,20 @@ impl IndiPanelWidget {
             // Sort key: interface prio, then CCD sensor size (biggest first), then
             // name. The name tiebreaker makes the order total (so the model and UI
             // sorts always agree) and keeps the sidebar stable across reconnects.
-            let get_device_sort_key = |name: &str, interface: indi::DriverInterface| -> (usize, f64) {
-                let prio = get_device_sort_prio(interface);
-                if !interface.contains(indi::DriverInterface::CCD) {
+            let get_device_sort_key = |entry: &IndiDeviceEntry| -> (usize, f64) {
+                let prio = get_device_sort_prio(entry.device.interface);
+                if !entry.device.interface.contains(indi::DriverInterface::CCD) {
                     return (prio, 0.0);
                 }
-                let (psx, psy) = indi.camera_get_pixel_size_um(name, indi::CamCcd::Main).unwrap_or_default();
-                let (fsx, fsy) = indi.camera_get_max_frame_size(name, indi::CamCcd::Main).unwrap_or_default();
+                let (psx, psy) = entry.pixel_size_um;
+                let (fsx, fsy) = entry.max_frame_size;
                 (prio, f64::max(psx * fsx as f64, psy * fsy as f64))
             };
 
             let unknown_key = (get_device_sort_prio(indi::DriverInterface::empty()), 0.0);
 
             let sort_keys: HashMap<String, (usize, f64)> = indi_devices.iter()
-                .map(|d| (d.name.to_string(), get_device_sort_key(&d.name, d.interface)))
+                .map(|d| (d.device.name.to_string(), get_device_sort_key(d)))
                 .collect();
 
             let cmp_devices = |name1: &str, name2: &str| -> std::cmp::Ordering {
@@ -232,7 +238,7 @@ impl IndiPanelWidget {
                 str::cmp(name1, name2)
             };
 
-            indi_devices.sort_by(|d1, d2| cmp_devices(&d1.name, &d2.name));
+            indi_devices.sort_by(|d1, d2| cmp_devices(&d1.device.name, &d2.device.name));
 
             let mut devices_list_changed = false;
 
@@ -242,7 +248,7 @@ impl IndiPanelWidget {
                 // Device order changed? Both lists are sorted with the same total
                 // comparator, so a positional name compare is enough
                 for (indi_device, ui_device) in izip!(&indi_devices, &data.devices) {
-                    if *indi_device.name != ui_device.name {
+                    if *indi_device.device.name != ui_device.name {
                         devices_list_changed = true;
                     }
                 }
@@ -251,7 +257,7 @@ impl IndiPanelWidget {
             // Add new devices
             let devices_count_before_add = data.devices.len();
             for indi_device in &indi_devices {
-                if !data.devices.iter().any(|d| d.name == *indi_device.name) {
+                if !data.devices.iter().any(|d| d.name == *indi_device.device.name) {
                     let vert_box = gtk::Box::builder()
                         .orientation(gtk::Orientation::Vertical)
                         .visible(true)
@@ -262,7 +268,7 @@ impl IndiPanelWidget {
                         .visible(true)
                         .use_markup(true)
                         .halign(gtk::Align::Start)
-                        .label(format!("<span size=\"large\">    <b>{}</b> control panel</span>", *indi_device.name))
+                        .label(format!("<span size=\"large\">    <b>{}</b> control panel</span>", *indi_device.device.name))
                         .build();
                     let notebook = gtk::Notebook::builder()
                         .visible(true)
@@ -273,7 +279,7 @@ impl IndiPanelWidget {
                     vert_box.add(&caption_label);
                     vert_box.add(&notebook);
                     data.devices.push(UiIndiDevice {
-                        name:      indi_device.name.to_string(),
+                        name:      indi_device.device.name.to_string(),
                         groups:    Vec::new(),
                         layout:    vert_box,
                         notebook,
@@ -286,7 +292,7 @@ impl IndiPanelWidget {
             let devices_count_before_remove = data.devices.len();
             data.devices.retain(|existing|
                 indi_devices.iter().any(|d|
-                    *d.name == existing.name
+                    *d.device.name == existing.name
                 )
             );
             devices_list_changed |= devices_count_before_remove != data.devices.len();
@@ -313,7 +319,7 @@ impl IndiPanelWidget {
 
         // build device UI
         for ui_device in &mut data.devices {
-            Self::show_device_props(indi, engine, ui_device, &indi_props, update_list);
+            Self::show_device_props(engine, ui_device, &indi_props, update_list);
         }
 
         let max_change_id = indi_props
@@ -326,7 +332,6 @@ impl IndiPanelWidget {
     }
 
     fn show_device_props(
-        indi:        &Arc<indi::Connection>,
         engine:      &Arc<Engine>,
         ui_device:   &mut UiIndiDevice,
         indi_props:  &[indi::Property],
@@ -391,7 +396,7 @@ impl IndiPanelWidget {
             let Some(ui_group) = ui_device.groups.iter_mut().find(|g| g.name == *indi_group) else {
                 continue;
             };
-            Self::show_device_prop_group(indi, engine, &ui_device.name, ui_group, indi_props, update_list);
+            Self::show_device_prop_group(engine, &ui_device.name, ui_group, indi_props, update_list);
         }
     }
 
@@ -420,7 +425,6 @@ impl IndiPanelWidget {
     }
 
     fn show_device_prop_group(
-        indi:        &Arc<indi::Connection>,
         engine:      &Arc<Engine>,
         device_name: &str,
         ui_group:    &mut UiIndiPropsGroup,
@@ -451,7 +455,6 @@ impl IndiPanelWidget {
                     ui_group.grid.attach(&prop_label, 0, ui_group.next_row, 1, 1);
                     widgets.push(prop_label.into());
                     let prop_ui_elements = Self::create_property_ui(
-                        indi,
                         engine,
                         indi_prop,
                         &ui_group.grid,
@@ -521,7 +524,6 @@ impl IndiPanelWidget {
     }
 
     fn create_property_ui(
-        indi:      &Arc<indi::Connection>,
         engine:    &Arc<Engine>,
         prop:      &indi::Property,
         grid:      &gtk::Grid,
@@ -531,7 +533,6 @@ impl IndiPanelWidget {
         match &prop.type_ {
             indi::PropType::Text =>
                 Self::create_text_property_ui(
-                    indi,
                     engine,
                     prop,
                     widgets,
@@ -540,7 +541,6 @@ impl IndiPanelWidget {
                 ),
             indi::PropType::Num =>
                 Self::create_num_property_ui(
-                    indi,
                     engine,
                     prop,
                     widgets,
@@ -549,7 +549,6 @@ impl IndiPanelWidget {
                 ),
             indi::PropType::Switch(rule) =>
                 Self::create_switch_property_ui(
-                    indi,
                     engine,
                     prop,
                     rule,
@@ -559,7 +558,6 @@ impl IndiPanelWidget {
                 ),
             indi::PropType::Blob =>
                 Self::create_blob_property_ui(
-                    indi,
                     prop,
                     widgets,
                     grid,
@@ -567,7 +565,6 @@ impl IndiPanelWidget {
                 ),
             indi::PropType::Light =>
                 Self::create_light_property_ui(
-                    indi,
                     prop,
                     widgets,
                     grid,
@@ -577,7 +574,6 @@ impl IndiPanelWidget {
     }
 
     fn create_text_property_ui(
-        _indi:    &Arc<indi::Connection>,
         engine:   &Arc<Engine>,
         property: &indi::Property,
         widgets:  &mut Vec<gtk::Widget>,
@@ -649,7 +645,6 @@ impl IndiPanelWidget {
     }
 
     fn create_num_property_ui(
-        _indi:    &Arc<indi::Connection>,
         engine:   &Arc<Engine>,
         property: &indi::Property,
         widgets:  &mut Vec<gtk::Widget>,
@@ -774,7 +769,6 @@ impl IndiPanelWidget {
     }
 
     fn create_switch_property_ui(
-        _indi:    &Arc<indi::Connection>,
         engine:   &Arc<Engine>,
         property: &indi::Property,
         rule:     &indi::SwitchRule,
@@ -863,7 +857,6 @@ impl IndiPanelWidget {
     }
 
     fn create_blob_property_ui(
-        _indi:    &Arc<indi::Connection>,
         property: &indi::Property,
         widgets:  &mut Vec<gtk::Widget>,
         grid:     &gtk::Grid,
@@ -902,7 +895,6 @@ impl IndiPanelWidget {
     }
 
     fn create_light_property_ui(
-        _indi:    &Arc<indi::Connection>,
         property: &indi::Property,
         widgets:  &mut Vec<gtk::Widget>,
         grid:     &gtk::Grid,
