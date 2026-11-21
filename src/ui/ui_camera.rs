@@ -5,7 +5,7 @@ use crate::{
     core::{
         api::{
             CalibrPatch, CamReadoutPatch, Command, CoolingPatch, LiveStackingPatch,
-            QualityPatch, StartMode,
+            QualityPatch, RawFramesPatch, StartMode,
         },
         cur_devices::CurDevices, engine::*, events::*, frame_processing::*, utils::{FileNameArg, FileNameUtils}}, hal::{DeviceType, FrameType, HalState, events::HalEvent}, image::{info::*, raw::CalibrMethods}, options::*, utils::log_utils::log_if_error,
 };
@@ -856,6 +856,53 @@ impl CameraUi {
             self_.show_total_raw_time();
         }));
 
+        self.widgets.raw.chb_frames_cnt.connect_active_notify(
+            clone!(@weak self as self_ => move |chb| {
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetRawFramesOptions(RawFramesPatch {
+                            use_cnt: Some(chb.is_active()),
+                            ..Default::default()
+                        })
+                    ),
+                    "Set raw frames options"
+                );
+            })
+        );
+
+        self.widgets.raw.fcb_path.connect_file_set(
+            clone!(@weak self as self_ => move |fcb| {
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetRawFramesOptions(RawFramesPatch {
+                            out_path: Some(
+                                fcb.filename().unwrap_or_default().to_string_lossy().into_owned()
+                            ),
+                            ..Default::default()
+                        })
+                    ),
+                    "Set raw frames options"
+                );
+            })
+        );
+
+        self.widgets.raw.chb_save_master.connect_active_notify(
+            clone!(@weak self as self_ => move |chb| {
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetRawFramesOptions(RawFramesPatch {
+                            create_master: Some(chb.is_active()),
+                            ..Default::default()
+                        })
+                    ),
+                    "Set raw frames options"
+                );
+            })
+        );
+
         self.widgets.quality.chb_max_fwhm.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 if self_.opts_syncing.get() { return; }
@@ -1078,6 +1125,83 @@ impl CameraUi {
                 "Set live stacking options"
             );
         }));
+
+        self.widgets.live_st.chb_frames_cnt.connect_active_notify(
+            clone!(@weak self as self_ => move |chb| {
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetLiveStackingOptions(LiveStackingPatch {
+                            use_cnt: Some(chb.is_active()),
+                            ..Default::default()
+                        })
+                    ),
+                    "Set live stacking options"
+                );
+            })
+        );
+
+        self.widgets.live_st.chb_save_orig.connect_active_notify(
+            clone!(@weak self as self_ => move |chb| {
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetLiveStackingOptions(LiveStackingPatch {
+                            save_orig: Some(chb.is_active()),
+                            ..Default::default()
+                        })
+                    ),
+                    "Set live stacking options"
+                );
+            })
+        );
+
+        self.widgets.live_st.chb_save_period.connect_active_notify(
+            clone!(@weak self as self_ => move |chb| {
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetLiveStackingOptions(LiveStackingPatch {
+                            save_enabled: Some(chb.is_active()),
+                            ..Default::default()
+                        })
+                    ),
+                    "Set live stacking options"
+                );
+            })
+        );
+
+        self.widgets.live_st.spb_save_period.connect_value_changed(
+            clone!(@weak self as self_ => move |sb| {
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetLiveStackingOptions(LiveStackingPatch {
+                            save_minutes: Some(sb.value() as usize),
+                            ..Default::default()
+                        })
+                    ),
+                    "Set live stacking options"
+                );
+            })
+        );
+
+        self.widgets.live_st.fch_path.connect_file_set(
+            clone!(@weak self as self_ => move |fch| {
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetLiveStackingOptions(LiveStackingPatch {
+                            out_dir: Some(
+                                fch.filename().unwrap_or_default().to_string_lossy().into_owned()
+                            ),
+                            ..Default::default()
+                        })
+                    ),
+                    "Set live stacking options"
+                );
+            })
+        );
 
         self.widgets.info.bx.connect_screen_changed(
             clone!(@weak self as self_ =>  move |_, _| {

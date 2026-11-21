@@ -53,6 +53,7 @@ fn busy_domain_of(cmd: &Command) -> Option<BusyDomain> {
         | Command::SetAutoExpEnabled{..} | Command::SetExposure{..}
         | Command::SetGain{..} | Command::SetOffset{..} | Command::SetBinning{..}
         | Command::SetCrop{..} | Command::SetRawFramesCount{..}
+        | Command::SetRawFramesOptions(..)
         | Command::SetLiveViewEnabled{..} | Command::SetLiveStackingOptions(..)
         | Command::SetQualityOptions(..) | Command::SetCalibrOptions(..)
         | Command::SetTelescopeFocalLen{..} | Command::SetBarlow{..}
@@ -235,6 +236,20 @@ where
 pub struct LiveStackingPatch {
     pub remove_tracks: Option<bool>,
     pub frame_cnt:     Option<usize>,
+    pub use_cnt:       Option<bool>,
+    pub save_orig:     Option<bool>,
+    pub save_enabled:  Option<bool>,
+    pub save_minutes:  Option<usize>,
+    pub out_dir:       Option<String>,
+}
+
+/// See [`CoolingPatch`].
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(default)]
+pub struct RawFramesPatch {
+    pub use_cnt:       Option<bool>,
+    pub out_path:      Option<String>,
+    pub create_master: Option<bool>,
 }
 
 /// See [`CoolingPatch`].
@@ -348,6 +363,7 @@ pub enum Command {
     SetBinning  { binning: Binning },
     SetCrop     { crop: Crop },
     SetRawFramesCount { frame_cnt: usize },
+    SetRawFramesOptions(RawFramesPatch),
     SetLiveViewEnabled { enabled: bool },
     SetLiveStackingOptions(LiveStackingPatch),
     SetQualityOptions(QualityPatch),
@@ -547,10 +563,30 @@ impl Engine {
                 self.options.write().unwrap().cam.live_view = enabled;
                 Ok(Reply::Empty)
             }
+            Command::SetRawFramesOptions(patch) => {
+                let mut options = self.options.write().unwrap();
+                if let Some(v) = patch.use_cnt       { options.raw_frames.use_cnt = v; }
+                if let Some(v) = patch.out_path      {
+                    options.raw_frames.out_path = PathBuf::from(v);
+                }
+                if let Some(v) = patch.create_master { options.raw_frames.create_master = v; }
+                Ok(Reply::Empty)
+            }
             Command::SetLiveStackingOptions(patch) => {
+                if let Some(v) = patch.save_minutes
+                    && v < 1 {
+                        return Err(eyre::eyre!("live stacking save interval must be >= 1 minute"));
+                    }
                 let mut options = self.options.write().unwrap();
                 if let Some(v) = patch.remove_tracks { options.live.remove_tracks = v; }
                 if let Some(v) = patch.frame_cnt     { options.live.frame_cnt = v; }
+                if let Some(v) = patch.use_cnt       { options.live.use_cnt = v; }
+                if let Some(v) = patch.save_orig     { options.live.save_orig = v; }
+                if let Some(v) = patch.save_enabled  { options.live.save_enabled = v; }
+                if let Some(v) = patch.save_minutes  { options.live.save_minutes = v; }
+                if let Some(v) = patch.out_dir {
+                    options.live.out_dir = PathBuf::from(v);
+                }
                 Ok(Reply::Empty)
             }
             Command::SetQualityOptions(patch) => {
@@ -907,7 +943,13 @@ mod tests {
             Command::SetRawFramesCount { frame_cnt: 10 },
             Command::SetLiveViewEnabled { enabled: true },
             Command::SetLiveStackingOptions(LiveStackingPatch {
-                remove_tracks: Some(true), frame_cnt: Some(42),
+                remove_tracks: Some(true), frame_cnt: Some(42), use_cnt: Some(true),
+                save_orig: Some(true), save_enabled: Some(false), save_minutes: Some(5),
+                out_dir: Some("/tmp/live".to_string()),
+            }),
+            Command::SetRawFramesOptions(RawFramesPatch {
+                use_cnt: Some(false), out_path: Some("/tmp/raw".to_string()),
+                create_master: Some(true),
             }),
             Command::SetQualityOptions(QualityPatch {
                 use_max_fwhm: Some(true), max_fwhm: Some(4.5), use_max_ovality: Some(false),
@@ -1062,5 +1104,36 @@ mod tests {
         // Empty patch roundtrips to an empty patch.
         let p = QualityPatch::default();
         roundtrip(p);
+        // Container `#[serde(default)]` also applies to the new patches.
+        let p: LiveStackingPatch = serde_json::from_str(r#"{"out_dir": "/x"}"#).unwrap();
+        assert_eq!(p.out_dir.as_deref(), Some("/x"));
+        assert_eq!(p.save_minutes, None);
+        let p: RawFramesPatch = serde_json::from_str("{}").unwrap();
+        assert_eq!(p.use_cnt, None);
+    }
+
+    #[test]
+    fn set_live_stacking_options_validation() {
+        let engine = Engine::new();
+
+        let bad = Command::SetLiveStackingOptions(LiveStackingPatch {
+            save_minutes: Some(0),
+            ..Default::default()
+        });
+        assert!(engine.exec_command(bad).is_err());
+        // Rejected patch must leave the default untouched
+        assert_eq!(engine.options.read().unwrap().live.save_minutes, 5);
+
+        let good = Command::SetLiveStackingOptions(LiveStackingPatch {
+            save_minutes: Some(7),
+            use_cnt:      Some(true),
+            out_dir:      Some("/tmp/live_out".to_string()),
+            ..Default::default()
+        });
+        assert!(engine.exec_command(good).is_ok());
+        let options = engine.options.read().unwrap();
+        assert_eq!(options.live.save_minutes, 7);
+        assert!(options.live.use_cnt);
+        assert_eq!(options.live.out_dir, PathBuf::from("/tmp/live_out"));
     }
 }
