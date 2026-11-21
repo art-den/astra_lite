@@ -4,8 +4,8 @@ use macros::FromBuilder;
 use crate::{
     core::{
         api::{
-            CalibrPatch, CamReadoutPatch, Command, CoolingPatch, LiveStackingPatch,
-            QualityPatch, RawFramesPatch, StartMode,
+            CalibrPatch, CameraCaps, CamReadoutPatch, Command, CoolingPatch, LiveStackingPatch,
+            QualityPatch, Query, QueryReply, RawFramesPatch, Reply, StartMode,
         },
         cur_devices::CurDevices, engine::*, events::*, frame_processing::*, utils::{FileNameArg, FileNameUtils}}, hal::{DeviceType, FrameType, HalState, events::HalEvent}, image::{info::*, raw::CalibrMethods}, options::*, utils::log_utils::log_if_error,
 };
@@ -36,6 +36,7 @@ pub fn init_ui(
         delayed_actions: DelayedActions::new(500),
         fn_utils:        RefCell::new(FileNameUtils::default()),
         opts_syncing:    Cell::new(false),
+        camera_caps:     RefCell::new(None),
     });
 
     obj.init_cam_ctrl_widgets();
@@ -280,10 +281,13 @@ struct CameraUi {
     delayed_actions: DelayedActions<DelayedAction>,
     fn_utils:        RefCell<FileNameUtils>,
     /// Set while widgets are programmatically synced from `Options`: option
-    /// write handlers must not run (callers hold the `options` read guard,
-    /// so `exec_command` would self-deadlock; replaces the old `try_write`
+    /// write handlers must not run (callers hold the `options` read guard, so
+    /// `exec_command` would self-deadlock; replaces the old `try_write`
     /// skip). See `sync_suppress()`.
     opts_syncing:    Cell<bool>,
+    /// `Query::CameraCaps` cache, refreshed on device/connect events and
+    /// lazily when empty; capabilities are static per connected camera.
+    camera_caps:     RefCell<Option<CameraCaps>>,
 }
 
 impl UiModule for CameraUi {
@@ -394,8 +398,8 @@ impl UiModule for CameraUi {
                 self.correct_widgets_props();
             }
             Event::ModeContinued => {
-                let options = self.engine.options.read().unwrap();
-                self.sync_suppress(|| self.show_frame_options(&options));
+                let snap = self.main_ui.snapshot();
+                self.sync_suppress(|| self.show_frame_options(&snap.options));
             }
             Event::FrameProcessing(result) => {
                 self.show_frame_processing_result(result);
@@ -409,35 +413,35 @@ impl UiModule for CameraUi {
                         self.widgets.common.cb_cam_list.set_active_id(Some(new_camera_id));
                     });
                 }
-                let options = self.engine.options.read().unwrap();
+                // New camera selected: capabilities must be re-queried
+                self.refresh_camera_caps();
+                let snap = self.main_ui.snapshot();
                 self.sync_suppress(|| {
                     // Show some options for specific camera
-                    self.show_frame_options(&options);
-                    self.show_ctrl_options(&options);
-                    self.show_calibr_options(&options);
+                    self.show_frame_options(&snap.options);
+                    self.show_ctrl_options(&snap.options);
+                    self.show_calibr_options(&snap.options);
 
                     // Show new total time
 
-                    self.show_total_raw_time_impl(&options);
+                    self.show_total_raw_time_impl(&snap.options);
 
                     // Init fn_utils and show calibration files
 
                     self.init_fn_utils();
-                    self.show_calibr_file_for_frame(&options);
+                    self.show_calibr_file_for_frame(&snap.options);
 
-                    self.update_resolution_list_impl(&options);
-                    self.fill_heater_items_list_impl(&options);
-                    self.fill_conv_gain_items_list_impl(&options);
+                    self.update_resolution_list_impl(&snap.options);
+                    self.fill_heater_items_list_impl(&snap.options);
+                    self.fill_conv_gain_items_list_impl(&snap.options);
                 });
-                drop(options);
 
                 self.correct_widgets_props_impl();
                 self.correct_frame_quality_widgets_props();
             }
             Event::CameraCoolingOptionsChanged => {
-                let options = self.engine.options.read().unwrap();
-                self.show_calibr_file_for_frame(&options);
-                drop(options);
+                let snap = self.main_ui.snapshot();
+                self.show_calibr_file_for_frame(&snap.options);
                 self.correct_widgets_props();
             }
             Event::CameraFanOptionsChanged |
@@ -445,23 +449,21 @@ impl UiModule for CameraUi {
                 self.correct_widgets_props();
             }
             Event::CameraFrameTypeChanged => {
-                let options = self.engine.options.read().unwrap();
-                self.show_calibr_file_for_frame(&options);
-                let exposure = options.cam.frame.exposure();
-                drop(options);
+                let snap = self.main_ui.snapshot();
+                self.show_calibr_file_for_frame(&snap.options);
+                let exposure = snap.options.cam.frame.exposure();
                 self.widgets.frame.spb_exp.set_value(exposure);
                 self.correct_widgets_props();
                 self.show_total_raw_time();
             }
             Event::CameraExposureChanged => {
-                let options = self.engine.options.read().unwrap();
-                self.show_calibr_file_for_frame(&options);
-                drop(options);
+                let snap = self.main_ui.snapshot();
+                self.show_calibr_file_for_frame(&snap.options);
                 self.show_total_raw_time();
             }
             Event::CameraFrameOptionsChanged => {
-                let options = self.engine.options.read().unwrap();
-                self.show_calibr_file_for_frame(&options);
+                let snap = self.main_ui.snapshot();
+                self.show_calibr_file_for_frame(&snap.options);
             }
             _ => {},
         }
@@ -473,15 +475,15 @@ impl UiModule for CameraUi {
                 self.process_hal_state_event(state);
             }
             HalEvent::DeviceConnected(evt) => {
-                let options = self.engine.options.read().unwrap();
-                if evt.id == options.cam.device_id {
+                let snap = self.main_ui.snapshot();
+                if evt.id == snap.options.cam.device_id {
                     self.delayed_actions.schedule(DelayedAction::UpdateCtrlWidgets);
                 }
             }
             HalEvent::CameraIsReadyToWork(camera_id) => {
-                let options = self.engine.options.read().unwrap();
+                let snap = self.main_ui.snapshot();
                  self.delayed_actions.schedule(DelayedAction::UpdateCamList);
-                if options.cam.device_id == **camera_id {
+                if snap.options.cam.device_id == **camera_id {
                     self.delayed_actions.schedule(DelayedAction::UpdateResolutionList);
                     self.delayed_actions.schedule_ex(
                         DelayedAction::StartLiveView,
@@ -492,9 +494,8 @@ impl UiModule for CameraUi {
                 }
             }
             HalEvent::DeviceDisconnected(evt) => {
-                let options = self.engine.options.read().unwrap();
-                if evt.id == options.cam.device_id {
-                    drop(options);
+                let snap = self.main_ui.snapshot();
+                if evt.id == snap.options.cam.device_id {
                     self.delayed_actions.schedule(DelayedAction::UpdateCtrlWidgets);
                 }
             }
@@ -510,26 +511,26 @@ impl UiModule for CameraUi {
             HalEvent::CameraCoolerCanBeControlled(camera_id) |
             HalEvent::CameraOffsetCanBeControlled(camera_id) |
             HalEvent::CameraGainCanBeControlled(camera_id) => {
-                let options = self.engine.options.read().unwrap();
-                if options.cam.device_id == **camera_id {
+                let snap = self.main_ui.snapshot();
+                if snap.options.cam.device_id == **camera_id {
                     self.delayed_actions.schedule(DelayedAction::UpdateCtrlWidgets);
                 }
             }
             HalEvent::CameraHeaterCanBeControlled(camera_id) => {
-                let options = self.engine.options.read().unwrap();
-                if options.cam.device_id == **camera_id {
+                let snap = self.main_ui.snapshot();
+                if snap.options.cam.device_id == **camera_id {
                     self.delayed_actions.schedule(DelayedAction::FillHeaterItems);
                 }
             }
             HalEvent::CameraConvGainCanBeControlled(camera_id) => {
-                let options = self.engine.options.read().unwrap();
-                if options.cam.device_id == **camera_id {
+                let snap = self.main_ui.snapshot();
+                if snap.options.cam.device_id == **camera_id {
                     self.delayed_actions.schedule(DelayedAction::FillConvGainItems);
                 }
             }
             HalEvent::CameraCcdSizeChanged(camera_id) => {
-                let options = self.engine.options.read().unwrap();
-                if options.cam.device_id == **camera_id {
+                let snap = self.main_ui.snapshot();
+                if snap.options.cam.device_id == **camera_id {
                     self.delayed_actions.schedule(DelayedAction::UpdateResolutionList);
                 }
             }
@@ -551,6 +552,29 @@ impl CameraUi {
         let prev = self.opts_syncing.replace(true);
         sync();
         self.opts_syncing.set(prev);
+    }
+
+    /// Executes a fast `Query` and unwraps its reply.
+    fn query_reply(&self, query: Query) -> eyre::Result<QueryReply> {
+        match self.engine.exec_command(Command::Query(query))? {
+            Reply::Query(q) => Ok(*q),
+            _ => Err(eyre::eyre!("Unexpected reply to Query")),
+        }
+    }
+
+    /// Re-queries the current camera capabilities into the panel cache.
+    /// No camera / failed query => `None` (everything shown unsupported), same
+    /// as the failed live capability calls before the query API.
+    fn refresh_camera_caps(&self) {
+        *self.camera_caps.borrow_mut() = match self.query_reply(Query::CameraCaps) {
+            Ok(QueryReply::CameraCaps(caps)) => Some(caps),
+            Ok(_) => { log::error!("Query::CameraCaps: unexpected reply"); None }
+            Err(err) => { log::debug!("Query::CameraCaps: {err:#}"); None }
+        };
+    }
+
+    fn camera_caps(&self) -> Option<CameraCaps> {
+        self.camera_caps.borrow().clone()
     }
 
     fn init_cam_ctrl_widgets(&self) {
@@ -1030,8 +1054,9 @@ impl CameraUi {
                     ),
                     "Set calibration options"
                 );
-                let options = self_.engine.options.read().unwrap();
-                self_.show_calibr_file_for_frame(&options);
+                // Read back own eventless commit
+                let snap = self_.main_ui.fresh_snapshot();
+                self_.show_calibr_file_for_frame(&snap.options);
             })
         );
 
@@ -1047,8 +1072,9 @@ impl CameraUi {
                     ),
                     "Set calibration options"
                 );
-                let options = self_.engine.options.read().unwrap();
-                self_.show_calibr_file_for_frame(&options);
+                // Read back own eventless commit
+                let snap = self_.main_ui.fresh_snapshot();
+                self_.show_calibr_file_for_frame(&snap.options);
             })
         );
 
@@ -1066,8 +1092,9 @@ impl CameraUi {
                     ),
                     "Set calibration options"
                 );
-                let options = self_.engine.options.read().unwrap();
-                self_.show_calibr_file_for_frame(&options);
+                // Read back own eventless commit
+                let snap = self_.main_ui.fresh_snapshot();
+                self_.show_calibr_file_for_frame(&snap.options);
             })
         );
 
@@ -1273,27 +1300,35 @@ impl CameraUi {
                 self.correct_widgets_props();
             }
             DelayedAction::StartLiveView => {
-                let live_view_flag = self.engine.options.read().unwrap().cam.live_view;
-                let mode_kind = self.engine.modes().active.kind();
+                // Decision site: fresh snapshot, never the display cache
+                let snap = self.main_ui.fresh_snapshot();
+                let live_view_flag = snap.options.cam.live_view;
+                let mode_kind = snap.mode.kind;
                 if live_view_flag && mode_kind == ModeKind::Waiting {
                     self.start_live_view();
                 }
             }
             DelayedAction::UpdateCtrlWidgets => {
+                self.refresh_camera_caps();
                 self.correct_widgets_props();
             }
             DelayedAction::UpdateResolutionList => {
-                self.update_resolution_list();
-                let options = self.engine.options.read().unwrap();
+                // Fresh: an eventless option commit may have followed the
+                // HAL event that scheduled this action
+                let snap = self.main_ui.fresh_snapshot();
+                self.sync_suppress(|| self.update_resolution_list_impl(&snap.options));
                 self.init_fn_utils();
-                self.show_calibr_file_for_frame(&options);
-                drop(options);
+                self.show_calibr_file_for_frame(&snap.options);
             }
             DelayedAction::FillHeaterItems => {
-                self.fill_heater_items_list();
+                self.refresh_camera_caps();
+                let snap = self.main_ui.fresh_snapshot();
+                self.sync_suppress(|| self.fill_heater_items_list_impl(&snap.options));
             }
             DelayedAction::FillConvGainItems => {
-                self.fill_conv_gain_items_list();
+                self.refresh_camera_caps();
+                let snap = self.main_ui.fresh_snapshot();
+                self.sync_suppress(|| self.fill_conv_gain_items_list_impl(&snap.options));
             }
         }
     }
@@ -1301,7 +1336,9 @@ impl CameraUi {
     fn correct_widgets_props_impl(&self) {
         let widgets = &self.widgets;
 
-        let Some(camera) = self.engine.cur_devices.camera() else {
+        let snap = self.main_ui.snapshot();
+
+        let Some(cam_ref) = &snap.devices.camera else {
             widgets.common.bx_take_shot.set_sensitive(false);
             widgets.ctrl.grid.set_sensitive(false);
             widgets.frame.grid.set_sensitive(false);
@@ -1313,53 +1350,60 @@ impl CameraUi {
         };
         widgets.common.bx_take_shot.set_sensitive(true);
 
+        // These were live capability calls before the query API; the cache is
+        // refreshed on device/connect events and lazily when still empty
+        if self.camera_caps.borrow().is_none() {
+            self.refresh_camera_caps();
+        }
+        let caps = self.camera_caps().unwrap_or_default();
+
         // Exposure
-        let exp_range = camera.exposure_range().ok();
-        let exposure_supported = exp_range.is_some();
+        let exposure_supported = caps.exposure_range.is_some();
+        let exp_range = caps.exposure_range.map(|r| r.start..=r.end);
         correct_spinbutton_by_range(&widgets.frame.spb_exp, exp_range, 4, Some(1.0));
 
         // Temperature
-        let temp_supported = camera.is_cooler_supported().unwrap_or(false);
+        let temp_supported = caps.cooler_supported;
         if temp_supported {
-            let temp_range = camera.temperature_range().ok();
+            let temp_range = caps.temperature_range.map(|r| r.start..=r.end);
             correct_spinbutton_by_range(&widgets.ctrl.spb_temp, temp_range, 0, Some(1.0));
         }
 
         // Gain
-        let gain_supported = camera.is_gain_supported().unwrap_or(false);
+        let gain_supported = caps.gain_supported;
         if gain_supported {
-            let gain_range = camera.gain_range().ok();
+            let gain_range = caps.gain_range.map(|r| r.start..=r.end);
             correct_spinbutton_by_range(&widgets.frame.spb_gain, gain_range, 0, None);
         }
 
         // Offset
-        let offset_supported = camera.is_offset_supported().unwrap_or(false);
+        let offset_supported = caps.offset_supported;
         if offset_supported {
-            let offset_range = camera.offset_range().ok();
+            let offset_range = caps.offset_range.map(|r| r.start..=r.end);
             correct_spinbutton_by_range(&widgets.frame.spb_offset, offset_range, 0, None);
         }
 
         // Crop
-        let crop_supported = camera.is_frame_supported().unwrap_or(false);
+        let crop_supported = caps.frame_supported;
 
         // Binning
         // TODO: use max bin
-        let binning_supported = camera.is_binning_supported().unwrap_or(false);
+        let binning_supported = caps.binning_supported;
 
         // Fan
-        let fan_supported = camera.is_fan_ctrl_supported().unwrap_or(false);
+        let fan_supported = caps.fan_ctrl_supported;
 
         // Heater
-        let heater_supported = camera.is_heater_supported().unwrap_or(false);
+        let heater_supported = caps.heater_supported;
 
         // Low noise
-        let low_noise_supported = camera.is_low_noise_supported().unwrap_or(false);
+        let low_noise_supported = caps.low_noise_supported;
 
         // Conversion gain
-        let conv_gain_supported = camera.is_conversion_gain_supported().unwrap_or(false);
+        let conv_gain_supported = caps.conversion_gain_supported;
 
         // High fullwell mode
-        let high_fullwell_supported = camera.is_high_fullwell_supported().unwrap_or(false);
+        let high_fullwell_supported = caps.high_fullwell_supported;
 
         let cooler_active = widgets.ctrl.chb_cooler.is_active();
         let frame_mode_str = widgets.frame.cb_mode.active_id();
@@ -1370,22 +1414,20 @@ impl CameraUi {
         let frame_mode_is_flat = frame_mode == FrameType::Flats;
         let frame_mode_is_dark = frame_mode == FrameType::Darks;
 
-        let modes = self.engine.modes();
-        let mode_kind = modes.active.kind();
+        let mode_kind = snap.mode.kind;
         let waiting = mode_kind == ModeKind::Waiting;
         let single_shot = mode_kind == ModeKind::SingleShot;
         let liveview_active = mode_kind == ModeKind::LiveView;
         let saving_frames = mode_kind == ModeKind::SavingRawFrames;
-        let saving_frames_paused = modes.aborted
+        let saving_frames_paused = snap.mode.aborted
             .as_ref()
-            .map(|mode| mode.kind() == ModeKind::SavingRawFrames)
+            .map(|mode| mode.kind == ModeKind::SavingRawFrames)
             .unwrap_or(false);
         let live_active = mode_kind == ModeKind::LiveStacking;
-        let livestacking_paused = modes.aborted
+        let livestacking_paused = snap.mode.aborted
             .as_ref()
-            .map(|mode| mode.kind() == ModeKind::LiveStacking)
+            .map(|mode| mode.kind == ModeKind::LiveStacking)
             .unwrap_or(false);
-        drop(modes);
 
         let save_raw_btn_cap = match frame_mode {
             FrameType::Lights => "Start save\nLIGHTS",
@@ -1395,7 +1437,7 @@ impl CameraUi {
         };
         self.widgets.raw.btn_start.set_label(save_raw_btn_cap);
 
-        let cam_active = camera.is_active().unwrap_or(false);
+        let cam_active = cam_ref.is_active;
 
         let can_change_cam_opts = !saving_frames && !live_active;
         let can_change_mode = waiting || single_shot || liveview_active;
@@ -1527,16 +1569,17 @@ impl CameraUi {
     }
 
     fn update_devices_list(&self) {
-        let options = self.engine.options.read().unwrap();
-        let cur_cam_device = options.cam.device_id.clone();
-        drop(options);
+        let cur_cam_device = self.main_ui.snapshot().options.cam.device_id.clone();
 
-        let Ok(cameras) = self.engine.hal.devices(DeviceType::CAMERA) else {
-            return;
+        let devices = match self.query_reply(Query::Devices) {
+            Ok(QueryReply::Devices(devices)) => devices,
+            Ok(_) => { log::error!("Query::Devices: unexpected reply"); return; }
+            Err(err) => { log::error!("Query::Devices: {err:#}"); return; }
         };
 
-        let cameras_ids_and_names: Vec<_> = cameras
+        let cameras_ids_and_names: Vec<_> = devices
             .into_iter()
+            .filter(|d| d.type_.contains(DeviceType::CAMERA))
             .map(|d| (d.id, d.name))
             .collect();
 
@@ -1585,16 +1628,6 @@ impl CameraUi {
         }
     }
 
-    fn update_resolution_list(&self) {
-        let options = self.engine.options.read().unwrap();
-        self.sync_suppress(|| self.update_resolution_list_impl(&options));
-    }
-
-    fn fill_heater_items_list(&self) {
-        let options = self.engine.options.read().unwrap();
-        self.sync_suppress(|| self.fill_heater_items_list_impl(&options));
-    }
-
     fn fill_heater_items_list_impl(&self, options: &Options) {
         exec_and_show_error(Some(&self.window), || {
             let cb = &self.widgets.ctrl.cb_heater;
@@ -1602,7 +1635,7 @@ impl CameraUi {
             cb.remove_all();
             let Some(camera) = self.engine.cur_devices.camera() else { return Ok(()); };
 
-            if !camera.is_heater_supported()? { return Ok(()); }
+            if !self.camera_caps().is_some_and(|caps| caps.heater_supported) { return Ok(()); }
             let items = camera.heater_ctrl_list()?;
             for (id, label) in items {
                 cb.append(Some(id.as_str()), &label);
@@ -1619,11 +1652,6 @@ impl CameraUi {
         });
     }
 
-    fn fill_conv_gain_items_list(&self) {
-        let options = self.engine.options.read().unwrap();
-        self.sync_suppress(|| self.fill_conv_gain_items_list_impl(&options));
-    }
-
     fn fill_conv_gain_items_list_impl(&self, options: &Options) {
         exec_and_show_error(Some(&self.window), ||{
             let cb = &self.widgets.ctrl.cb_conv_gain;
@@ -1631,7 +1659,7 @@ impl CameraUi {
             cb.remove_all();
 
             let Some(camera) = self.engine.cur_devices.camera() else { return Ok(()); };
-            if !camera.is_conversion_gain_supported()? { return Ok(()) }
+            if !self.camera_caps().is_some_and(|caps| caps.conversion_gain_supported) { return Ok(()) }
             let Ok(items) = camera.conversion_gain_list() else { return Ok(()); };
             for (id, label) in items {
                 cb.append(Some(id.as_str()), &label);
@@ -1674,8 +1702,8 @@ impl CameraUi {
         device_id: &str,
         temperature: f64
     ) {
-        let options = self.engine.options.read().unwrap();
-        if options.cam.device_id == device_id {
+        let snap = self.main_ui.snapshot();
+        if snap.options.cam.device_id == device_id {
             self.widgets.info.l_temp_value.set_label(
                 &format!("T: {:.1}°C", temperature)
             );
@@ -1683,8 +1711,8 @@ impl CameraUi {
     }
 
     fn show_coolpwr_value(&self, device_id: &str, pwr: f64) {
-        let options = self.engine.options.read().unwrap();
-        if options.cam.device_id == device_id {
+        let snap = self.main_ui.snapshot();
+        if snap.options.cam.device_id == device_id {
             self.widgets.info.l_coolpwr_value.set_label(
                 &format!("Pwr: {:.1}", pwr)
             );
@@ -1692,13 +1720,14 @@ impl CameraUi {
     }
 
     fn handler_live_view_changed(&self) {
-        let camera_active = self.engine.cur_devices.camera()
-            .and_then(|c| c.is_active().ok())
-            .unwrap_or(false);
-        if !camera_active {
+        // Decides start/stop after this panel's own `SetLiveViewEnabled`
+        // (an eventless command): fresh snapshot
+        let snap = self.main_ui.fresh_snapshot();
+        let Some(cam_ref) = &snap.devices.camera else { return; };
+        if !cam_ref.is_active {
             return;
         }
-        if self.engine.options.read().unwrap().cam.live_view {
+        if snap.options.cam.live_view {
             self.start_live_view();
         } else {
             log_if_error(
@@ -1762,8 +1791,9 @@ impl CameraUi {
         area: &gtk::DrawingArea,
         cr:   &cairo::Context
     ) {
-        let modes = self.engine.modes();
-        let Some(cur_exposure) = modes.active.get_cur_exposure() else {
+        // Decision site of the shot progress overlay: fresh snapshot
+        let snap = self.main_ui.fresh_snapshot();
+        let Some(cur_exposure) = snap.mode.cur_exposure else {
             return;
         };
         if cur_exposure < 1.0 { return; };
@@ -1778,7 +1808,9 @@ impl CameraUi {
 
     fn get_short_info(&self, for_live_stacking: bool) -> Vec<(String, String, bool)> {
         let mut result = Vec::new();
-        let options = self.engine.options.read().unwrap();
+        // Start dialog: must show the very last (possibly eventless) commits
+        let snap = self.main_ui.fresh_snapshot();
+        let options = &snap.options;
         let total_time = options.cam.frame.exposure() * options.raw_frames.frame_cnt as f64;
         let light_frames = options.cam.frame.frame_type == FrameType::Lights;
 
@@ -1935,8 +1967,9 @@ impl CameraUi {
     }
 
     fn show_total_raw_time(&self) {
-        let options = self.engine.options.read().unwrap();
-        self.show_total_raw_time_impl(&options);
+        // Also called right after eventless option commits from panel widgets
+        let snap = self.main_ui.fresh_snapshot();
+        self.show_total_raw_time_impl(&snap.options);
     }
 
     fn show_frame_processing_result(&self, result: &FrameProcessNotification) {

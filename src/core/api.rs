@@ -506,7 +506,7 @@ pub struct FloatRange {
 /// A `*_supported` flag mirrors the trait `is_*_supported()` result; a range
 /// is `None` when unsupported, the read failed (logged), or the capability
 /// gate is false.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct CameraCaps {
     /// `None` also means 'exposure not supported' (mirrors the panel check)
     pub exposure_range:            Option<FloatRange>,
