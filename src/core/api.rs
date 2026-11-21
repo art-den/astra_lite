@@ -573,6 +573,8 @@ pub enum Query {
     /// incremental fetch by change_id).
     IndiProperties { since: Option<u64> },
     /// Grouped INDI driver registry (device driver lists).
+    /// Note: in the reply's `DriverInterface` bitflags the `GENERAL` flag is
+    /// the zero value and serializes as an empty string (see its docs).
     IndiDrivers,
     /// Sites of all connected telescopes. Makes blocking `site()` HAL
     /// calls: must go through `submit_command`, not the caller's thread.

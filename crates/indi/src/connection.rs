@@ -119,8 +119,12 @@ pub struct DriverInfo {
 }
 
 bitflags! {
+    /// INDI driver interface bitmask. Wire format note: `GENERAL` is the zero
+    /// value, so it serializes to `""` in JSON; a client must interpret `""`
+    /// as GENERAL / empty set (the two are indistinguishable on the wire).
     #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
     pub struct DriverInterface: u32 {
+        /// Zero-value flag: serializes as `""` (see the wire format note above)
         const GENERAL       = 0;
         const TELESCOPE     = (1 << 0);
         const CCD           = (1 << 1);
