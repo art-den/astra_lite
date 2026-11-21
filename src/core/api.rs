@@ -88,11 +88,11 @@ fn focuser_move_by_target(
     start:  f64,
     end:    f64,
 ) -> eyre::Result<Option<f64>> {
-    if !pos.is_finite() || !start.is_finite() || !end.is_finite() || start > end {
+    if !f64::is_finite(pos) || !f64::is_finite(start) || !f64::is_finite(end) || start > end {
         eyre::bail!("Focuser MoveBy: invalid position {pos} or range {start}..{end}");
     }
     let target = pos + offset;
-    if target.is_nan() {
+    if f64::is_nan(target) {
         eyre::bail!("Focuser MoveBy: NaN offset {offset}");
     }
     let target = f64::clamp(target, start, end);

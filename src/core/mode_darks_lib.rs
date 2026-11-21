@@ -344,8 +344,8 @@ fn build_defect_pixels_program(
             let frame_count = match opts.frm_cnt_mode {
                 FramesCountMode::Count => multiple_of_5(opts.frames_count),
                 FramesCountMode::Time => {
-                    if !exposure.is_finite() || exposure <= 0.0
-                        || !opts.integr_time.is_finite() {
+                    if !f64::is_finite(exposure) || exposure <= 0.0
+                        || !f64::is_finite(opts.integr_time) {
                         continue;
                     }
                     multiple_of_5((60.0 * opts.integr_time / exposure) as usize)
@@ -391,8 +391,8 @@ fn build_master_darks_program(
                             let mut frame_count = match opts.frm_cnt_mode {
                                 FramesCountMode::Count => opts.frames_count,
                                 FramesCountMode::Time => {
-                                    if !exp.is_finite() || *exp <= 0.0
-                                        || !opts.integr_time.is_finite() {
+                                    if !f64::is_finite(*exp) || *exp <= 0.0
+                                        || !f64::is_finite(opts.integr_time) {
                                         continue;
                                     }
                                     (60.0 * opts.integr_time / *exp) as usize
