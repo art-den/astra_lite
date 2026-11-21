@@ -30,9 +30,9 @@ use crate::{
 use crate::hal::HalImpl;
 
 /// Device domain gated by the engine busy flag for this command.
-/// Device-selection, mode lifecycle and option commands below are fast and
-/// intentionally not gated; new device-domain variants must be added here
-/// explicitly (no wildcard arm).
+/// Mode lifecycle and option commands below are fast and intentionally not
+/// gated; new device-domain variants must be added here explicitly (no
+/// wildcard arm).
 fn busy_domain_of(cmd: &Command) -> Option<BusyDomain> {
     match cmd {
         Command::Mount(_)       => Some(BusyDomain::Mount),
@@ -41,6 +41,10 @@ fn busy_domain_of(cmd: &Command) -> Option<BusyDomain> {
         Command::Guider(_)      => Some(BusyDomain::Guider),
         Command::Indi(_)        => Some(BusyDomain::Indi),
         Command::Connect(_)     => Some(BusyDomain::Connect),
+        // Device selection synchronously deactivates/activates HAL devices
+        Command::SetCameraDevice{..} | Command::SetMountDevice{..}
+        | Command::SetFocuserDevice{..} | Command::SetFilterWheelDevice{..}
+            => Some(BusyDomain::Connect),
         Command::Mode(_)
         | Command::Start(_)
         | Command::StopActiveMode
@@ -48,8 +52,6 @@ fn busy_domain_of(cmd: &Command) -> Option<BusyDomain> {
         | Command::Shutdown { .. } | Command::SaveOptions
         | Command::GetSnapshot
         | Command::Query(Query::Devices | Query::CameraCaps | Query::IndiProperties { .. } | Query::IndiDrivers | Query::AllMountSites)
-        | Command::SetCameraDevice{..} | Command::SetMountDevice{..}
-        | Command::SetFocuserDevice{..} | Command::SetFilterWheelDevice{..}
         | Command::OpenImageFile{..}
         | Command::Preview(_) => None,
         // Option commands:
@@ -423,11 +425,13 @@ pub struct IndiSelPatch {
 /// not run long/blocking work while holding engine locks.
 ///
 /// Threading contract:
-/// - `exec_command` runs synchronously on the caller's thread. Option and
-///   device-selection commands are fast and may be called from the UI thread;
-///   device-domain commands (Mount/Focuser/FilterWheel/Guider/Indi/Connect)
-///   block until the device operation returns — UI code should use
-///   `submit_command` for those.
+/// - `exec_command` runs synchronously on the caller's thread. Option
+///   commands are fast and may be called from the UI thread; device-selection
+///   commands re-activate HAL devices synchronously (seconds on connect/
+///   disconnect) and are gated by `BusyDomain::Connect`: while that domain is
+///   busy they fail immediately with a "busy" error; device-domain commands
+///   (Mount/Focuser/FilterWheel/Guider/Indi/Connect) block until the device
+///   operation returns — UI code should use `submit_command` for those.
 /// - Fast read commands (`GetSnapshot`, fast queries) must be executed with
 ///   `exec_command` only: through the submit queue they would serialize behind
 ///   blocking device commands. Blocking device queries must use
@@ -1524,6 +1528,17 @@ mod tests {
         ] {
             roundtrip(reply);
         }
+    }
+
+    #[test]
+    fn device_selection_is_connect_gated() {
+        let engine = Engine::new();
+        let guard = engine.lock_device_busy(BusyDomain::Connect).unwrap();
+        let err = engine.exec_command(Command::SetCameraDevice {
+            device_id: "cam1".to_string()
+        }).unwrap_err();
+        assert!(format!("{err:#}").contains("busy"), "unexpected error: {err:#}");
+        drop(guard);
     }
 
     #[test]
