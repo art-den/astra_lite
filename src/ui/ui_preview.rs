@@ -1442,13 +1442,11 @@ impl PreviewUi {
         );
         let Some((image_x, image_y)) = image_coords else { return; };
 
-        let Ok(options) = self.engine.options.try_read() else {
-            return;
-        };
+        let snap = self.main_ui.fresh_snapshot();
 
-        let pp = options.preview.preview_params();
-        let cur_scale = options.preview.scale;
-        drop(options);
+        let pp = snap.options.preview.preview_params();
+        let cur_scale = snap.options.preview.scale;
+        drop(snap);
 
         let (orig_img_width, orig_img_height)  = self.image_size.get();
 
