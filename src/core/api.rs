@@ -1032,17 +1032,16 @@ impl Engine {
                 self.options.write().unwrap().ascom_alpaca.address = address;
                 Ok(Reply::Empty)
             }
-            // Unparseable sexagesimal text keeps the old value (panel fallback semantics)
             Command::SetSiteLatitude { sexagesimal } => {
-                if let Some(v) = ::indi::sexagesimal_to_value(&sexagesimal) {
-                    self.options.write().unwrap().site.latitude = v;
-                }
+                let v = ::indi::sexagesimal_to_value(&sexagesimal)
+                    .ok_or_else(|| eyre::eyre!("Unparseable latitude: {sexagesimal:?}"))?;
+                self.options.write().unwrap().site.latitude = v;
                 Ok(Reply::Empty)
             }
             Command::SetSiteLongitude { sexagesimal } => {
-                if let Some(v) = ::indi::sexagesimal_to_value(&sexagesimal) {
-                    self.options.write().unwrap().site.longitude = v;
-                }
+                let v = ::indi::sexagesimal_to_value(&sexagesimal)
+                    .ok_or_else(|| eyre::eyre!("Unparseable longitude: {sexagesimal:?}"))?;
+                self.options.write().unwrap().site.longitude = v;
                 Ok(Reply::Empty)
             }
             Command::SetTelescopeFromPlateSolve { enabled } => {
@@ -1608,10 +1607,10 @@ mod tests {
     fn site_and_indi_selection_commands() {
         let engine = Engine::new();
 
-        // Unparseable sexagesimal text keeps the old value (panel fallback semantics)
+        // Unparseable sexagesimal text is an error; the old value is kept
         assert!(engine.exec_command(Command::SetSiteLatitude {
             sexagesimal: "nonsense".to_string()
-        }).is_ok());
+        }).is_err());
         assert_eq!(engine.options.read().unwrap().site.latitude, 0.0);
         assert!(engine.exec_command(Command::SetSiteLongitude {
             sexagesimal: "-10:30".to_string()
