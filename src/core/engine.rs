@@ -11,7 +11,7 @@ use crate::{
 };
 
 use super::{
-    api::{Command, ModeCommand, ModeCommandReply, is_read_only},
+    api::{Command, ModeCommand, ModeCommandReply},
     events::*,
     frame_processing::*,
     snapshot::{ConnectedDevicesState, DeviceRef, DeviceState, LiveStackingNums,
@@ -274,11 +274,8 @@ impl Engine {
     fn command_queue_loop(rx: mpsc::Receiver<QueuedCommand>, engine: Weak<Engine>) {
         while let Ok(qc) = rx.recv() {
             let Some(engine) = engine.upgrade() else { break };
-            let read_only = is_read_only(&qc.cmd);
+            // `exec_command` is the single place that bumps `seq` for commands
             let result = engine.exec_command(qc.cmd);
-            if result.is_ok() && !read_only {
-                engine.seq.fetch_add(1, Ordering::Relaxed);
-            }
             engine.events.send(Event::CommandReply {
                 id:     qc.id,
                 result: result.map_err(|err| format!("{err:#}")),
