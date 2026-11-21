@@ -50,397 +50,6 @@ pub fn init_ui(
 }
 
 
-fn multiple_of_5(v: usize) -> usize {
-    ((v + 4) / 5) * 5
-}
-
-#[derive(Serialize, Default, Deserialize, Debug, PartialEq, Eq)]
-enum FramesCountMode {
-    Count,
-    #[default]
-    Time,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(default)]
-struct BinningOptions {
-    used:   bool,
-    bin1x1: bool,
-    bin2x2: bool,
-    bin4x4: bool,
-}
-
-impl Default for BinningOptions {
-    fn default() -> Self {
-        Self {
-            used:   false,
-            bin1x1: true,
-            bin2x2: false,
-            bin4x4: false
-        }
-    }
-}
-
-impl BinningOptions {
-    fn get_binnings(&self) -> Vec<Binning> {
-        let mut result = Vec::new();
-        if self.used {
-            if self.bin1x1 { result.push(Binning::Orig); }
-            if self.bin2x2 { result.push(Binning::Bin2); }
-            if self.bin4x4 { result.push(Binning::Bin4); }
-        }
-        result
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(default)]
-struct CropOptions {
-    used:    bool,
-    crop100: bool,
-    crop75:  bool,
-    crop50:  bool,
-    crop33:  bool,
-    crop25:  bool,
-}
-
-impl Default for CropOptions {
-    fn default() -> Self {
-        Self {
-            used:    false,
-            crop100: true,
-            crop75:  false,
-            crop50:  false,
-            crop33:  false,
-            crop25:  false
-        }
-    }
-}
-
-impl CropOptions {
-    fn get_crops(&self) -> Vec<Crop> {
-        let mut result = Vec::new();
-        if self.used {
-            if self.crop100 { result.push(Crop::None); }
-            if self.crop75 { result.push(Crop::P75); }
-            if self.crop50 { result.push(Crop::P50); }
-            if self.crop33 { result.push(Crop::P33); }
-            if self.crop25 { result.push(Crop::P25); }
-        }
-        result
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(default)]
-struct DefectPixelsOptions {
-    frm_cnt_mode:     FramesCountMode,
-    frames_count:     usize,
-    integr_time:      f64, // minutes
-    temperature_used: bool,
-    temperature:      f64,
-    exposure_used:    bool,
-    exposure:         f64,
-    gain_used:        bool,
-    gain:             f64,
-    offset_used:      bool,
-    offset:           f64,
-    binning:          BinningOptions,
-    crop:             CropOptions,
-}
-
-impl Default for DefectPixelsOptions {
-    fn default() -> Self {
-        Self {
-            frm_cnt_mode:     FramesCountMode::default(),
-            frames_count:     18,
-            integr_time:      15.0,
-            temperature_used: false,
-            temperature:      5.0,
-            exposure_used:    false,
-            exposure:         30.0,
-            gain_used:        false,
-            gain:             100.0,
-            offset_used:      false,
-            offset:           100.0,
-            binning:          BinningOptions::default(),
-            crop:             CropOptions::default(),
-        }
-    }
-}
-
-impl DefectPixelsOptions {
-    fn create_program(
-        &self,
-        cam_opts: &CamOptions,
-        camera:   &Arc<dyn Camera + Send + Sync>,
-    ) -> eyre::Result<Vec<MasterFileCreationProgramItem>> {
-        let mut result = Vec::new();
-
-        let mut binnings = self.binning.get_binnings();
-        if binnings.is_empty() { binnings.push( cam_opts.frame.binning); }
-        let mut crops = self.crop.get_crops();
-        if crops.is_empty() { crops.push(cam_opts.frame.crop); }
-
-        let temperature = if camera.is_cooler_supported()? {
-            if self.temperature_used {
-                Some(self.temperature)
-            } else if cam_opts.ctrl.enable_cooler {
-                Some(cam_opts.ctrl.temperature)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        let exposure = if self.exposure_used { self.exposure } else { cam_opts.frame.exp_main };
-
-        let gain = if self.gain_used { self.gain } else {  cam_opts.frame.gain };
-        let offset = if self.offset_used { self.offset as i32 } else {  cam_opts.frame.offset };
-
-        for bin in &binnings {
-            for crop in &crops {
-                let frame_count = match self.frm_cnt_mode {
-                    FramesCountMode::Count => self.frames_count,
-                    FramesCountMode::Time => {
-                        let cnt = (60.0 * self.integr_time / exposure) as usize;
-                        multiple_of_5(cnt)
-                    }
-                };
-                if frame_count == 0 { continue; }
-                let item = MasterFileCreationProgramItem {
-                    count:      frame_count,
-                    binning:    *bin,
-                    crop:       *crop,
-                    temperature,
-                    exposure,
-                    gain,
-                    offset,
-                };
-                result.push(item);
-            }
-        }
-
-        Ok(result)
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Default)]
-#[serde(default)]
-struct ValuesItem {
-    used:   bool,
-    values: Vec<f64>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(default)]
-struct MasterDarksOptions {
-    frm_cnt_mode: FramesCountMode,
-    frames_count: usize,
-    integr_time:  f64, // minutes
-    temperature:  ValuesItem,
-    exposure:     ValuesItem,
-    gain:         ValuesItem,
-    offset:       ValuesItem,
-    binning:      BinningOptions,
-    crop:         CropOptions,
-    min_count_en: bool,
-    min_count:    usize,
-}
-
-impl Default for MasterDarksOptions {
-    fn default() -> Self {
-        Self {
-            frm_cnt_mode: FramesCountMode::default(),
-            frames_count: 30,
-            integr_time:  60.0,
-            temperature:  ValuesItem::default(),
-            exposure:     ValuesItem::default(),
-            gain:         ValuesItem::default(),
-            offset:       ValuesItem::default(),
-            binning:      BinningOptions::default(),
-            crop:         CropOptions::default(),
-            min_count_en: true,
-            min_count:    60,
-        }
-    }
-}
-
-impl MasterDarksOptions {
-    fn create_program(
-        &self,
-        cam_opts: &CamOptions,
-        camera:   &Arc<dyn Camera + Send + Sync>,
-    ) -> eyre::Result<Vec<MasterFileCreationProgramItem>> {
-        let mut result = Vec::new();
-
-        let mut temperatures = Vec::new();
-        if camera.is_cooler_supported()? {
-            if self.temperature.used && !self.temperature.values.is_empty() {
-                for t in &self.temperature.values {
-                    temperatures.push(Some(*t));
-                }
-            } else if cam_opts.ctrl.enable_cooler {
-                temperatures.push(Some(cam_opts.ctrl.temperature));
-            }
-        }
-        if temperatures.is_empty() {
-            temperatures.push(None);
-        }
-
-        let get = |item: &ValuesItem, default: f64| -> Vec<f64> {
-            let mut values = Vec::new();
-            if item.used && !item.values.is_empty() {
-                values.extend_from_slice(&item.values);
-            } else {
-                values.push(default);
-            }
-            values
-        };
-
-        let exposures = get(&self.exposure, cam_opts.frame.exp_main);
-
-        let gains = get(&self.gain, cam_opts.frame.gain);
-        let offsets = get(&self.offset, cam_opts.frame.offset as f64);
-        let mut binnings = self.binning.get_binnings();
-        if binnings.is_empty() { binnings.push( cam_opts.frame.binning); }
-        let mut crops = self.crop.get_crops();
-        if crops.is_empty() { crops.push(cam_opts.frame.crop); }
-
-        for t in &temperatures {
-            for bin in &binnings {
-                for crop in &crops {
-                    for exp in &exposures {
-                        for gain in &gains {
-                            for offset in &offsets {
-                                let mut frame_count = match self.frm_cnt_mode {
-                                    FramesCountMode::Count =>
-                                        self.frames_count,
-                                    FramesCountMode::Time =>
-                                        (60.0 * self.integr_time / *exp) as usize,
-                                };
-                                if frame_count == 0 { continue; }
-
-                                if self.frm_cnt_mode == FramesCountMode::Time
-                                && self.min_count_en
-                                && frame_count < self.min_count {
-                                    frame_count = self.min_count;
-                                }
-
-                                let item = MasterFileCreationProgramItem {
-                                    count:       multiple_of_5(frame_count),
-                                    temperature: *t,
-                                    exposure:    *exp,
-                                    gain:        *gain,
-                                    offset:      *offset as i32,
-                                    binning:     *bin,
-                                    crop:        *crop,
-                                };
-                                result.push(item);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(result)
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(default)]
-struct MasterBiasesOptions {
-    frames_count: usize,
-    temperature:  ValuesItem,
-    exposure:     f64,
-    gain:         ValuesItem,
-    offset:       ValuesItem,
-    binning:      BinningOptions,
-    crop:         CropOptions,
-}
-
-impl Default for MasterBiasesOptions {
-    fn default() -> Self {
-        Self {
-            frames_count: 60,
-            temperature:  ValuesItem::default(),
-            exposure:     0.0001,
-            gain:         ValuesItem::default(),
-            offset:       ValuesItem::default(),
-            binning:      BinningOptions::default(),
-            crop:         CropOptions::default(),
-        }
-    }
-}
-
-impl MasterBiasesOptions {
-    fn create_program(
-        &self,
-        cam_opts: &CamOptions,
-        camera:   &Arc<dyn Camera + Send + Sync>,
-    ) -> eyre::Result<Vec<MasterFileCreationProgramItem>> {
-        let mut result = Vec::new();
-
-        let mut temperatures = Vec::new();
-        if camera.is_cooler_supported()? {
-            if self.temperature.used && !self.temperature.values.is_empty() {
-                for t in &self.temperature.values {
-                    temperatures.push(Some(*t));
-                }
-            } else if cam_opts.ctrl.enable_cooler {
-                temperatures.push(Some(cam_opts.ctrl.temperature));
-            }
-        }
-
-        if temperatures.is_empty() {
-            temperatures.push(None);
-        }
-
-        let get = |item: &ValuesItem, default: f64| -> Vec<f64> {
-            let mut values = Vec::new();
-            if item.used && !item.values.is_empty() {
-                values.extend_from_slice(&item.values);
-            } else {
-                values.push(default);
-            }
-            values
-        };
-
-        let gains = get(&self.gain, cam_opts.frame.gain);
-        let offsets = get(&self.offset, cam_opts.frame.offset as f64);
-        let mut binnings = self.binning.get_binnings();
-        if binnings.is_empty() { binnings.push( cam_opts.frame.binning); }
-        let mut crops = self.crop.get_crops();
-        if crops.is_empty() { crops.push(cam_opts.frame.crop); }
-
-        for t in &temperatures {
-            for bin in &binnings {
-                for crop in &crops {
-                    for gain in &gains {
-                        for offset in &offsets {
-                            let item = MasterFileCreationProgramItem {
-                                count:       self.frames_count,
-                                temperature: *t,
-                                exposure:    self.exposure,
-                                gain:        *gain,
-                                offset:      *offset as i32,
-                                binning:     *bin,
-                                crop:        *crop,
-                            };
-                            result.push(item);
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(result)
-    }
-}
-
-
 #[derive(Serialize, Deserialize, Debug, Default)]
 #[serde(default)]
 struct UiOptions {
@@ -849,13 +458,6 @@ impl DarksLibraryUI {
         bias_o.crop.crop50 = bias_w.chb_bias_crop50.is_active();
         bias_o.crop.crop33 = bias_w.chb_bias_crop33.is_active();
         bias_o.crop.crop25 = bias_w.chb_bias_crop25.is_active();
-
-        // Make sure the the frame count is a multiple of 5
-
-        ui_options.defect_pixels.frames_count = multiple_of_5(ui_options.defect_pixels.frames_count);
-        ui_options.master_darks.frames_count = multiple_of_5(ui_options.master_darks.frames_count);
-        ui_options.master_darks.min_count = multiple_of_5(ui_options.master_darks.min_count);
-        ui_options.master_biases.frames_count = multiple_of_5(ui_options.master_biases.frames_count);
     }
 
     fn connect_widgets_events(self: &Rc<Self>) {
@@ -1050,20 +652,35 @@ impl DarksLibraryUI {
         let Some(camera) = self.engine.cur_devices.camera() else { return; };
         let options = self.engine.options.read().unwrap();
 
-        let defect_pixels_program = ui_options.defect_pixels.create_program(&options.cam, &camera);
+        let defect_pixels_program = self.build_program_sync(
+            &DarkLibSpec::DefectPixels(ui_options.defect_pixels.clone()), &camera, &options.cam);
         if let Ok(defect_pixels_program) = defect_pixels_program {
             self.show_program_info(&defect_pixels_program, &self.widgets.dp.l_def_info);
         };
 
-        let dark_library_program = ui_options.master_darks.create_program(&options.cam, &camera);
+        let dark_library_program = self.build_program_sync(
+            &DarkLibSpec::MasterDarks(ui_options.master_darks.clone()), &camera, &options.cam);
         if let Ok(dark_library_program) = dark_library_program {
             self.show_program_info(&dark_library_program,  &self.widgets.darks.l_dark_info);
         }
 
-        let bias_library_program = ui_options.master_biases.create_program(&options.cam, &camera);
+        let bias_library_program = self.build_program_sync(
+            &DarkLibSpec::MasterBiases(ui_options.master_biases.clone()), &camera, &options.cam);
         if let Ok(bias_library_program) = bias_library_program {
             self.show_program_info(&bias_library_program, &self.widgets.biases.l_bias_info);
         }
+    }
+
+    /// Temporary wrapper until the `BuildDarkLibraryProgram` command:
+    /// resolves the cooler capability via HAL on the GTK thread (as before).
+    fn build_program_sync(
+        &self,
+        spec:     &DarkLibSpec,
+        camera:   &Arc<dyn Camera + Send + Sync>,
+        cam_opts: &CamOptions,
+    ) -> eyre::Result<Vec<MasterFileCreationProgramItem>> {
+        let cooler_supported = camera.is_cooler_supported()?;
+        Ok(build_program(spec, cam_opts, cooler_supported))
     }
 
     fn show_program_info(
@@ -1094,14 +711,15 @@ impl DarksLibraryUI {
             let options = self.engine.options.read().unwrap();
             let ui_options = self.ui_options.borrow();
 
-            let program = match mode {
+            let spec = match &mode {
                 DarkLibMode::DefectPixels =>
-                    ui_options.defect_pixels.create_program(&options.cam, &camera)?,
+                    DarkLibSpec::DefectPixels(ui_options.defect_pixels.clone()),
                 DarkLibMode::MasterDark =>
-                    ui_options.master_darks.create_program(&options.cam, &camera)?,
+                    DarkLibSpec::MasterDarks(ui_options.master_darks.clone()),
                 DarkLibMode::MasterBias =>
-                    ui_options.master_biases.create_program(&options.cam, &camera)?,
+                    DarkLibSpec::MasterBiases(ui_options.master_biases.clone()),
             };
+            let program = build_program(&spec, &options.cam, camera.is_cooler_supported()?);
             drop(ui_options);
             drop(options);
 
