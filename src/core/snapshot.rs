@@ -66,8 +66,18 @@ pub struct DeviceRef {
 /// Serializable union of the HAL trait `state()` results.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum DeviceState {
-    Telescope(TelescopeState),
+    Telescope(TelescopeDeviceState),
     Focuser(FocuserState),
+}
+
+/// Mount state plus the flags the mount panel shows. Each field maps a
+/// separate trait call (`state()`/`is_parked()`/`is_tracking()`): a failed
+/// read becomes `None`/`false`, same as the panel's `unwrap_or` fallbacks.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct TelescopeDeviceState {
+    pub state:       Option<TelescopeState>,
+    pub is_parked:   bool,
+    pub is_tracking: bool,
 }
 
 /// Connected devices plus the per-backend connection states and guider state.

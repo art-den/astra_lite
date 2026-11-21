@@ -15,7 +15,7 @@ use super::{
     events::*,
     frame_processing::*,
     snapshot::{ConnectedDevicesState, DeviceRef, DeviceState, LiveStackingNums,
-        ModeState, StateSnapshot, opt_logged},
+        ModeState, StateSnapshot, TelescopeDeviceState, opt_logged},
     mode_platesolve::*,
     mode_darks_lib::*,
     mode_focusing::*,
@@ -419,7 +419,11 @@ impl Engine {
             mount: self.cur_devices.telescope().map(|mnt| DeviceRef {
                 id: mnt.id().to_string(),
                 is_active: opt_logged("mount is_active", mnt.is_active()).unwrap_or(false),
-                state: opt_logged("mount state", mnt.state()).map(DeviceState::Telescope),
+                state: Some(DeviceState::Telescope(TelescopeDeviceState {
+                    state:       opt_logged("mount state", mnt.state()),
+                    is_parked:   opt_logged("mount is_parked", mnt.is_parked()).unwrap_or(false),
+                    is_tracking: opt_logged("mount is_tracking", mnt.is_tracking()).unwrap_or(false),
+                })),
             }),
             focuser: self.cur_devices.focuser().map(|foc| DeviceRef {
                 id: foc.id().to_string(),

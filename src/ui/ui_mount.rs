@@ -3,7 +3,10 @@ use gtk::{glib, prelude::*, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
-    core::{api::{Command, MountCommand, MountPatch}, engine::{Engine, ModeKind}, events::*},
+    core::{
+        api::{Command, MountCommand, MountPatch, Query, QueryReply, Reply},
+        engine::{Engine, ModeKind}, events::*, snapshot::DeviceState,
+    },
     hal::{DeviceType, HalState, TelescopeMoveDir, TelescopeState, events::HalEvent},
     options::*,
     ui::ui_main::MainUi,
@@ -218,32 +221,32 @@ impl UiModule for MountUi {
                 }
             }
             HalEvent::TelescopeSlewRateListReady(device_id) => {
-                let option = self.engine.options.read().unwrap();
-                if option.mount.device == **device_id {
+                let snap = self.main_ui.snapshot();
+                if snap.options.mount.device == **device_id {
                     self.delayed_actions.schedule(DelayedAction::FillMountSpdList);
                 }
             }
             HalEvent::TelescopeStateChanged { device_id, state } => {
-                let option = self.engine.options.read().unwrap();
-                if option.mount.device == **device_id {
+                let snap = self.main_ui.snapshot();
+                if snap.options.mount.device == **device_id {
                     self.show_info(Some(*state));
                 }
             }
             HalEvent::TelescopeTrackingChanged { device_id, tracking } => {
-                let option = self.engine.options.read().unwrap();
-                if option.mount.device == **device_id {
+                let snap = self.main_ui.snapshot();
+                if snap.options.mount.device == **device_id {
                     self.show_mount_tracking_state(*tracking);
                 }
             }
             HalEvent::TelescopeParked(device_id) => {
-                let option = self.engine.options.read().unwrap();
-                if option.mount.device == **device_id {
+                let snap = self.main_ui.snapshot();
+                if snap.options.mount.device == **device_id {
                     self.show_mount_parked_state(true);
                 }
             }
             HalEvent::TelescopeUnparked(device_id) => {
-                let option = self.engine.options.read().unwrap();
-                if option.mount.device == **device_id {
+                let snap = self.main_ui.snapshot();
+                if snap.options.mount.device == **device_id {
                     self.show_mount_parked_state(false);
                 }
             }
@@ -376,12 +379,10 @@ impl MountUi {
     }
 
     fn correct_widgets_props(&self) {
-        let mnt_active = self.engine.cur_devices.telescope()
-            .and_then(|t| t.is_active().ok())
-            .unwrap_or(false);
+        let snap = self.main_ui.snapshot();
+        let mnt_active = snap.devices.mount.as_ref().is_some_and(|m| m.is_active);
 
-        let modes = self.engine.modes();
-        let mode_kind = modes.active.kind();
+        let mode_kind = snap.mode.kind;
         let waiting = mode_kind == ModeKind::Waiting;
         let live_view = mode_kind == ModeKind::LiveView;
         let single_shot = mode_kind == ModeKind::SingleShot;
@@ -447,16 +448,15 @@ impl MountUi {
     }
 
     fn fill_devices_list(&self) {
-        let options = self.engine.options.read().unwrap();
-        let cur_mount = options.mount.device.clone();
-        drop(options);
+        let cur_mount = self.main_ui.snapshot().options.mount.device.clone();
 
-        let Ok(mounts) = self.engine.hal.devices(DeviceType::TELESCOPE) else {
-            return;
-        };
+        let Ok(Reply::Query(q)) = self.engine.exec_command(Command::Query(Query::Devices))
+        else { return; };
+        let QueryReply::Devices(devices) = *q else { return; };
 
-        let mounts_ids_and_names = mounts
+        let mounts_ids_and_names = devices
             .into_iter()
+            .filter(|dev| dev.type_.contains(DeviceType::TELESCOPE))
             .map(|dev| (dev.id, dev.name))
             .collect::<Vec<_>>();
 
@@ -476,13 +476,17 @@ impl MountUi {
     }
 
     fn fill_mount_speed_list_widget(&self) {
+        // Exception (follow-up `Query::MountNav`): `slew_speed_list()` is a
+        // live mount read; the snapshot API has no mount nav query yet
         let Some(telescope) = self.engine.cur_devices.telescope() else { return; };
-        let options = self.engine.options.read().unwrap();
+        // Fresh: `SetMountOptions { speed }` is eventless, the cache may miss
+        // the last speed selection
+        let snap = self.main_ui.fresh_snapshot();
+        let options = &snap.options;
 
         exec_and_show_error(Some(&self.window), || {
             let list = telescope.slew_speed_list()?;
-            // `options` read guard is held here: suppress the speed handler so its
-            // command cannot take the options write lock (would deadlock)
+            // Suppress the speed handler while widgets are synced from `Options`
             let prev = self.state_syncing.replace(true);
             self.widgets.cb_speed.remove_all();
             self.widgets.cb_speed.append(None, "---");
@@ -512,13 +516,13 @@ impl MountUi {
     }
 
     fn show_cur_mount_state(&self) {
-        let Some(telescope) = self.engine.cur_devices.telescope() else { return; };
-
-        let parked = telescope.is_parked().unwrap_or(false);
-        self.show_mount_parked_state(parked);
-
-        let tracking = telescope.is_tracking().unwrap_or(false);
-        self.show_mount_tracking_state(tracking);
+        let Some(mnt) = &self.main_ui.snapshot().devices.mount else { return; };
+        let ts = match &mnt.state {
+            Some(DeviceState::Telescope(ts)) => ts,
+            _ => return,
+        };
+        self.show_mount_parked_state(ts.is_parked);
+        self.show_mount_tracking_state(ts.is_tracking);
     }
 
     fn handler_delayed_action(&self, action: &DelayedAction) {
@@ -536,13 +540,20 @@ impl MountUi {
     }
 
     fn show_info(&self, state: Option<TelescopeState>) {
+        // Exception (follow-up `Query::MountNav`): the `telescope` object is
+        // kept for the live `eq_coord()` read below
         let Some(telescope) = self.engine.cur_devices.telescope() else {
             self.info_widgets.l_pos.set_label("---");
             return;
         };
 
+        let snap_state = self.main_ui.snapshot().devices.mount.as_ref()
+            .and_then(|m| match &m.state {
+                Some(DeviceState::Telescope(ts)) => ts.state,
+                _ => None,
+            });
         let new_state = state
-            .or_else(|| telescope.state().ok())
+            .or(snap_state)
             .unwrap_or(TelescopeState::Error);
 
         if self.prev_info_state.get() != Some(new_state) {
@@ -563,6 +574,7 @@ impl MountUi {
             self.info_widgets.l_state.set_label(&text);
         }
 
+        // Exception (follow-up `Query::MountNav`): live `eq_coord()` read
         if let Ok((ra, dec)) = telescope.eq_coord()
         && (ra != self.prev_info_ra.get() || dec != self.prev_info_dec.get()) {
             self.prev_info_ra.set(ra);
