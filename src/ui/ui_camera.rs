@@ -281,9 +281,8 @@ struct CameraUi {
     delayed_actions: DelayedActions<DelayedAction>,
     fn_utils:        RefCell<FileNameUtils>,
     /// Set while widgets are programmatically synced from `Options`: option
-    /// write handlers must not run (callers hold the `options` read guard, so
-    /// `exec_command` would self-deadlock; replaces the old `try_write`
-    /// skip). See `sync_suppress()`.
+    /// write handlers must not run, so the widget echo does not re-commit
+    /// the just-synced values. See `sync_suppress()`.
     opts_syncing:    Cell<bool>,
     /// `Query::CameraCaps` cache, refreshed on device/connect events and
     /// lazily when empty; capabilities are static per connected camera.
@@ -534,7 +533,7 @@ impl Drop for CameraUi {
 
 impl CameraUi {
     /// Runs a widget sync from `Options` with option write handlers suppressed
-    /// (the callers hold the `options` read guard).
+    /// (the widget echo must not re-commit the just-synced values).
     fn sync_suppress(&self, sync: impl FnOnce()) {
         let prev = self.opts_syncing.replace(true);
         sync();

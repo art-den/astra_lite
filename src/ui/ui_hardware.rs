@@ -203,7 +203,8 @@ struct HardwareUi {
     indi_widget:  IndiPanelWidget,
     is_remote:    Cell<bool>,
     /// Set while widgets are programmatically synced from `Options`: option
-    /// write handlers must not run (callers hold the `options` read guard).
+    /// write handlers must not run, so the widget echo does not re-commit
+    /// the just-synced values.
     opts_syncing: Cell<bool>,
     pending_cmds: RefCell<HashMap<u64, ConnectPending>>,
 }
