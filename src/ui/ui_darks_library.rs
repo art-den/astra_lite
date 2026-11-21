@@ -306,6 +306,17 @@ impl UiModule for DarksLibraryUI {
                 self.correct_widgets_enable_state();
             }
 
+            Event::CameraFrameOptionsChanged
+            | Event::CameraCoolingOptionsChanged
+            | Event::CameraFrameTypeChanged => {
+                // The start-Build resolves spec defaults from the camera state:
+                // a program built from stale parameters must not start the mode
+                if let Some(id) = self.pending_start_build_id.take() {
+                    _ = self.pending_cmds.borrow_mut().remove(&id);
+                    log::info!("Dark library start cancelled: parameters changed");
+                }
+            }
+
             _ => {},
         }
     }
