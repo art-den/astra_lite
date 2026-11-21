@@ -85,10 +85,30 @@ impl PropType {
     }
 }
 
+/// Wire format for `f64` fields that may hold non-finite values (drivers do
+/// send NaN; JSON cannot represent it): serialize non-finite as `null`,
+/// deserialize `null` back as NaN. Note: +/-inf degrade to NaN on a round trip.
+mod f64_nan_null {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(value: &f64, serializer: S) -> Result<S::Ok, S::Error> {
+        if f64::is_finite(*value) {
+            serializer.serialize_f64(*value)
+        } else {
+            serializer.serialize_none()
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
+        Ok(Option::<f64>::deserialize(deserializer)?.unwrap_or(f64::NAN))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlobPropValue {
     pub format:  String,
     pub data:    Vec<u8>,
+    #[serde(with = "f64_nan_null")]
     pub dl_time: f64,
 }
 
@@ -101,9 +121,14 @@ impl PartialEq for BlobPropValue {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NumPropValue {
+    #[serde(with = "f64_nan_null")]
     pub value:  f64,
+    #[serde(with = "f64_nan_null")]
     pub min:    f64,
+    #[serde(with = "f64_nan_null")]
     pub max:    f64,
+    /// Note: a JSON round trip degrades `Some(NaN)` to `None` (JSON has no
+    /// NaN); the value is kept as-is in memory.
     pub step:   Option<f64>,
     pub format: Arc<String>,
 }
@@ -582,6 +607,44 @@ mod tests {
         assert_ne!(num(f64::NAN), num(1.0));
         assert_ne!(num(1.0), num(f64::NAN));
         assert_eq!(num(1.0), num(1.0));
+    }
+
+    #[test]
+    fn num_prop_value_json_nan_roundtrip() {
+        let v = NumPropValue {
+            value:  f64::NAN,
+            min:    f64::NEG_INFINITY,
+            max:    100.0,
+            step:   None,
+            format: Arc::new("%m".to_string()),
+        };
+        let json = serde_json::to_string(&v).unwrap();
+        assert!(json.contains("null"), "non-finite must serialize as null");
+        let back: NumPropValue = serde_json::from_str(&json).unwrap();
+        assert!(f64::is_nan(back.value));
+        assert!(f64::is_nan(back.min), "all non-finite values come back as NaN");
+        assert_eq!(back.max, 100.0);
+        assert_eq!(&*back.format, "%m");
+
+        let finite = NumPropValue { value: 1.5, min: -2.0, max: 3.0, ..v };
+        let back: NumPropValue =
+            serde_json::from_str(&serde_json::to_string(&finite).unwrap()).unwrap();
+        assert_eq!(back.value, 1.5);
+        assert_eq!(back.min, -2.0);
+        assert_eq!(back.max, 3.0);
+    }
+
+    #[test]
+    fn blob_prop_value_json_dl_time_nan_roundtrip() {
+        let b = BlobPropValue {
+            format:  "fits".to_string(),
+            data:    vec![1, 2, 3],
+            dl_time: f64::NAN,
+        };
+        let back: BlobPropValue =
+            serde_json::from_str(&serde_json::to_string(&b).unwrap()).unwrap();
+        assert!(f64::is_nan(back.dl_time));
+        assert_eq!(back.data, vec![1, 2, 3]);
     }
 
     #[test]
