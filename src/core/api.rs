@@ -493,6 +493,25 @@ pub struct IndiSelPatch {
 /// synchronous `exec_command` caller gets the reply directly). A graceful
 /// exit sequence is `Shutdown { force }` then `SaveOptions` — saving AFTER
 /// shutdown is what captures the per-camera options written during it.
+///
+/// Known exceptions (intentional non-facade UI accesses; the live device
+/// reads below are marked with a comment in the panel and to be closed by
+/// follow-up queries, the subscription sites are inherent until remote
+/// clients get their own protocols):
+/// - Live device state reads: mount coords / slew speed (`Query::MountNav`,
+///   `ui_mount`, `ui_skymap`, `ui_polar_align`), live CCD/pixel-size reads
+///   (`ui_skymap`), plate-solve camera reads (with `Query::CameraCaps`
+///   cache, `ui_plate_solve`), focuser panel camera exposure-range read
+///   (`Query::FocuserCaps`, `ui_focuser`), focuser position/range/
+///   temperature (`Query::FocuserState`, `ui_focuser`), filter wheel
+///   list/active (`Query::FilterWheelState`, `ui_flt_wheel`).
+/// - HAL/INDI/PHD2 event subscriptions kept by `ui_main` (the event bridge
+///   itself), `ui_hardware` and `indi_panel_widget`: device lifecycle and
+///   INDI registry panels need direct subscriptions until a subscription
+///   protocol for remote clients exists.
+/// - `FileNameUtils::init(&Arc<dyn Camera>)` is a direct HAL read used
+///   inside the engine (not the UI); the UI path is `init_from_data` fed by
+///   `CameraCaps`.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Command {
     Mode(ModeCommand),
