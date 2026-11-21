@@ -961,7 +961,12 @@ impl Engine {
                 Ok(Reply::Empty)
             }
             Command::SetBarlow { barlow } => {
-                self.options.write().unwrap().telescope.barlow = barlow;
+                let mut options = self.options.write().unwrap();
+                if options.telescope.barlow == barlow {
+                    return Ok(Reply::Empty);
+                }
+                options.telescope.barlow = barlow;
+                drop(options);
                 self.events.send(Event::TelescopeBarlowChanged);
                 Ok(Reply::Empty)
             }
