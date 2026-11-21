@@ -106,10 +106,15 @@ mod f64_nan_null {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlobPropValue {
-    pub format:  String,
-    pub data:    Vec<u8>,
+    pub format: String,
+    /// Full payload in memory; the query API boundary truncates it to empty
+    /// and reports the size through `data_len` only
+    pub data:     Vec<u8>,
+    /// Payload byte length (`== data.len()` in memory; on the query API wire
+    /// it is the size of the truncated away payload)
+    pub data_len: usize,
     #[serde(with = "f64_nan_null")]
-    pub dl_time: f64,
+    pub dl_time:  f64,
 }
 
 impl PartialEq for BlobPropValue {
@@ -399,9 +404,10 @@ impl Property {
                 },
                 "defBLOB" => {
                     let value = BlobPropValue {
-                        format:  String::new(),
-                        data:    Vec::new(),
-                        dl_time: 0.0,
+                        format:   String::new(),
+                        data:     Vec::new(),
+                        data_len: 0,
+                        dl_time:  0.0,
                     };
                     PropValue::Blob(Arc::new(value))
                 },
@@ -531,10 +537,12 @@ impl Property {
                                 );
                             }
 
+                            let data_len = new_blob.data.len();
                             *blob = Arc::new(BlobPropValue {
-                                format:  new_blob.format,
-                                data:    new_blob.data,
-                                dl_time: new_blob.dl_time,
+                                format:   new_blob.format,
+                                data:     new_blob.data,
+                                data_len,
+                                dl_time:  new_blob.dl_time,
                             });
                             changed = true;
                             elem_changed = true;
@@ -637,9 +645,10 @@ mod tests {
     #[test]
     fn blob_prop_value_json_dl_time_nan_roundtrip() {
         let b = BlobPropValue {
-            format:  "fits".to_string(),
-            data:    vec![1, 2, 3],
-            dl_time: f64::NAN,
+            format:   "fits".to_string(),
+            data:     vec![1, 2, 3],
+            data_len: 3,
+            dl_time:  f64::NAN,
         };
         let back: BlobPropValue =
             serde_json::from_str(&serde_json::to_string(&b).unwrap()).unwrap();
@@ -659,9 +668,10 @@ mod tests {
         assert_eq!(PropValue::Switch(false).to_string(), "false");
         assert_eq!(PropValue::Light(Arc::new("Busy".into())).to_string(), "Busy");
         let blob = PropValue::Blob(Arc::new(BlobPropValue {
-            format:  "fits".to_string(),
-            data:    vec![1, 2, 3],
-            dl_time: 0.0,
+            format:   "fits".to_string(),
+            data:     vec![1, 2, 3],
+            data_len: 3,
+            dl_time:  0.0,
         }));
         assert_eq!(blob.to_string(), "[blob]");
     }

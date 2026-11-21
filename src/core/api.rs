@@ -604,6 +604,23 @@ pub struct IndiPropertiesData {
     pub properties: Vec<indi::Property>,
 }
 
+/// Truncate BLOB payloads at the query API boundary (the full bytes would be
+/// a base64/integer-array explosion over JSON): the reply carries an empty
+/// `data` and the payload size in `data_len`.
+fn truncate_blob_payload(mut prop: indi::Property) -> indi::Property {
+    for elem in &mut prop.elements {
+        if let indi::PropValue::Blob(blob) = &mut elem.value {
+            *blob = Arc::new(indi::BlobPropValue {
+                format:   blob.format.clone(),
+                data:     Vec::new(),
+                data_len: blob.data.len(),
+                dl_time:  blob.dl_time,
+            });
+        }
+    }
+    prop
+}
+
 /// Answer to a [`Query`].
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum QueryReply {
@@ -1289,6 +1306,10 @@ impl Engine {
                                 device: dev,
                             })
                             .collect();
+                        let properties = properties
+                            .into_iter()
+                            .map(truncate_blob_payload)
+                            .collect();
                         QueryReply::IndiProperties(IndiPropertiesData { devices, properties })
                     }
                     Query::IndiDrivers => QueryReply::IndiDrivers(self.hal.indi_impl().drivers().clone()),
@@ -1569,6 +1590,41 @@ mod tests {
         ] {
             roundtrip(reply);
         }
+    }
+
+    #[test]
+    fn indi_properties_truncate_blob_payload() {
+        let prop = indi::Property {
+            device:     Arc::new("ccd".to_string()),
+            name:       Arc::new("CCD_FRAME".to_string()),
+            type_:      indi::PropType::Blob,
+            label:      None,
+            group:      None,
+            permission: indi::PropPermission::RO,
+            state:      indi::PropState::Ok,
+            timeout:    None,
+            timestamp:  None,
+            message:    None,
+            elements:   vec![indi::PropElement {
+                name:  Arc::new("BINARY".to_string()),
+                label: None,
+                value: indi::PropValue::Blob(Arc::new(indi::BlobPropValue {
+                    format:   ".fits".to_string(),
+                    data:     vec![1, 2, 3, 4],
+                    data_len: 4,
+                    dl_time:  0.5,
+                })),
+            }],
+            change_id:  1,
+        };
+        let out = truncate_blob_payload(prop);
+        let indi::PropValue::Blob(blob) = &out.elements[0].value else {
+            panic!("expected a blob value")
+        };
+        assert!(blob.data.is_empty());
+        assert_eq!(blob.data_len, 4);
+        assert_eq!(blob.format, ".fits");
+        assert_eq!(blob.dl_time, 0.5);
     }
 
     #[test]

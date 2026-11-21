@@ -1012,7 +1012,7 @@ impl HardwareUi {
                             prop.device, prop.name, elem.name,
                         )?;
                         if let indi::PropValue::Blob(blob) = elem.value {
-                            writeln!(&mut file, "[BLOB len={}]", blob.data.len())?;
+                            writeln!(&mut file, "[BLOB len={}]", blob.data_len)?;
                         } else {
                             writeln!(&mut file, "{:?}", elem.value)?;
                         }

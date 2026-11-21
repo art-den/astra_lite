@@ -1025,10 +1025,11 @@ impl IndiPanelWidget {
             let Some(indi_elem) = indi_elem else { continue; };
             let UiIndiPropElemData::Blob(blob_data) = &ui_elem.data else { continue; };
             let indi::PropValue::Blob(value) = &indi_elem.value else { continue; };
-            let blob_text = if value.data.is_empty() {
+            // `data` is truncated by `Query::IndiProperties`; size in `data_len`
+            let blob_text = if value.data_len == 0 {
                 "[Empty]".to_string()
             } else {
-                format!("[Blob len={}]", value.data.len())
+                format!("[Blob len={}]", value.data_len)
             };
             blob_data.entry.set_text(&blob_text);
         }
