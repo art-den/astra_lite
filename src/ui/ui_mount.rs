@@ -3,7 +3,7 @@ use gtk::{glib, prelude::*, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
-    core::{api::{Command, MountCommand}, engine::{Engine, ModeKind}, events::*},
+    core::{api::{Command, MountCommand, MountPatch}, engine::{Engine, ModeKind}, events::*},
     hal::{DeviceType, HalState, TelescopeMoveDir, TelescopeState, events::HalEvent},
     options::*,
     ui::ui_main::MainUi,
@@ -139,8 +139,10 @@ impl Drop for MountUi {
 
 impl UiModule for MountUi {
     fn show_options(&self, options: &Options) {
+        let prev = self.state_syncing.replace(true);
         self.widgets.chb_inv_ns.set_active(options.mount.inv_ns);
         self.widgets.chb_inv_we.set_active(options.mount.inv_we);
+        self.state_syncing.set(prev);
     }
 
     fn get_options(&self, options: &mut Options) {
@@ -325,6 +327,51 @@ impl MountUi {
                 self_.correct_widgets_props();
             })
         );
+
+        self.widgets.chb_inv_ns.connect_active_notify(
+            clone!(@weak self as self_ => move |chb| {
+                if self_.state_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetMountOptions(MountPatch {
+                            inv_ns: Some(chb.is_active()),
+                            ..Default::default()
+                        })
+                    ),
+                    "Set mount invert NS"
+                );
+            })
+        );
+
+        self.widgets.chb_inv_we.connect_active_notify(
+            clone!(@weak self as self_ => move |chb| {
+                if self_.state_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetMountOptions(MountPatch {
+                            inv_we: Some(chb.is_active()),
+                            ..Default::default()
+                        })
+                    ),
+                    "Set mount invert WE"
+                );
+            })
+        );
+
+        self.widgets.cb_speed.connect_active_id_notify(
+            clone!(@weak self as self_ => move |cb| {
+                if self_.state_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetMountOptions(MountPatch {
+                            speed: Some(cb.active_id().map(|id| id.to_string())),
+                            ..Default::default()
+                        })
+                    ),
+                    "Set mount speed"
+                );
+            })
+        );
     }
 
     fn submit_mount_cmd(&self, cmd: MountCommand) {
@@ -440,6 +487,9 @@ impl MountUi {
 
         exec_and_show_error(Some(&self.window), || {
             let list = telescope.slew_speed_list()?;
+            // `options` read guard is held here: suppress the speed handler so its
+            // command cannot take the options write lock (would deadlock)
+            let prev = self.state_syncing.replace(true);
             self.widgets.cb_speed.remove_all();
             self.widgets.cb_speed.append(None, "---");
             for (id, text) in list {
@@ -450,6 +500,7 @@ impl MountUi {
             } else {
                 self.widgets.cb_speed.set_active(Some(0));
             }
+            self.state_syncing.set(prev);
             Ok(())
         });
     }

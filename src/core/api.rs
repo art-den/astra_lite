@@ -61,7 +61,7 @@ fn busy_domain_of(cmd: &Command) -> Option<BusyDomain> {
         | Command::SetPlateSolverOptions(..) | Command::SetGuidingOptions(..)
         | Command::SetIndiSelection(..) | Command::SetAlpacaAddress{..}
         | Command::SetSiteLatitude{..} | Command::SetSiteLongitude{..}
-        | Command::SetTelescopeFromPlateSolve{..}
+        | Command::SetTelescopeFromPlateSolve{..} | Command::SetMountOptions(..)
         // Read-only query: pure computation + capability read, no camera exclusivity
         | Command::BuildDarkLibraryProgram{..} => None,
     }
@@ -318,6 +318,17 @@ pub struct GuidingPatch {
     pub main_cam_max_error: Option<f64>,
 }
 
+/// See [`CoolingPatch`].
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(default)]
+pub struct MountPatch {
+    pub inv_ns: Option<bool>,
+    pub inv_we: Option<bool>,
+    /// Double `Option` patch field: absent in JSON = unchanged, `null` = set to `None`.
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "de_patch_opt")]
+    pub speed:  Option<Option<String>>,
+}
+
 /// Partial update of the INDI connection selection (see [`CoolingPatch`]).
 /// Driver fields are double `Option` (see [`de_patch_opt`]): `null` deselects.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -423,6 +434,7 @@ pub enum Command {
     SetSiteLatitude      { sexagesimal: String },
     SetSiteLongitude     { sexagesimal: String },
     SetTelescopeFromPlateSolve { enabled: bool },
+    SetMountOptions(MountPatch),
     OpenImageFile { path: String },
     /// Build the master file creation program for a dark library spec
     /// (read-only query, see `busy_domain_of`).
@@ -779,6 +791,13 @@ impl Engine {
             }
             Command::SetTelescopeFromPlateSolve { enabled } => {
                 self.options.write().unwrap().telescope.from_platesolve = enabled;
+                Ok(Reply::Empty)
+            }
+            Command::SetMountOptions(patch) => {
+                let mut options = self.options.write().unwrap();
+                if let Some(v) = patch.inv_ns  { options.mount.inv_ns = v; }
+                if let Some(v) = patch.inv_we  { options.mount.inv_we = v; }
+                if let Some(v) = patch.speed   { options.mount.speed = v; }
                 Ok(Reply::Empty)
             }
             Command::OpenImageFile { path } => {
@@ -1221,6 +1240,11 @@ mod tests {
         assert_eq!(p.save_minutes, None);
         let p: RawFramesPatch = serde_json::from_str("{}").unwrap();
         assert_eq!(p.use_cnt, None);
+        // `null` clears the optional mount speed, a value sets it
+        let p: MountPatch = serde_json::from_str(r#"{"speed": null}"#).unwrap();
+        assert_eq!(p.speed, Some(None));
+        let p: MountPatch = serde_json::from_str(r#"{"speed": "1"}"#).unwrap();
+        assert_eq!(p.speed, Some(Some("1".to_string())));
     }
 
     #[test]
