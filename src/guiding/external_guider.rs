@@ -77,12 +77,15 @@ impl ExternalGuiderCtrl {
     }
 
     pub fn create_and_connect(self: &Arc<Self>, guider: ExtGuiderType) -> eyre::Result<()> {
-        let mut ext_guider = self.ext_guider.lock().unwrap();
+        // Blocking teardown/connect must not hold the `ext_guider` mutex:
+        // `disconnect()` joins the guider event thread, whose engine handler
+        // can wait on locks that take this mutex (deadlock)
+        let old_guider = self.ext_guider.lock().unwrap().take();
 
         // Disconnect previous one
 
-        if let Some(ext_guider) = &mut *ext_guider {
-            ext_guider.disconnect()?;
+        if let Some(old_guider) = old_guider {
+            old_guider.disconnect()?;
         }
 
         // Create new guider
@@ -109,20 +112,17 @@ impl ExternalGuiderCtrl {
 
         // Assign guider
 
-        *ext_guider = Some(guider);
-        drop(ext_guider);
+        *self.ext_guider.lock().unwrap() = Some(guider);
 
         Ok(())
     }
 
     pub fn disconnect(&self) -> eyre::Result<()> {
-        let mut ext_guider = self.ext_guider.lock().unwrap();
-        if let Some(guider) = ext_guider.take() {
-            guider.disconnect()?;
-        } else {
+        // Join without the mutex held (see `create_and_connect`)
+        let Some(guider) = self.ext_guider.lock().unwrap().take() else {
             return Err(eyre::eyre!("Not connected"));
-        }
-        Ok(())
+        };
+        guider.disconnect()
     }
 
     pub fn is_connected(&self) -> bool {
