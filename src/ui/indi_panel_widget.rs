@@ -4,7 +4,10 @@ use std::{collections::HashMap, sync::Arc, time::Duration, cell::RefCell, rc::Rc
 use gtk::{prelude::*, glib, glib::clone};
 use itertools::{Itertools, izip};
 use ::indi;
-use crate::core::{api::{Command, IndiCommand, IndiDeviceEntry, Query, QueryReply, Reply}, engine::Engine};
+use crate::{
+    core::{api::{Command, IndiCommand, IndiDeviceEntry, Query, QueryReply, Reply}, engine::Engine},
+    utils::log_utils::log_if_error
+};
 
 pub struct IndiPanelWidget {
     indi:      Arc<indi::Connection>,
@@ -633,11 +636,14 @@ impl IndiPanelWidget {
                     .iter()
                     .map(|(name, entry)| (name.to_string(), entry.text().to_string()))
                     .collect();
-                _ = engine.submit_command(Command::Indi(IndiCommand::SetTextProperty {
-                    device: device_string.clone(),
-                    prop: prop_name_string.clone(),
-                    elements,
-                }));
+                log_if_error(
+                    &engine.submit_command(Command::Indi(IndiCommand::SetTextProperty {
+                        device: device_string.clone(),
+                        prop: prop_name_string.clone(),
+                        elements,
+                    })),
+                    "Set INDI text property"
+                );
             });
             widgets.push(set_button.into());
         }
@@ -757,11 +763,14 @@ impl IndiPanelWidget {
                     .iter()
                     .map(|(name, spin)| (name.to_string(), spin.value()))
                     .collect();
-                _ = engine.submit_command(Command::Indi(IndiCommand::SetNumberProperty {
-                    device: device_string.clone(),
-                    prop: prop_name_string.clone(),
-                    elements,
-                }));
+                log_if_error(
+                    &engine.submit_command(Command::Indi(IndiCommand::SetNumberProperty {
+                        device: device_string.clone(),
+                        prop: prop_name_string.clone(),
+                        elements,
+                    })),
+                    "Set INDI number property"
+                );
             });
             widgets.push(set_button.into());
         }
@@ -810,11 +819,14 @@ impl IndiPanelWidget {
                 let one_btn = property.elements.len() == 1;
                 button.connect_clicked(move |btn| {
                     if !btn.is_sensitive() { return; }
-                    _ = engine.submit_command(Command::Indi(IndiCommand::SetSwitchProperty {
-                        device: device_string.clone(),
-                        prop: prop_name_string.clone(),
-                        elements: vec![(elem_name.to_string(), true)],
-                    }));
+                    log_if_error(
+                        &engine.submit_command(Command::Indi(IndiCommand::SetSwitchProperty {
+                            device: device_string.clone(),
+                            prop: prop_name_string.clone(),
+                            elements: vec![(elem_name.to_string(), true)],
+                        })),
+                        "Set INDI switch property"
+                    );
                     if one_btn {
                         // GTK3: set_active() re-emits `clicked`, re-entering this closure;
                         // the bracket makes that re-entry hit the `is_sensitive` guard above.
@@ -836,11 +848,14 @@ impl IndiPanelWidget {
                 bx.add(&button);
                 button.connect_active_notify(move |btn| {
                     if !btn.is_sensitive() { return; }
-                    _ = engine.submit_command(Command::Indi(IndiCommand::SetSwitchProperty {
-                        device: device_string.clone(),
-                        prop: prop_name_string.clone(),
-                        elements: vec![(elem_name.to_string(), btn.is_active())],
-                    }));
+                    log_if_error(
+                        &engine.submit_command(Command::Indi(IndiCommand::SetSwitchProperty {
+                            device: device_string.clone(),
+                            prop: prop_name_string.clone(),
+                            elements: vec![(elem_name.to_string(), btn.is_active())],
+                        })),
+                        "Set INDI switch property"
+                    );
                 });
                 UiIndiPropElemData::Switch(UiIndiPropSwitchElem::Check(button))
             };
