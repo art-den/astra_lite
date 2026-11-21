@@ -44,6 +44,14 @@ pub struct StateSnapshot {
     /// Monotonic engine change counter; consumers may refetch only when it
     /// differs from the previously seen value. Opaque, only monotonicity is
     /// guaranteed (double counting is allowed).
+    ///
+    /// Invariant: every change of snapshot-visible state must be accompanied
+    /// by a seq increment. Channels: commands, HAL events, busy-flag
+    /// transitions, frame-processing replies, `apply_notify_result`,
+    /// `abort_active_mode`, guider events. The latter four bump strictly
+    /// AFTER the write; the bump at the head of the HAL handler is a
+    /// conservative grandfathered exception (bump-before-write is covered
+    /// by the periodic polling and by later events).
     pub seq:     u64,
     pub mode:    ModeState,
     /// Device busy domains currently held by in-progress commands.

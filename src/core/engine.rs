@@ -354,6 +354,8 @@ impl Engine {
                 self_.apply_notify_result(res, &mut modes)?;
                 Ok(())
             } ();
+            // Guider snapshot fields change even when the mode result is `Empty`
+            self_.seq.fetch_add(1, Ordering::Relaxed);
             self_.events.send(Event::Guider(event));
             self_.process_error(result, "Engine::set_ext_guider_events_handler");
         }));
@@ -780,6 +782,8 @@ impl Engine {
     }
 
     fn frame_process_result_handler(self: &Arc<Self>, res: FrameProcessingReply) {
+        // Every reply follows frame-thread writes to preview/live_stacking
+        self.seq.fetch_add(1, Ordering::Relaxed);
         match res {
             FrameProcessingReply::Result(res) => {
                 if res.mode_kind != ModeKind::OpeningImgFile  {
@@ -1079,6 +1083,7 @@ impl Engine {
             }
         }
         mode.finished = None;
+        self.seq.fetch_add(1, Ordering::Relaxed);
         drop(mode);
         self.events.send(Event::ModeChanged);
     }
@@ -1149,6 +1154,9 @@ impl Engine {
             }
         }
 
+        // Snapshot-visible writes happen inside the match above (`Empty` returned early)
+        self.seq.fetch_add(1, Ordering::Relaxed);
+
         if mode_changed {
             self.events.send(Event::ModeChanged);
         }
@@ -1165,6 +1173,57 @@ impl Engine {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::image::info::FlatImageInfo;
+
+    fn seq_of(engine: &Engine) -> u64 {
+        engine.snapshot().seq
+    }
+
+    #[test]
+    fn frame_reply_bumps_seq() {
+        let engine = Engine::new();
+        let seq0 = seq_of(&engine);
+
+        // Decorative write: what matters is the 'frame write -> reply -> bump' order
+        *engine.preview.info.write().unwrap() =
+            ResultImageInfo::FlatInfo(FlatImageInfo::default());
+
+        // Waiting mode has no camera id: the handler takes its early-return branch
+        engine.frame_process_result_handler(FrameProcessingReply::Result(
+            FrameProcessNotification {
+                camera_id: "none".into(),
+                mode_kind: ModeKind::Waiting,
+                event:     FrameProcessEvent::ImageReady,
+            }));
+
+        assert!(seq_of(&engine) > seq0, "a frame reply must bump seq");
+        engine.stop();
+    }
+
+    #[test]
+    fn apply_notify_result_bumps_seq_except_empty() {
+        let engine = Engine::new();
+        let seq0 = seq_of(&engine);
+
+        {
+            let mut modes = engine.modes.write().unwrap();
+            engine.apply_notify_result(NotifyResult::Empty, &mut modes).unwrap();
+        }
+        assert_eq!(seq_of(&engine), seq0, "`Empty` must not bump seq");
+
+        {
+            let mut modes = engine.modes.write().unwrap();
+            engine.apply_notify_result(NotifyResult::ProgressChanges, &mut modes).unwrap();
+        }
+        assert!(seq_of(&engine) > seq0, "`ProgressChanges` must bump seq");
+
+        engine.stop();
     }
 }
 

@@ -169,6 +169,7 @@ fn app_activate_handler(app: &gtk::Application) {
 
     exec_and_show_error(None::<&gtk::Window>, || {
         log::info!("Loading options...");
+        // Snapshot-seq: config load before UI exists, no seq consumers yet
         let mut options = engine.options.write().unwrap();
         load_json_from_config_file::<Options>(&mut options, "options")?;
 
