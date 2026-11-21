@@ -35,7 +35,8 @@ Note for those editing this file: The file should contain only general informati
   - "ASCOM" (Astronomy Common Object Model) - Windows only
   - "ASCOM Alpaca" (ASCOM over HTTP) - Windows only
 - `src/image` - Image working: RAW, FITS, stacking, histograms, stars, camera database.
-- `src/options` - Serializable settings (JSON) for all components.
+- `src/options` - Serializable settings (JSON) for all components. Single source of truth, true at all times:
+  editing a widget commits an immediate `Command`; there is no deferred widget-to-`Options` flush (`get_options`) pattern.
 - `src/plate_solve` - Common API for plate solving: spawns an external solver process (`solve-field`, or `starsolver` if it is placed next to the app binary).
 - `src/sky_math` - Sky math: coordinates, Solar system.
 - `src/ui` - GTK interface: device panels, preview, sky map, dialogs. UI layout is in `.ui` files, widget structs are filled by `#[derive(FromBuilder)]`: its field names must match the object IDs in the `.ui` file, which is checked at runtime, not at compile time.
