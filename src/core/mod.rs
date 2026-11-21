@@ -1,3 +1,4 @@
+pub mod api;
 pub mod frame_processing;
 pub mod events;
 pub mod engine;

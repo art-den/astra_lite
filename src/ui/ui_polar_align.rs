@@ -2,10 +2,11 @@ use std::{rc::Rc, sync::Arc};
 use gtk::{glib::{self, clone}, pango, prelude::*};
 use macros::FromBuilder;
 use crate::{
-    core::{commands::{ModeCommand, ModeCommandReply}, engine::{Engine, ModeKind}, events::*, mode_polar_align::{PolarAlignCommand, PolarAlignMode, PolarAlignState, PolarAlignmentEvent}},
+    core::{api::{Command, Reply, StartMode}, commands::{ModeCommand, ModeCommandReply}, engine::{Engine, ModeKind}, events::*, mode_polar_align::{PolarAlignCommand, PolarAlignMode, PolarAlignState, PolarAlignmentEvent}},
     hal::{DeviceType, events::HalEvent},
     options::*,
     sky_math::math::*,
+    utils::log_utils::log_if_error,
 };
 use ::indi::degree_to_str_short;
 use super::{gtk_utils::{self, *}, module::*, ui_main::*, utils::*};
@@ -209,8 +210,8 @@ impl PolarAlignUi {
 
         let mut allow_refresh = false;
         if polar_align
-            && let Ok(ModeCommandReply::PolarAlignState(state)) =
-                self.engine.exec_mode_command(ModeCommand::PolarAlign(PolarAlignCommand::GetState))
+            && let Ok(Reply::Mode(ModeCommandReply::PolarAlignState(state))) =
+                self.engine.exec_command(Command::Mode(ModeCommand::PolarAlign(PolarAlignCommand::GetState)))
         {
             allow_refresh = matches!(state, PolarAlignState::WaitForManualRefresh);
         }
@@ -311,7 +312,7 @@ impl PolarAlignUi {
         // Start mode
 
         exec_and_show_error(Some(&self.window), || {
-            self.engine.start_polar_alignment()?;
+            self.engine.exec_command(Command::Start(StartMode::PolarAlignment))?;
             Ok(())
         });
     }
@@ -319,18 +320,21 @@ impl PolarAlignUi {
     fn handler_action_restart_polar_align(&self) {
         self.main_ui.get_all_options();
         exec_and_show_error(Some(&self.window), || {
-            self.engine.exec_mode_command(ModeCommand::PolarAlign(PolarAlignCommand::Restart))?;
+            self.engine.exec_command(Command::Mode(ModeCommand::PolarAlign(PolarAlignCommand::Restart)))?;
             Ok(())
         });
     }
 
     fn handler_action_stop_polar_align(&self) {
-        self.engine.abort_active_mode();
+        log_if_error(
+            &self.engine.exec_command(Command::StopActiveMode),
+            "Stop active mode"
+        );
     }
 
     fn handler_action_manual_refresh(&self) {
         gtk_utils::exec_and_show_error(Some(&self.window), || {
-            self.engine.exec_mode_command(ModeCommand::PolarAlign(PolarAlignCommand::ManualRefresh))?;
+            self.engine.exec_command(Command::Mode(ModeCommand::PolarAlign(PolarAlignCommand::ManualRefresh)))?;
             Ok(())
         });
     }

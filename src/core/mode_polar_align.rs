@@ -1,7 +1,7 @@
 use std::{f64::consts::PI, sync::{Arc, RwLock}};
 
 use chrono::{NaiveDateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     core::{cam_ctrl::take_shot, engine::*, frame_processing::*, preview::Preview}, hal::{Camera, FrameType, Hal, Telescope}, image::stars::StarItems, options::*, plate_solve::*, sky_math::math::*, utils::{log_utils::log_if_error, math::coordinate_descent},
@@ -187,14 +187,14 @@ impl PolarAlignment {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum PolarAlignCommand {
     Restart,
     ManualRefresh,
     GetState,
 }
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum PolarAlignState {
     Undefined,
     Goto {

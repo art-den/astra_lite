@@ -12,7 +12,7 @@ use itertools::Itertools;
 use chrono::prelude::*;
 use macros::FromBuilder;
 use crate::{
-    core::{engine::Engine, events::Event}, guiding::{external_guider::ExtGuiderType, phd2}, hal::{DeviceType, HalImpl, HalState, events::HalEvent}, options::*,
+    core::{api::{Command, ConnectCommand, GuiderCommand, IndiCommand}, engine::Engine, events::Event}, guiding::phd2, hal::{DeviceType, HalImpl, HalState, events::HalEvent}, options::*, utils::log_utils::log_if_error,
 };
 use ::indi::{self, sexagesimal_to_value, value_to_sexagesimal};
 use super::{gtk_utils::*, indi_panel_widget::*, module::*, ui_main::*};
@@ -30,7 +30,7 @@ pub fn init_ui(
         options.indi.remote = true; // force remote mode if no devices info
     }
 
-    let indi_widget = IndiPanelWidget::new(indi_hal.indi());
+    let indi_widget = IndiPanelWidget::new(indi_hal.indi(), engine);
 
     let widgets = Widgets {
         telescope: TelescopeWidgets     ::from_builder_str(include_str!(r"resources/hw_telescope.ui")),
@@ -49,6 +49,8 @@ pub fn init_ui(
         indi_state:   RefCell::new(HalState::Disconnected),
         aa_state:     RefCell::new(HalState::Disconnected),
         is_remote:    Cell::new(false),
+        opts_syncing: Cell::new(false),
+        pending_cmds: RefCell::new(HashMap::new()),
         main_ui:      Rc::clone(main_ui),
         window:       window.clone(),
         widgets,
@@ -173,6 +175,17 @@ struct HardwareUi {
     aa_state:     RefCell<HalState>,
     indi_widget:  IndiPanelWidget,
     is_remote:    Cell<bool>,
+    /// Set while widgets are programmatically synced from `Options`: option
+    /// write handlers must not run (callers hold the `options` read guard).
+    opts_syncing: Cell<bool>,
+    pending_cmds: RefCell<HashMap<u64, ConnectPending>>,
+}
+
+#[derive(PartialEq)]
+enum ConnectPending {
+    Plain,
+    IndiConnect,
+    Guider,
 }
 
 impl Drop for HardwareUi {
@@ -183,9 +196,11 @@ impl Drop for HardwareUi {
 
 impl UiModule for HardwareUi {
     fn show_options(&self, options: &Options) {
+        let prev = self.opts_syncing.replace(true);
         self.show_connection_options(options);
         self.show_telescope_options(options);
         self.show_site_options(options);
+        self.opts_syncing.set(prev);
     }
 
     fn get_options(&self, options: &mut Options) {
@@ -299,6 +314,22 @@ impl UiModule for HardwareUi {
                 if diff_with_cur < 0.1 { return; }
                 self.widgets.telescope.spb_guid_foc_len.set_value(*focal_len);
             }
+            Event::CommandReply { id, result } => {
+                let Some(pending) = self.pending_cmds.borrow_mut().remove(id) else {
+                    return;
+                };
+                match result {
+                    Err(err_msg) => show_error_message(Some(&self.window), "Error", err_msg),
+                    Ok(_) => match pending {
+                        ConnectPending::Plain => {}
+                        ConnectPending::IndiConnect => {
+                            let remote = self.engine.options.read().unwrap().indi.remote;
+                            self.is_remote.set(remote);
+                        }
+                        ConnectPending::Guider => self.correct_widgets_by_cur_state(),
+                    },
+                }
+            }
             _ => {},
         }
     }
@@ -391,32 +422,37 @@ impl HardwareUi {
 
         self.widgets.telescope.spb_foc_len.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                let value = sb.value();
-                if f64::abs(options.telescope.focal_len - value) < 0.1 { return; }
-                options.telescope.focal_len = value;
-                drop(options);
-                self_.engine.events.send(Event::TelescopeFocalLenChanged(value));
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetTelescopeFocalLen { focal_len: sb.value() }
+                    ),
+                    "Set telescope focal length"
+                );
             })
         );
 
         self.widgets.telescope.spb_barlow.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.telescope.barlow = sb.value();
-                drop(options);
-                self_.engine.events.send(Event::TelescopeBarlowChanged);
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetBarlow { barlow: sb.value() }
+                    ),
+                    "Set Barlow"
+                );
             })
         );
 
         self.widgets.telescope.spb_guid_foc_len.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                let value = sb.value();
-                if f64::abs(options.guiding.foc_len - value) < 0.1 { return; }
-                options.guiding.foc_len = value;
-                drop(options);
-                self_.engine.events.send(Event::GuiderFocalLenChanged(value));
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetGuidingFocalLen { foc_len: sb.value() }
+                    ),
+                    "Set guiding focal length"
+                );
             })
         );
 
@@ -683,75 +719,63 @@ impl HardwareUi {
 
     fn handler_action_conn_indi(&self) {
         self.sync_options_from_widgets();
-        exec_and_show_error(Some(&self.window), || {
-            let indi_hal = self.engine.hal.indi_impl();
+        let cmd = {
             let options = self.engine.options.read().unwrap();
-            indi_hal.connect(
-                options.indi.remote,
-                &options.indi.address,
-                &options.indi.mount,
-                &options.indi.camera,
-                &options.indi.guid_cam,
-                &options.indi.focuser,
-                &options.indi.flt_wheel,
-                &options.indi.aux1,
-                &options.indi.aux2,
-            )?;
-            self.is_remote.set(options.indi.remote);
-            Ok(())
-        });
+            ConnectCommand::ConnectIndi {
+                remote:    options.indi.remote,
+                address:   options.indi.address.clone(),
+                mount:     options.indi.mount.clone(),
+                camera:    options.indi.camera.clone(),
+                guid_cam:  options.indi.guid_cam.clone(),
+                focuser:   options.indi.focuser.clone(),
+                flt_wheel: options.indi.flt_wheel.clone(),
+                aux1:      options.indi.aux1.clone(),
+                aux2:      options.indi.aux2.clone(),
+            }
+        };
+        self.submit_connect_cmd(Command::Connect(cmd), ConnectPending::IndiConnect);
     }
 
     fn handler_action_disconn_indi(&self) {
-        exec_and_show_error(Some(&self.window), || {
-            let indi = self.engine.hal.indi_impl().indi();
-            if !self.is_remote.get() {
-                log::info!("Disabling all INDI devices before disconnect...");
-                indi.command_enable_all_devices(false, true, Some(2000))?;
-                log::info!("Done");
-            }
-            log::info!("Disconnecting INDI...");
-            indi.disconnect_and_wait()?;
-            log::info!("Done");
-            Ok(())
-        });
+        self.submit_connect_cmd(
+            Command::Connect(ConnectCommand::DisconnectIndi {
+                disable_all: !self.is_remote.get(),
+            }),
+            ConnectPending::Plain
+        );
     }
 
     #[cfg(windows)]
     fn handler_action_conn_aa(&self) {
         self.sync_options_from_widgets();
-        exec_and_show_error(Some(&self.window), || {
-            let aa_hal = self.engine.hal.ascom_alpaca_impl();
-            let options = self.engine.options.read().unwrap();
-            aa_hal.connect(&options.ascom_alpaca.address)?;
-            Ok(())
-        });
+        let address = self.engine.options.read().unwrap().ascom_alpaca.address.clone();
+        self.submit_connect_cmd(
+            Command::Connect(ConnectCommand::ConnectAlpaca { address }),
+            ConnectPending::Plain
+        );
     }
 
     #[cfg(windows)]
     fn handler_action_disconn_aa(&self) {
-        exec_and_show_error(Some(&self.window), || {
-            let aa_hal = self.engine.hal.ascom_alpaca_impl();
-            aa_hal.disconnect()?;
-            Ok(())
-        });
+        self.submit_connect_cmd(
+            Command::Connect(ConnectCommand::DisconnectAlpaca),
+            ConnectPending::Plain
+        );
     }
 
     fn handler_action_conn_phd2(&self) {
-        exec_and_show_error(Some(&self.window), || {
-            self.sync_options_from_widgets();
-            self.engine.ext_guider.create_and_connect(ExtGuiderType::Phd2)?;
-            self.correct_widgets_by_cur_state();
-            Ok(())
-        });
+        self.sync_options_from_widgets();
+        self.submit_connect_cmd(
+            Command::Guider(GuiderCommand::ConnectPhd2),
+            ConnectPending::Guider
+        );
     }
 
     fn handler_action_disconn_phd2(&self) {
-        exec_and_show_error(Some(&self.window), || {
-            self.engine.ext_guider.disconnect()?;
-            self.correct_widgets_by_cur_state();
-            Ok(())
-        });
+        self.submit_connect_cmd(
+            Command::Guider(GuiderCommand::DisconnectPhd2),
+            ConnectPending::Guider
+        );
     }
 
     fn fill_devices_name(&self) {
@@ -975,18 +999,20 @@ impl HardwareUi {
     }
 
     fn set_switch_property_for_all_device(&self, prop_name: &str, elem_name: &str) {
-        exec_and_show_error(Some(&self.window), || {
-            let indi = self.engine.hal.indi_impl().indi();
-            let devices = indi.get_devices_list();
-            for device in devices {
-                indi.command_set_switch_property(
-                    &device.name,
-                    prop_name,
-                    &[(elem_name, true)]
-                )?;
-            }
-            Ok(())
-        });
+        self.submit_connect_cmd(
+            Command::Indi(IndiCommand::SetSwitchElementForAllDevices {
+                prop: prop_name.to_string(),
+                element: elem_name.to_string(),
+            }),
+            ConnectPending::Plain
+        );
+    }
+
+    fn submit_connect_cmd(&self, cmd: Command, pending: ConnectPending) {
+        match self.engine.submit_command(cmd) {
+            Ok(id) => { _ = self.pending_cmds.borrow_mut().insert(id, pending); }
+            Err(err) => show_error_message(Some(&self.window), "Error", &err.to_string()),
+        }
     }
 
     fn handler_action_get_site_from_devices(self: &Rc<Self>) {

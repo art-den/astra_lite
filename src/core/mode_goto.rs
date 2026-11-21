@@ -3,6 +3,7 @@ use crate::{
     core::{cam_ctrl::take_shot, consts::*, events::*, frame_processing::*, preview::Preview}, hal::{Camera, FrameType, Telescope}, image::{image::Image, info::LightFrameInfo, stars::{StarItems, Stars}, stars_offset::Point}, options::*, plate_solve::*, sky_math::math::*, utils::log_utils::log_if_error,
 };
 use ::indi::value_to_sexagesimal;
+use serde::{Deserialize, Serialize};
 use super::{engine::*, events::EventHandlers, utils::*};
 
 const MAX_MOUNT_UNPARK_TIME: usize = 60; // seconds
@@ -34,7 +35,7 @@ pub enum GotoDestination {
     Coord(EqCoord)
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug, Clone, Serialize, Deserialize)]
 pub enum GotoConfig {
     OnlyGoto,
     GotoPlateSolveAndCorrect,

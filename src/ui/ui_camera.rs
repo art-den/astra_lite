@@ -1,8 +1,8 @@
-use std::{rc::Rc, sync::Arc, cell::RefCell};
+use std::{rc::Rc, sync::Arc, cell::{Cell, RefCell}};
 use gtk::{cairo, glib::{self, clone}, prelude::*};
 use macros::FromBuilder;
 use crate::{
-    core::{cur_devices::CurDevices, engine::*, events::*, frame_processing::*, utils::{FileNameArg, FileNameUtils}}, hal::{DeviceType, FrameType, HalState, events::HalEvent}, image::{info::*, raw::CalibrMethods}, options::*,
+    core::{api::{Command, StartMode}, cur_devices::CurDevices, engine::*, events::*, frame_processing::*, utils::{FileNameArg, FileNameUtils}}, hal::{DeviceType, FrameType, HalState, events::HalEvent}, image::{info::*, raw::CalibrMethods}, options::*, utils::log_utils::log_if_error,
 };
 use super::{gtk_utils::*, module::*, ui_main::*, ui_start_dialog::StartDialog, utils::*};
 
@@ -30,6 +30,7 @@ pub fn init_ui(
         engine:            Arc::clone(engine),
         delayed_actions: DelayedActions::new(500),
         fn_utils:        RefCell::new(FileNameUtils::default()),
+        opts_syncing:    Cell::new(false),
     });
 
     obj.init_cam_ctrl_widgets();
@@ -273,17 +274,24 @@ struct CameraUi {
     engine:          Arc<Engine>,
     delayed_actions: DelayedActions<DelayedAction>,
     fn_utils:        RefCell<FileNameUtils>,
+    /// Set while widgets are programmatically synced from `Options`: option
+    /// write handlers must not run (callers hold the `options` read guard,
+    /// so `exec_command` would self-deadlock; replaces the old `try_write`
+    /// skip). See `sync_suppress()`.
+    opts_syncing:    Cell<bool>,
 }
 
 impl UiModule for CameraUi {
     fn show_options(&self, options: &Options) {
-        self.show_common_options(options);
-        self.show_frame_options(options);
-        self.show_calibr_options(options);
-        self.show_ctrl_options(options);
-        self.show_raw_options(options);
-        self.show_live_stacking_options(options);
-        self.show_frame_quality_options(options);
+        self.sync_suppress(|| {
+            self.show_common_options(options);
+            self.show_frame_options(options);
+            self.show_calibr_options(options);
+            self.show_ctrl_options(options);
+            self.show_raw_options(options);
+            self.show_live_stacking_options(options);
+            self.show_frame_quality_options(options);
+        });
     }
 
     fn get_options(&self, options: &mut Options) {
@@ -392,7 +400,7 @@ impl UiModule for CameraUi {
             }
             Event::ModeContinued => {
                 let options = self.engine.options.read().unwrap();
-                self.show_frame_options(&options);
+                self.sync_suppress(|| self.show_frame_options(&options));
             }
             Event::FrameProcessing(result) => {
                 self.show_frame_processing_result(result);
@@ -407,24 +415,25 @@ impl UiModule for CameraUi {
                     });
                 }
                 let options = self.engine.options.read().unwrap();
+                self.sync_suppress(|| {
+                    // Show some options for specific camera
+                    self.show_frame_options(&options);
+                    self.show_ctrl_options(&options);
+                    self.show_calibr_options(&options);
 
-                // Show some options for specific camera
-                self.show_frame_options(&options);
-                self.show_ctrl_options(&options);
-                self.show_calibr_options(&options);
+                    // Show new total time
 
-                // Show new total time
+                    self.show_total_raw_time_impl(&options);
 
-                self.show_total_raw_time_impl(&options);
+                    // Init fn_utils and show calibration files
 
-                // Init fn_utils and show calibration files
+                    self.init_fn_utils();
+                    self.show_calibr_file_for_frame(&options);
 
-                self.init_fn_utils();
-                self.show_calibr_file_for_frame(&options);
-
-                self.update_resolution_list_impl(&options);
-                self.fill_heater_items_list_impl(&options);
-                self.fill_conv_gain_items_list_impl(&options);
+                    self.update_resolution_list_impl(&options);
+                    self.fill_heater_items_list_impl(&options);
+                    self.fill_conv_gain_items_list_impl(&options);
+                });
                 drop(options);
 
                 self.correct_widgets_props_impl();
@@ -541,6 +550,14 @@ impl Drop for CameraUi {
 }
 
 impl CameraUi {
+    /// Runs a widget sync from `Options` with option write handlers suppressed
+    /// (the callers hold the `options` read guard).
+    fn sync_suppress(&self, sync: impl FnOnce()) {
+        let prev = self.opts_syncing.replace(true);
+        sync();
+        self.opts_syncing.set(prev);
+    }
+
     fn init_cam_ctrl_widgets(&self) {
         self.widgets.ctrl.spb_temp.set_range(-100.0, 100.0);
         self.widgets.info.l_temp_value.set_text("");
@@ -611,242 +628,455 @@ impl CameraUi {
             clone!(@weak self as self_ => move |cb| {
                 let Some(cur_id) = cb.active_id() else { return; };
                 self_.excl.exec(|| {
-                    self_.engine.cur_devices.change_camera(&cur_id);
+                    log_if_error(
+                        &self_.engine.exec_command(
+                            Command::SetCameraDevice { device_id: cur_id.to_string() }
+                        ),
+                        "Select camera device"
+                    );
                 });
             })
         );
 
         self.widgets.common.chb_live_view.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.cam.live_view = chb.is_active();
-                drop(options);
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetLiveViewEnabled { enabled: chb.is_active() }
+                    ),
+                    "Set live view enabled"
+                );
                 self_.handler_live_view_changed();
             })
         );
 
         self.widgets.ctrl.chb_cooler.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                if options.cam.ctrl.enable_cooler == chb.is_active() { return; }
-                options.cam.ctrl.enable_cooler = chb.is_active();
-                drop(options);
-                self_.engine.events.send(Event::CameraCoolingOptionsChanged);
+                if self_.opts_syncing.get() { return; }
+                let temperature = self_.engine.options.read().unwrap().cam.ctrl.temperature;
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetCooling { enable_cooler: chb.is_active(), temperature }
+                    ),
+                    "Set cooling options"
+                );
             })
         );
 
         self.widgets.ctrl.spb_temp.connect_value_changed(
             clone!(@weak self as self_ => move |spb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                if options.cam.ctrl.temperature == spb.value() { return; }
-                options.cam.ctrl.temperature = spb.value();
-                drop(options);
-                self_.engine.events.send(Event::CameraCoolingOptionsChanged);
+                if self_.opts_syncing.get() { return; }
+                let enable_cooler = self_.engine.options.read().unwrap().cam.ctrl.enable_cooler;
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetCooling { enable_cooler, temperature: spb.value() }
+                    ),
+                    "Set cooling options"
+                );
             })
         );
 
         self.widgets.ctrl.cb_heater.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                let heater_str = cb.active_id().map(|id| id.to_string());
-                if options.cam.ctrl.heater_str == heater_str { return; }
-                options.cam.ctrl.heater_str = heater_str;
-                drop(options);
-                self_.engine.events.send(Event::CameraHeaterOptionsChanged);
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetHeater { heater_str: cb.active_id().map(|id| id.to_string()) }
+                    ),
+                    "Set heater options"
+                );
             })
         );
 
         self.widgets.ctrl.chb_fan.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                if options.cam.ctrl.enable_fan == chb.is_active() { return; }
-                options.cam.ctrl.enable_fan = chb.is_active();
-                drop(options);
-                self_.engine.events.send(Event::CameraFanOptionsChanged);
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetFan { enable_fan: chb.is_active() }
+                    ),
+                    "Set fan options"
+                );
             })
         );
 
         self.widgets.ctrl.cb_conv_gain.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.cam.ctrl.conv_gain_str = cb.active_id().map(|id| id.to_string());
+                if self_.opts_syncing.get() { return; }
+                let (low_noise, high_fullwell) = {
+                    let options = self_.engine.options.read().unwrap();
+                    (options.cam.ctrl.low_noise, options.cam.ctrl.high_fullwell)
+                };
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetCamReadoutOptions {
+                            conv_gain_str: cb.active_id().map(|id| id.to_string()),
+                            low_noise,
+                            high_fullwell,
+                        }
+                    ),
+                    "Set camera readout options"
+                );
             })
         );
 
         self.widgets.ctrl.chb_low_noise.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.cam.ctrl.low_noise = chb.is_active();
+                if self_.opts_syncing.get() { return; }
+                let (conv_gain_str, high_fullwell) = {
+                    let options = self_.engine.options.read().unwrap();
+                    (options.cam.ctrl.conv_gain_str.clone(), options.cam.ctrl.high_fullwell)
+                };
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetCamReadoutOptions {
+                            conv_gain_str,
+                            low_noise: chb.is_active(),
+                            high_fullwell,
+                        }
+                    ),
+                    "Set camera readout options"
+                );
             })
         );
 
         self.widgets.ctrl.chb_high_fw.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.cam.ctrl.high_fullwell = chb.is_active();
+                if self_.opts_syncing.get() { return; }
+                let (conv_gain_str, low_noise) = {
+                    let options = self_.engine.options.read().unwrap();
+                    (options.cam.ctrl.conv_gain_str.clone(), options.cam.ctrl.low_noise)
+                };
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetCamReadoutOptions {
+                            conv_gain_str,
+                            low_noise,
+                            high_fullwell: chb.is_active(),
+                        }
+                    ),
+                    "Set camera readout options"
+                );
             })
         );
 
         self.widgets.frame.cb_mode.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                let frame_type = FrameType::from_active_id(cb.active_id().as_deref());
-                if options.cam.frame.frame_type == frame_type { return; }
-                options.cam.frame.frame_type = frame_type;
-                drop(options);
-                self_.engine.events.send(Event::CameraFrameTypeChanged);
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetFrameType {
+                            frame_type: FrameType::from_active_id(cb.active_id().as_deref())
+                        }
+                    ),
+                    "Set frame type"
+                );
             })
         );
 
         self.widgets.frame.chb_auto_exp.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.cam.frame.auto_exp = chb.is_active();
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetAutoExpEnabled { enabled: chb.is_active() }
+                    ),
+                    "Set auto exposure"
+                );
             })
         );
 
         self.widgets.frame.spb_exp.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                if options.cam.frame.exposure() == sb.value() { return; }
-                options.cam.frame.set_exposure(sb.value());
-                drop(options);
-                self_.engine.events.send(Event::CameraExposureChanged);
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetExposure { exposure: sb.value() }
+                    ),
+                    "Set exposure"
+                );
             })
         );
 
         self.widgets.frame.spb_gain.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                if options.cam.frame.gain == sb.value() { return; }
-                options.cam.frame.gain = sb.value();
-                drop(options);
-                self_.engine.events.send(Event::CameraFrameOptionsChanged);
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetGain { gain: sb.value() }
+                    ),
+                    "Set gain"
+                );
             })
         );
 
         self.widgets.frame.spb_offset.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                let offset = sb.value() as i32;
-                if options.cam.frame.offset == offset { return; }
-                options.cam.frame.offset = offset;
-                drop(options);
-                self_.engine.events.send(Event::CameraFrameOptionsChanged);
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetOffset { offset: sb.value() as i32 }
+                    ),
+                    "Set offset"
+                );
             })
         );
 
         self.widgets.frame.cb_bin.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                let binning = Binning::from_active_id(cb.active_id().as_deref());
-                if options.cam.frame.binning == binning { return; }
-                options.cam.frame.binning = binning;
-                drop(options);
-                self_.engine.events.send(Event::CameraFrameOptionsChanged);
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetBinning {
+                            binning: Binning::from_active_id(cb.active_id().as_deref())
+                        }
+                    ),
+                    "Set binning"
+                );
             })
         );
 
         self.widgets.frame.cb_crop.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                let crop = Crop::from_active_id(cb.active_id().as_deref());
-                if options.cam.frame.crop == crop { return; }
-                options.cam.frame.crop = crop;
-                drop(options);
-                self_.engine.events.send(Event::CameraFrameOptionsChanged);
+                if self_.opts_syncing.get() { return; }
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetCrop {
+                            crop: Crop::from_active_id(cb.active_id().as_deref())
+                        }
+                    ),
+                    "Set crop"
+                );
             })
         );
 
         self.widgets.raw.spb_frames_cnt.connect_value_changed(clone!(@weak self as self_ => move |sb| {
-            let Ok(mut options) = self_.engine.options.try_write() else { return; };
-            options.raw_frames.frame_cnt = sb.value() as usize;
-            drop(options);
+            if self_.opts_syncing.get() { return; }
+            log_if_error(
+                &self_.engine.exec_command(
+                    Command::SetRawFramesCount { frame_cnt: sb.value() as usize }
+                ),
+                "Set raw frames count"
+            );
             self_.show_total_raw_time();
         }));
 
         self.widgets.quality.chb_max_fwhm.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.quality.use_max_fwhm = chb.is_active();
-                drop(options);
+                if self_.opts_syncing.get() { return; }
+                let cmd = {
+                    let options = self_.engine.options.read().unwrap();
+                    Command::SetQualityOptions {
+                        use_max_fwhm:      chb.is_active(),
+                        max_fwhm:          options.quality.max_fwhm,
+                        use_max_ovality:   options.quality.use_max_ovality,
+                        max_ovality:       options.quality.max_ovality,
+                        ignore_3px_stars:  options.quality.ignore_3px_stars,
+                        star_recogn_sens:  options.quality.star_recogn_sens,
+                        check_ccd_temp:    options.quality.check_ccd_temp,
+                        max_ccd_temp_diff: options.quality.max_ccd_temp_diff,
+                    }
+                };
+                log_if_error(&self_.engine.exec_command(cmd), "Set quality options");
                 self_.correct_frame_quality_widgets_props();
             })
         );
 
         self.widgets.quality.spb_max_fwhm.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.quality.max_fwhm = sb.value() as f32;
+                if self_.opts_syncing.get() { return; }
+                let cmd = {
+                    let options = self_.engine.options.read().unwrap();
+                    Command::SetQualityOptions {
+                        use_max_fwhm:      options.quality.use_max_fwhm,
+                        max_fwhm:          sb.value() as f32,
+                        use_max_ovality:   options.quality.use_max_ovality,
+                        max_ovality:       options.quality.max_ovality,
+                        ignore_3px_stars:  options.quality.ignore_3px_stars,
+                        star_recogn_sens:  options.quality.star_recogn_sens,
+                        check_ccd_temp:    options.quality.check_ccd_temp,
+                        max_ccd_temp_diff: options.quality.max_ccd_temp_diff,
+                    }
+                };
+                log_if_error(&self_.engine.exec_command(cmd), "Set quality options");
             })
         );
 
         self.widgets.quality.chb_max_oval.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.quality.use_max_ovality = chb.is_active();
+                if self_.opts_syncing.get() { return; }
+                let cmd = {
+                    let options = self_.engine.options.read().unwrap();
+                    Command::SetQualityOptions {
+                        use_max_fwhm:      options.quality.use_max_fwhm,
+                        max_fwhm:          options.quality.max_fwhm,
+                        use_max_ovality:   chb.is_active(),
+                        max_ovality:       options.quality.max_ovality,
+                        ignore_3px_stars:  options.quality.ignore_3px_stars,
+                        star_recogn_sens:  options.quality.star_recogn_sens,
+                        check_ccd_temp:    options.quality.check_ccd_temp,
+                        max_ccd_temp_diff: options.quality.max_ccd_temp_diff,
+                    }
+                };
+                log_if_error(&self_.engine.exec_command(cmd), "Set quality options");
                 self_.correct_frame_quality_widgets_props();
             })
         );
 
         self.widgets.quality.spb_max_oval.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.quality.max_ovality = sb.value() as f32;
+                if self_.opts_syncing.get() { return; }
+                let cmd = {
+                    let options = self_.engine.options.read().unwrap();
+                    Command::SetQualityOptions {
+                        use_max_fwhm:      options.quality.use_max_fwhm,
+                        max_fwhm:          options.quality.max_fwhm,
+                        use_max_ovality:   options.quality.use_max_ovality,
+                        max_ovality:       sb.value() as f32,
+                        ignore_3px_stars:  options.quality.ignore_3px_stars,
+                        star_recogn_sens:  options.quality.star_recogn_sens,
+                        check_ccd_temp:    options.quality.check_ccd_temp,
+                        max_ccd_temp_diff: options.quality.max_ccd_temp_diff,
+                    }
+                };
+                log_if_error(&self_.engine.exec_command(cmd), "Set quality options");
             })
         );
 
         self.widgets.quality.chb_ignore_3px_stars.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.quality.ignore_3px_stars = chb.is_active();
+                if self_.opts_syncing.get() { return; }
+                let cmd = {
+                    let options = self_.engine.options.read().unwrap();
+                    Command::SetQualityOptions {
+                        use_max_fwhm:      options.quality.use_max_fwhm,
+                        max_fwhm:          options.quality.max_fwhm,
+                        use_max_ovality:   options.quality.use_max_ovality,
+                        max_ovality:       options.quality.max_ovality,
+                        ignore_3px_stars:  chb.is_active(),
+                        star_recogn_sens:  options.quality.star_recogn_sens,
+                        check_ccd_temp:    options.quality.check_ccd_temp,
+                        max_ccd_temp_diff: options.quality.max_ccd_temp_diff,
+                    }
+                };
+                log_if_error(&self_.engine.exec_command(cmd), "Set quality options");
             })
         );
 
         self.widgets.quality.cbx_stars_sens.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.quality.star_recogn_sens = StarRecognSensitivity::from_active_id(
-                    cb.active_id().as_deref()
-                )
+                if self_.opts_syncing.get() { return; }
+                let cmd = {
+                    let options = self_.engine.options.read().unwrap();
+                    Command::SetQualityOptions {
+                        use_max_fwhm:      options.quality.use_max_fwhm,
+                        max_fwhm:          options.quality.max_fwhm,
+                        use_max_ovality:   options.quality.use_max_ovality,
+                        max_ovality:       options.quality.max_ovality,
+                        ignore_3px_stars:  options.quality.ignore_3px_stars,
+                        star_recogn_sens:  StarRecognSensitivity::from_active_id(
+                            cb.active_id().as_deref()
+                        ),
+                        check_ccd_temp:    options.quality.check_ccd_temp,
+                        max_ccd_temp_diff: options.quality.max_ccd_temp_diff,
+                    }
+                };
+                log_if_error(&self_.engine.exec_command(cmd), "Set quality options");
             })
         );
 
         self.widgets.quality.chb_max_temp_diff.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.quality.check_ccd_temp = chb.is_active();
+                if self_.opts_syncing.get() { return; }
+                let cmd = {
+                    let options = self_.engine.options.read().unwrap();
+                    Command::SetQualityOptions {
+                        use_max_fwhm:      options.quality.use_max_fwhm,
+                        max_fwhm:          options.quality.max_fwhm,
+                        use_max_ovality:   options.quality.use_max_ovality,
+                        max_ovality:       options.quality.max_ovality,
+                        ignore_3px_stars:  options.quality.ignore_3px_stars,
+                        star_recogn_sens:  options.quality.star_recogn_sens,
+                        check_ccd_temp:    chb.is_active(),
+                        max_ccd_temp_diff: options.quality.max_ccd_temp_diff,
+                    }
+                };
+                log_if_error(&self_.engine.exec_command(cmd), "Set quality options");
                 self_.correct_frame_quality_widgets_props();
             })
         );
 
         self.widgets.quality.spb_max_temp_diff.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.quality.max_ccd_temp_diff = sb.value();
+                if self_.opts_syncing.get() { return; }
+                let cmd = {
+                    let options = self_.engine.options.read().unwrap();
+                    Command::SetQualityOptions {
+                        use_max_fwhm:      options.quality.use_max_fwhm,
+                        max_fwhm:          options.quality.max_fwhm,
+                        use_max_ovality:   options.quality.use_max_ovality,
+                        max_ovality:       options.quality.max_ovality,
+                        ignore_3px_stars:  options.quality.ignore_3px_stars,
+                        star_recogn_sens:  options.quality.star_recogn_sens,
+                        check_ccd_temp:    options.quality.check_ccd_temp,
+                        max_ccd_temp_diff: sb.value(),
+                    }
+                };
+                log_if_error(&self_.engine.exec_command(cmd), "Set quality options");
             })
         );
 
         self.widgets.calibr.chb_dark.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.calibr.dark_frame_en = chb.is_active();
+                if self_.opts_syncing.get() { return; }
+                let cmd = {
+                    let options = self_.engine.options.read().unwrap();
+                    Command::SetCalibrOptions {
+                        dark_frame_en:    chb.is_active(),
+                        flat_frame_en:    options.calibr.flat_frame_en,
+                        flat_frame_fname: options.calibr.flat_frame_fname.to_string_lossy().into_owned(),
+                        hot_pixels:       options.calibr.hot_pixels,
+                    }
+                };
+                log_if_error(&self_.engine.exec_command(cmd), "Set calibration options");
+                let options = self_.engine.options.read().unwrap();
                 self_.show_calibr_file_for_frame(&options);
             })
         );
 
         self.widgets.calibr.chb_flat.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.calibr.flat_frame_en = chb.is_active();
+                if self_.opts_syncing.get() { return; }
+                let cmd = {
+                    let options = self_.engine.options.read().unwrap();
+                    Command::SetCalibrOptions {
+                        dark_frame_en:    options.calibr.dark_frame_en,
+                        flat_frame_en:    chb.is_active(),
+                        flat_frame_fname: options.calibr.flat_frame_fname.to_string_lossy().into_owned(),
+                        hot_pixels:       options.calibr.hot_pixels,
+                    }
+                };
+                log_if_error(&self_.engine.exec_command(cmd), "Set calibration options");
+                let options = self_.engine.options.read().unwrap();
                 self_.show_calibr_file_for_frame(&options);
             })
         );
 
         self.widgets.calibr.fch_flat.connect_file_set(
             clone!(@weak self as self_ => move |fch| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.calibr.flat_frame_fname = fch.filename().unwrap_or_default();
+                if self_.opts_syncing.get() { return; }
+                let cmd = {
+                    let options = self_.engine.options.read().unwrap();
+                    Command::SetCalibrOptions {
+                        dark_frame_en:    options.calibr.dark_frame_en,
+                        flat_frame_en:    options.calibr.flat_frame_en,
+                        flat_frame_fname: fch.filename().unwrap_or_default().to_string_lossy().into_owned(),
+                        hot_pixels:       options.calibr.hot_pixels,
+                    }
+                };
+                log_if_error(&self_.engine.exec_command(cmd), "Set calibration options");
+                let options = self_.engine.options.read().unwrap();
                 self_.show_calibr_file_for_frame(&options);
             })
         );
@@ -854,25 +1084,49 @@ impl CameraUi {
         self.widgets.calibr.chb_hot_pixels.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 self_.widgets.calibr.l_hot_px_warn.set_visible(chb.is_active());
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.calibr.hot_pixels = chb.is_active();
-                drop(options);
+                if self_.opts_syncing.get() { return; }
+                let cmd = {
+                    let options = self_.engine.options.read().unwrap();
+                    Command::SetCalibrOptions {
+                        dark_frame_en:    options.calibr.dark_frame_en,
+                        flat_frame_en:    options.calibr.flat_frame_en,
+                        flat_frame_fname: options.calibr.flat_frame_fname.to_string_lossy().into_owned(),
+                        hot_pixels:       chb.is_active(),
+                    }
+                };
+                log_if_error(&self_.engine.exec_command(cmd), "Set calibration options");
             })
         );
 
         self.widgets.live_st.chb_no_tracks.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 self_.widgets.live_st.l_no_tracks.set_visible(chb.is_active());
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.live.remove_tracks = chb.is_active();
-                drop(options);
+                if self_.opts_syncing.get() { return; }
+                let frame_cnt = self_.engine.options.read().unwrap().live.frame_cnt;
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetLiveStackingOptions {
+                            remove_tracks: chb.is_active(),
+                            frame_cnt,
+                        }
+                    ),
+                    "Set live stacking options"
+                );
             })
         );
 
         self.widgets.live_st.spb_frames_cnt.connect_value_changed(clone!(@weak self as self_ => move |sb| {
-            let Ok(mut options) = self_.engine.options.try_write() else { return; };
-            options.live.frame_cnt = sb.value() as usize;
-            drop(options);
+            if self_.opts_syncing.get() { return; }
+            let remove_tracks = self_.engine.options.read().unwrap().live.remove_tracks;
+            log_if_error(
+                &self_.engine.exec_command(
+                    Command::SetLiveStackingOptions {
+                        remove_tracks,
+                        frame_cnt: sb.value() as usize,
+                    }
+                ),
+                "Set live stacking options"
+            );
         }));
 
         self.widgets.info.bx.connect_screen_changed(
@@ -1293,8 +1547,12 @@ impl CameraUi {
             &self.widgets.common.cb_cam_list,
             if !cur_cam_device.is_empty() { Some(&cur_cam_device) } else { None },
             |id| {
-                let Ok(mut options) = self.engine.options.try_write() else { return; };
-                options.cam.device_id = id.to_string()
+                log_if_error(
+                    &self.engine.exec_command(
+                        Command::SetCameraDevice { device_id: id.to_string() }
+                    ),
+                    "Select camera device"
+                );
             }
         );
     }
@@ -1331,12 +1589,12 @@ impl CameraUi {
 
     fn update_resolution_list(&self) {
         let options = self.engine.options.read().unwrap();
-        self.update_resolution_list_impl(&options);
+        self.sync_suppress(|| self.update_resolution_list_impl(&options));
     }
 
     fn fill_heater_items_list(&self) {
         let options = self.engine.options.read().unwrap();
-        self.fill_heater_items_list_impl(&options);
+        self.sync_suppress(|| self.fill_heater_items_list_impl(&options));
     }
 
     fn fill_heater_items_list_impl(&self, options: &Options) {
@@ -1365,7 +1623,7 @@ impl CameraUi {
 
     fn fill_conv_gain_items_list(&self) {
         let options = self.engine.options.read().unwrap();
-        self.fill_conv_gain_items_list_impl(&options);
+        self.sync_suppress(|| self.fill_conv_gain_items_list_impl(&options));
     }
 
     fn fill_conv_gain_items_list_impl(&self, options: &Options) {
@@ -1395,7 +1653,7 @@ impl CameraUi {
     fn start_live_view(&self) {
         self.main_ui.get_all_options();
         exec_and_show_error(Some(&self.window), || {
-            self.engine.start_live_view()?;
+            self.engine.exec_command(Command::Start(StartMode::LiveView))?;
             Ok(())
         });
     }
@@ -1403,13 +1661,16 @@ impl CameraUi {
     fn handler_action_take_shot(&self) {
         self.main_ui.get_all_options();
         exec_and_show_error(Some(&self.window), || {
-            self.engine.start_single_shot()?;
+            self.engine.exec_command(Command::Start(StartMode::SingleShot))?;
             Ok(())
         });
     }
 
     fn handler_action_stop_shot(&self) {
-        self.engine.abort_active_mode();
+        log_if_error(
+            &self.engine.exec_command(Command::StopActiveMode),
+            "Stop active mode"
+        );
     }
 
     fn show_cur_temperature_value(
@@ -1445,7 +1706,10 @@ impl CameraUi {
             self.main_ui.get_all_options();
             self.start_live_view();
         } else {
-            self.engine.abort_active_mode();
+            log_if_error(
+                &self.engine.exec_command(Command::StopActiveMode),
+                "Stop active mode"
+            );
         }
     }
 
@@ -1476,20 +1740,23 @@ impl CameraUi {
             &info_pairs
         );
         dialog.exec(clone!(@strong self as self_ => move || {
-            self_.engine.start_live_stacking()?;
+            self_.engine.exec_command(Command::Start(StartMode::LiveStacking))?;
             Ok(())
         }));
     }
 
     fn handler_action_stop_live_stacking(&self) {
-        self.engine.abort_active_mode();
+        log_if_error(
+            &self.engine.exec_command(Command::StopActiveMode),
+            "Stop active mode"
+        );
     }
 
     fn handler_action_continue_live_stacking(&self) {
         self.main_ui.get_all_options();
         exec_and_show_error(Some(&self.window), || {
             self.engine.check_before_saving_raw_or_live_stacking()?;
-            self.engine.continue_aborted_mode()?;
+            self.engine.exec_command(Command::ContinueAbortedMode)?;
             Ok(())
         });
     }
@@ -1644,7 +1911,7 @@ impl CameraUi {
             &info_pairs
         );
         dialog.exec(clone!(@strong self as self_ => move || {
-            self_.engine.start_saving_raw_frames()?;
+            self_.engine.exec_command(Command::Start(StartMode::SavingRawFrames))?;
             Ok(())
         }));
     }
@@ -1653,13 +1920,16 @@ impl CameraUi {
         self.main_ui.get_all_options();
         exec_and_show_error(Some(&self.window), || {
             self.engine.check_before_saving_raw_or_live_stacking()?;
-            self.engine.continue_aborted_mode()?;
+            self.engine.exec_command(Command::ContinueAbortedMode)?;
             Ok(())
         });
     }
 
     fn handler_action_stop_save_raw_frames(&self) {
-        self.engine.abort_active_mode();
+        log_if_error(
+            &self.engine.exec_command(Command::StopActiveMode),
+            "Stop active mode"
+        );
     }
 
     fn show_total_raw_time_impl(&self, options: &Options) {

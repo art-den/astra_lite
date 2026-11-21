@@ -1,9 +1,10 @@
-use std::{rc::Rc, sync::Arc};
+use std::{cell::Cell, rc::Rc, sync::Arc};
 use gtk::{prelude::*, glib, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
-    core::{engine::*, events::*}, guiding::external_guider::*, hal::events::HalEvent, options::*
+    core::{api::{Command, StartMode}, engine::*, events::*}, guiding::external_guider::*, hal::events::HalEvent, options::*,
+    utils::log_utils::log_if_error
 };
 
 use super::{gtk_utils::*, module::*, ui_main::*, utils::*};
@@ -22,6 +23,7 @@ pub fn init_ui(
         window:        window.clone(),
         main_ui:       Rc::clone(main_ui),
         engine:        Arc::clone(engine),
+        opts_syncing:  Cell::new(false),
     });
 
     obj.init_widgets();
@@ -76,6 +78,7 @@ struct GuidingUi {
     main_ui:      Rc<MainUi>,
     window:       gtk::ApplicationWindow,
     engine:       Arc<Engine>,
+    opts_syncing: Cell<bool>,
 }
 
 impl Drop for GuidingUi {
@@ -86,20 +89,22 @@ impl Drop for GuidingUi {
 
 impl UiModule for GuidingUi {
     fn show_options(&self, options: &Options) {
-        match options.guiding.mode {
-            GuidingMode::Disabled =>
-                self.widgets.rbtn_no_guiding.set_active(true),
-            GuidingMode::MainCamera =>
-                self.widgets.rbtn_guide_main_cam.set_active(true),
-            GuidingMode::External =>
-                self.widgets.rbtn_guide_ext.set_active(true),
-        }
-        self.widgets.cb_dith_period    .set_active_id(Some(options.guiding.dith_period.to_string().as_str()));
-        self.widgets.spb_ext_dith_dist.set_value    (options.guiding.ext_guider.dith_dist as f64);
-        self.widgets.spb_guid_max_err .set_value    (options.guiding.main_cam.max_error);
-        self.widgets.spb_dith_dist    .set_value    (options.guiding.main_cam.dith_dist as f64);
-        self.widgets.cbx_mnt_cal_gain .set_active_id(Some(options.guiding.main_cam.calibr_gain.to_active_id()));
-        set_spb_value(&self.widgets.spb_mnt_cal_exp, options.guiding.main_cam.calibr_exposure);
+        self.sync_suppress(|| {
+            match options.guiding.mode {
+                GuidingMode::Disabled =>
+                    self.widgets.rbtn_no_guiding.set_active(true),
+                GuidingMode::MainCamera =>
+                    self.widgets.rbtn_guide_main_cam.set_active(true),
+                GuidingMode::External =>
+                    self.widgets.rbtn_guide_ext.set_active(true),
+            }
+            self.widgets.cb_dith_period    .set_active_id(Some(options.guiding.dith_period.to_string().as_str()));
+            self.widgets.spb_ext_dith_dist .set_value    (options.guiding.ext_guider.dith_dist as f64);
+            self.widgets.spb_guid_max_err  .set_value    (options.guiding.main_cam.max_error);
+            self.widgets.spb_dith_dist     .set_value    (options.guiding.main_cam.dith_dist as f64);
+            self.widgets.cbx_mnt_cal_gain  .set_active_id(Some(options.guiding.main_cam.calibr_gain.to_active_id()));
+            set_spb_value(&self.widgets.spb_mnt_cal_exp, options.guiding.main_cam.calibr_exposure);
+        });
     }
 
     fn get_options(&self, options: &mut Options) {
@@ -175,6 +180,12 @@ impl UiModule for GuidingUi {
 }
 
 impl GuidingUi {
+    fn sync_suppress(&self, sync: impl FnOnce()) {
+        let prev = self.opts_syncing.replace(true);
+        sync();
+        self.opts_syncing.set(prev);
+    }
+
     fn init_widgets(&self) {
         self.widgets.spb_guid_max_err.set_range(3.0, 50.0);
         self.widgets.spb_guid_max_err.set_digits(0);
@@ -210,13 +221,30 @@ impl GuidingUi {
         connect_rbtn(&self.widgets.rbtn_guide_ext);
 
         self.widgets.spb_mnt_cal_exp.connect_value_changed(clone!(@weak self as self_ => move |sb| {
-            let Ok(mut options) = self_.engine.options.try_write() else { return; };
-            options.guiding.main_cam.calibr_exposure = sb.value();
+            if self_.opts_syncing.get() { return; }
+            let calibr_gain = self_.engine.options.read().unwrap().guiding.main_cam.calibr_gain;
+            log_if_error(
+                &self_.engine.exec_command(
+                    Command::SetGuidingOptions {
+                        calibr_exposure: sb.value(), calibr_gain,
+                    }
+                ),
+                "Set guiding options"
+            );
         }));
 
         self.widgets.cbx_mnt_cal_gain.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
-            let Ok(mut options) = self_.engine.options.try_write() else { return; };
-            options.guiding.main_cam.calibr_gain = Gain::from_active_id(cb.active_id().as_deref());
+            if self_.opts_syncing.get() { return; }
+            let calibr_exposure = self_.engine.options.read().unwrap().guiding.main_cam.calibr_exposure;
+            log_if_error(
+                &self_.engine.exec_command(
+                    Command::SetGuidingOptions {
+                        calibr_exposure,
+                        calibr_gain: Gain::from_active_id(cb.active_id().as_deref()),
+                    }
+                ),
+                "Set guiding options"
+            );
         }));
     }
 
@@ -268,13 +296,16 @@ impl GuidingUi {
         self.main_ui.get_all_options();
 
         exec_and_show_error(Some(&self.window), || {
-            self.engine.start_mount_calibr()?;
+            self.engine.exec_command(Command::Start(StartMode::MountCalibr))?;
             Ok(())
         });
     }
 
     fn handler_action_stop_dither_calibr(&self) {
-        self.engine.abort_active_mode();
+        log_if_error(
+            &self.engine.exec_command(Command::StopActiveMode),
+            "Stop active mode"
+        );
     }
 
     fn process_ext_guider_event(&self, evt: &ExtGuiderEvent) {

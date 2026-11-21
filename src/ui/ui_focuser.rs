@@ -1,13 +1,13 @@
-use std::{cell::{Cell, RefCell}, rc::Rc, sync::Arc};
+use std::{cell::{Cell, RefCell}, collections::HashMap, rc::Rc, sync::Arc};
 use gtk::{glib, gdk, prelude::*, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
-    core::{engine::{Engine, ModeKind}, events::*, mode_focusing::*},
+    core::{api::{Command, FocuserCommand, Reply, StartMode}, engine::{Engine, ModeKind}, events::*, mode_focusing::*},
     hal::{DeviceType, FocuserState, HalState, events::HalEvent},
     options::*,
     ui::plots::*,
-    utils::math::{cmp_f64, linear_interpolate},
+    utils::{log_utils::log_if_error, math::{cmp_f64, linear_interpolate}},
 };
 
 use super::{gtk_utils::*, module::*, ui_main::*, utils::*};
@@ -33,6 +33,9 @@ pub fn init_ui(
         step:            Cell::new(10),
         step_large:      Cell::new(100),
         prev_pos_state:  Cell::new(None),
+        opts_syncing:    Cell::new(false),
+        state_syncing:   Cell::new(false),
+        pending_cmds:    RefCell::new(HashMap::new()),
     });
 
     obj.init_widgets();
@@ -109,6 +112,16 @@ struct FocuserUi {
     step:            Cell<i32>,
     step_large:      Cell<i32>,
     prev_pos_state:  Cell<Option<FocuserState>>,
+    opts_syncing:    Cell<bool>,
+    // Suppresses command handlers while widgets mirror the device position
+    state_syncing:   Cell<bool>,
+    pending_cmds:    RefCell<HashMap<u64, FocuserPending>>,
+}
+
+#[derive(PartialEq)]
+enum FocuserPending {
+    SetAbs,
+    MoveBy,
 }
 
 #[derive(Hash, Eq, PartialEq)]
@@ -127,19 +140,21 @@ impl Drop for FocuserUi {
 
 impl UiModule for FocuserUi {
     fn show_options(&self, options: &Options) {
-        let widgets = &self.widgets;
-        widgets.chb_temp       .set_active   (options.focuser.on_temp_change);
-        widgets.spb_temp       .set_value    (options.focuser.max_temp_change);
-        widgets.chb_fwhm       .set_active   (options.focuser.on_fwhm_change);
-        widgets.cb_fwhm        .set_active_id(Some(options.focuser.max_fwhm_change.to_string()).as_deref());
-        widgets.chb_period     .set_active   (options.focuser.periodically);
-        widgets.cb_period      .set_active_id(Some(options.focuser.period_minutes.to_string()).as_deref());
-        widgets.spb_measures   .set_value    (options.focuser.measures as f64);
-        widgets.spb_auto_step  .set_value    (options.focuser.step);
-        widgets.cbx_gain       .set_active_id(Some(options.focuser.gain.to_active_id()));
-        widgets.spb_extra_steps.set_value    (options.focuser.anti_backlash_steps as f64);
+        self.sync_suppress(|| {
+            let widgets = &self.widgets;
+            widgets.chb_temp       .set_active   (options.focuser.on_temp_change);
+            widgets.spb_temp       .set_value    (options.focuser.max_temp_change);
+            widgets.chb_fwhm       .set_active   (options.focuser.on_fwhm_change);
+            widgets.cb_fwhm        .set_active_id(Some(options.focuser.max_fwhm_change.to_string()).as_deref());
+            widgets.chb_period     .set_active   (options.focuser.periodically);
+            widgets.cb_period      .set_active_id(Some(options.focuser.period_minutes.to_string()).as_deref());
+            widgets.spb_measures   .set_value    (options.focuser.measures as f64);
+            widgets.spb_auto_step  .set_value    (options.focuser.step);
+            widgets.cbx_gain       .set_active_id(Some(options.focuser.gain.to_active_id()));
+            widgets.spb_extra_steps.set_value    (options.focuser.anti_backlash_steps as f64);
 
-        set_spb_value(&widgets.spb_exp, options.focuser.exposure);
+            set_spb_value(&widgets.spb_exp, options.focuser.exposure);
+        });
     }
 
     fn get_options(&self, options: &mut Options) {
@@ -188,6 +203,21 @@ impl UiModule for FocuserUi {
 
     fn on_event(&self, event: &Event) {
         match event {
+            Event::CommandReply { id, result } => {
+                let Some(pending) = self.pending_cmds.borrow_mut().remove(id) else {
+                    return;
+                };
+                match result {
+                    Err(err_msg) => show_error_message(Some(&self.window), "Error", err_msg),
+                    Ok(Reply::FocuserMove { new_position: Some(value) })
+                        if pending == FocuserPending::MoveBy => {
+                        let prev = self.state_syncing.replace(true);
+                        self.widgets.spb_val.set_value(*value);
+                        self.state_syncing.set(prev);
+                    }
+                    _ => {}
+                }
+            }
             Event::ModeChanged => {
                 self.correct_widgets_props();
             }
@@ -284,6 +314,12 @@ impl UiModule for FocuserUi {
 }
 
 impl FocuserUi {
+    fn sync_suppress(&self, sync: impl FnOnce()) {
+        let prev = self.opts_syncing.replace(true);
+        sync();
+        self.opts_syncing.set(prev);
+    }
+
     fn init_widgets(&self) {
         self.widgets.spb_temp.set_range(0.1, 10.0);
         self.widgets.spb_temp.set_digits(1);
@@ -313,28 +349,43 @@ impl FocuserUi {
         self.widgets.cb_list.connect_active_notify(clone!(@weak self as self_ => move |cb| {
             let Some(new_device_name) = cb.active_id() else { return; };
             self_.excl.exec(|| {
-                self_.engine.cur_devices.change_focuser(&new_device_name);
+                log_if_error(
+                    &self_.engine.exec_command(
+                        Command::SetFocuserDevice { device_id: new_device_name.to_string() }
+                    ),
+                    "Select focuser device"
+                );
             });
         }));
 
         self.widgets.spb_val.connect_value_changed(clone!(@weak self as self_ => move |sb| {
-            self_.excl.exec(|| {
-                let Some(focuser) = self_.engine.cur_devices.focuser() else { return; };
-                exec_and_show_error(Some(&self_.window), || {
-                    focuser.set_abs_position(sb.value())?;
-                    Ok(())
-                });
-            });
+            if self_.state_syncing.get() { return; }
+            self_.submit_focuser_cmd(FocuserCommand::SetAbs(sb.value()), FocuserPending::SetAbs);
         }));
 
         self.widgets.spb_exp.connect_value_changed(clone!(@weak self as self_ => move |sb| {
-            let Ok(mut options) = self_.engine.options.try_write() else { return; };
-            options.focuser.exposure = sb.value();
+            if self_.opts_syncing.get() { return; }
+            let gain = self_.engine.options.read().unwrap().focuser.gain;
+            log_if_error(
+                &self_.engine.exec_command(
+                    Command::SetFocuserOptions { exposure: sb.value(), gain }
+                ),
+                "Set focuser options"
+            );
         }));
 
         self.widgets.cbx_gain.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
-            let Ok(mut options) = self_.engine.options.try_write() else { return; };
-            options.focuser.gain = Gain::from_active_id(cb.active_id().as_deref());
+            if self_.opts_syncing.get() { return; }
+            let exposure = self_.engine.options.read().unwrap().focuser.exposure;
+            log_if_error(
+                &self_.engine.exec_command(
+                    Command::SetFocuserOptions {
+                        exposure,
+                        gain: Gain::from_active_id(cb.active_id().as_deref()),
+                    }
+                ),
+                "Set focuser options"
+            );
         }));
 
         self.widgets.btn_dec_large.connect_clicked(clone!(@weak self as self_ => move |_| {
@@ -435,14 +486,17 @@ impl FocuserUi {
             &self.widgets.cb_list,
             if !cur_focuser.is_empty() { Some(cur_focuser.as_str()) } else { None },
             |id| {
-                let mut options = self.engine.options.write().unwrap();
-                options.focuser.device = id.to_string();
+                log_if_error(
+                    &self.engine.exec_command(
+                        Command::SetFocuserDevice { device_id: id.to_string() }
+                    ),
+                    "Select focuser device"
+                );
             }
         );
     }
 
     fn show_cur_focuser_value(&self, value: Option<i32>, force_configure_widget: bool) {
-        let mut ok = false;
         if let Some(focuser) = self.engine.cur_devices.focuser() {
             let abs_position = value.unwrap_or_else(|| focuser.abs_position().unwrap_or(0.0) as i32 );
             if force_configure_widget || self.widgets.spb_val.value() == 0.0 {
@@ -467,19 +521,18 @@ impl FocuserUi {
                     self.widgets.btn_inc.set_tooltip_text(Some(&format!("+ {}", step)));
                     self.widgets.btn_inc_large.set_tooltip_text(Some(&format!("+ {}", large_step)));
                 }
-                self.excl.exec(|| {
-                    self.widgets.spb_val.set_value(abs_position as f64);
-                    ok = true;
-                });
+                let prev = self.state_syncing.replace(true);
+                self.widgets.spb_val.set_value(abs_position as f64);
+                self.state_syncing.set(prev);
             }
             self.widgets.l_value.set_label(&abs_position.to_string());
         }
     }
 
     fn update_focuser_position_after_focusing(&self, pos: f64) {
-        self.excl.exec(|| {
-            self.widgets.spb_val.set_value(pos);
-        });
+        let prev = self.state_syncing.replace(true);
+        self.widgets.spb_val.set_value(pos);
+        self.state_syncing.set(prev);
     }
 
     fn handler_delayed_action(&self, action: &DelayedAction) {
@@ -618,31 +671,30 @@ impl FocuserUi {
         self.main_ui.get_all_options();
 
         exec_and_show_error(Some(&self.window), || {
-            self.engine.start_focusing()?;
+            self.engine.exec_command(Command::Start(StartMode::Focusing))?;
             Ok(())
         });
     }
 
     fn handler_action_stop_manual_focus(&self) {
-        self.engine.abort_active_mode();
+        log_if_error(
+            &self.engine.exec_command(Command::StopActiveMode),
+            "Stop active mode"
+        );
+    }
+
+    fn submit_focuser_cmd(&self, cmd: FocuserCommand, pending: FocuserPending) {
+        match self.engine.submit_command(Command::Focuser(cmd)) {
+            Ok(id) => { _ = self.pending_cmds.borrow_mut().insert(id, pending); }
+            Err(err) => show_error_message(Some(&self.window), "Error", &err.to_string()),
+        }
     }
 
     fn update_focuser_value(&self, offset: i32) {
-        self.excl.exec(|| {
-            exec_and_show_error(Some(&self.window), || {
-                let Some(focuser) = self.engine.cur_devices.focuser() else { return Ok(()); };
-                let mut value = focuser.abs_position()?;
-                let range = focuser.abs_position_range()?;
-                value += offset as f64;
-                let clamped_value = value.clamp(*range.start(), *range.end());
-                if clamped_value == value {
-                    return Ok(());
-                }
-                focuser.set_abs_position(value)?;
-                self.widgets.spb_val.set_value(value);
-                Ok(())
-            });
-        });
+        self.submit_focuser_cmd(
+            FocuserCommand::MoveBy(offset as f64),
+            FocuserPending::MoveBy
+        );
     }
 
     fn show_info(&self) {
