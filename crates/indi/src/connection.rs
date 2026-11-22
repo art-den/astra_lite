@@ -47,6 +47,7 @@ pub enum EventSenderEvent {
 enum Stream {
     Tcp(TcpStream),
     #[cfg(target_os = "linux")]
+    // Local socket: fast blobs (shared memory fds via SCM_RIGHTS) may be sent here.
     Unix(std::os::unix::net::UnixStream),
 }
 
@@ -304,6 +305,7 @@ impl Connection {
         use std::os::linux::net::SocketAddrExt;
         use std::os::unix::net::{SocketAddr, UnixStream};
 
+        // indiserver's local abstract socket: connecting there opts into fast blob mode.
         let addr = SocketAddr::from_abstract_name("/tmp/indiserver")?;
         // Try to connect INDI server 5 times in 1 second
         let mut last_conn_try_result: Option<std::io::Error> = None;
@@ -320,6 +322,7 @@ impl Connection {
 
     #[cfg(target_os = "linux")]
     fn create_stream(settings: &ConnSettings) -> Result<Stream> {
+        // Local server: unix socket enables fast blobs (shared memory instead of base64).
         let unix_stream =
             !settings.remote ||
             settings.host == "localhost" ||
@@ -2761,6 +2764,7 @@ impl XmlSender {
         Ok(())
     }
 
+    // Blob back-pressure ack for `pingRequest`; the driver pings per blob vector, indiserver usually absorbs it.
     fn command_ping_reply(&self, id: &str) -> Result<()> {
         let xml_text = format!("<pingReply uid=\"{id}\"/>");
         self.xml_sender.send(XmlSenderItem::Xml(xml_text))
@@ -3108,7 +3112,7 @@ impl XmlReceiver {
         events_sender: &mpsc::Sender<EventSenderEvent>,
     ) -> eyre::Result<()> {
         let mut xml_elem = xmltree::Element::parse(xml_text.as_bytes())?;
-        if xml_elem.name == "pingRequest" {
+        if xml_elem.name == "pingRequest" { // auto-ack blob delivery (blob back-pressure)
             let uid = xml_elem.attr_str("uid").unwrap_or_default();
             self.xml_sender.command_ping_reply(uid)?;
         }
