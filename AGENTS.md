@@ -44,6 +44,7 @@ Note for those editing this file: The file should contain only general informati
 - `src/ui/resources` - GTK ui-files, images
 - `src/ui/sky_map` - Sky map widget
 - `src/utils` - Utilities: IO, logging, math, timers, compression
+- `src/version` - Build-time version metadata (git branch/hash baked in by `build.rs`)
 - `macros/` - proc-macro crate (`FromBuilder` derive for GTK widget structs)
 - `crates/ascom` - ASCOM Classic (COM, late binding) API crate. Windows-only
 - `crates/indi` - INDI API crate
