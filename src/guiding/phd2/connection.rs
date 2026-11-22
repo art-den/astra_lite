@@ -553,9 +553,18 @@ impl Connection {
     }
 
     pub fn disconnect_event_handler(&self, handler_id: &EventHandlerId) {
-        let mut event_handlers = self.event_handlers.write().unwrap();
-        let removed = event_handlers.remove(handler_id).is_some();
-        debug_assert!(removed);
+        let removed = {
+            let mut event_handlers = self.event_handlers.write().unwrap();
+            event_handlers.remove(handler_id)
+        };
+        // Drop the handler outside the lock: its Drop may re-enter
+        // the event system (e.g. call disconnect again)
+        drop(removed);
+    }
+
+    #[cfg(test)]
+    pub fn event_handler_count(&self) -> usize {
+        self.event_handlers.read().unwrap().len()
     }
 
     pub fn work(&self, host: &str, port: u16) -> eyre::Result<()> {
