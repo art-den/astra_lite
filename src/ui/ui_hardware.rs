@@ -213,8 +213,21 @@ struct HardwareUi {
 enum ConnectPending {
     Plain,
     IndiConnect,
+    /// HAL disconnect command: survives the `Disconnected` prune, its
+    /// own reply is still in flight
+    Disconnect,
     Guider,
     GetSites,
+}
+
+/// Drops pending entries that can never complete after a HAL disconnect and
+/// returns their count. The disconnect command's own entry survives: its reply
+/// trails the `Disconnected` event on the same main-thread channel
+/// (see `MainUi::connect_hal_and_core_events`).
+fn prune_aborted_by_disconnect(pending: &mut HashMap<u64, ConnectPending>) -> usize {
+    let before = pending.len();
+    pending.retain(|_, p| matches!(p, ConnectPending::Disconnect));
+    before - pending.len()
 }
 
 impl Drop for HardwareUi {
@@ -326,7 +339,7 @@ impl UiModule for HardwareUi {
                 match result {
                     Err(err_msg) => show_error_message(Some(&self.window), "Error", err_msg),
                     Ok(reply) => match pending {
-                        ConnectPending::Plain => {}
+                        ConnectPending::Plain | ConnectPending::Disconnect => {}
                         ConnectPending::IndiConnect => {
                             let remote = self.main_ui.snapshot().options.indi.remote;
                             self.is_remote.set(remote);
@@ -356,8 +369,9 @@ impl UiModule for HardwareUi {
                     self.add_log_record(&Some(Utc::now()), "", err)
                 }
                 if matches!(state, HalState::Disconnected) {
-                    // Pending commands can never complete after disconnect
-                    let aborted = self.pending_cmds.borrow_mut().drain().count();
+                    let aborted = prune_aborted_by_disconnect(
+                        &mut self.pending_cmds.borrow_mut()
+                    );
                     for _ in 0..aborted {
                         show_error_message(
                             Some(&self.window), "Error", "command aborted (disconnected)"
@@ -817,7 +831,7 @@ impl HardwareUi {
             Command::Connect(ConnectCommand::DisconnectIndi {
                 disable_all: !self.is_remote.get(),
             }),
-            ConnectPending::Plain
+            ConnectPending::Disconnect
         );
     }
 
@@ -835,7 +849,7 @@ impl HardwareUi {
     fn handler_action_disconn_aa(&self) {
         self.submit_connect_cmd(
             Command::Connect(ConnectCommand::DisconnectAlpaca),
-            ConnectPending::Plain
+            ConnectPending::Disconnect
         );
     }
 
@@ -1184,5 +1198,24 @@ impl HardwareUi {
             menu.show_all();
             menu.popup_easy(gtk::gdk::ffi::GDK_BUTTON_SECONDARY as u32, 0);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disconnect_prune_keeps_only_own_entry() {
+        let mut pending: HashMap<u64, ConnectPending> = [
+            (1, ConnectPending::Plain),
+            (2, ConnectPending::Disconnect),
+            (3, ConnectPending::Guider),
+            (4, ConnectPending::GetSites),
+            (5, ConnectPending::IndiConnect),
+        ].into_iter().collect();
+        assert_eq!(prune_aborted_by_disconnect(&mut pending), 4);
+        assert_eq!(pending.keys().copied().collect::<Vec<_>>(), vec![2]);
+        assert_eq!(prune_aborted_by_disconnect(&mut pending), 0);
     }
 }
