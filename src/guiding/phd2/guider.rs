@@ -30,6 +30,13 @@ impl ExternalGuiderPhd2 {
         result
     }
 
+    fn unregister_phd2_handler(&self) {
+        let phd2_evt_hndlr = self.data.lock().unwrap().phd2_evt_hndlr.take();
+        if let Some(hndlr) = phd2_evt_hndlr {
+            self.phd2.disconnect_event_handler(&hndlr);
+        }
+    }
+
     fn connect_events(self: &Arc<Self>) {
         let self_ = Arc::clone(self);
         let hndlr_id = self.phd2.connect_event_handler(move |event| {
@@ -106,10 +113,7 @@ impl ExternalGuiderPhd2 {
 
 impl Drop for ExternalGuiderPhd2 {
     fn drop(&mut self) {
-        let mut data = self.data.lock().unwrap();
-        if let Some(phd2_evt_hndlr) = data.phd2_evt_hndlr.take() {
-            self.phd2.disconnect_event_handler(&phd2_evt_hndlr);
-        }
+        self.unregister_phd2_handler();
     }
 }
 
@@ -150,6 +154,10 @@ impl ExternalGuider for ExternalGuiderPhd2 {
     }
 
     fn disconnect(&self) -> eyre::Result<()> {
+        // The Connection outlives the guider: unregister the handler first, otherwise
+        // it keeps this Arc alive and a stale handler would receive events on reconnect.
+        // Unregister even if `stop()` below fails
+        self.unregister_phd2_handler();
         self.phd2.stop()?;
         Ok(())
     }
@@ -157,5 +165,24 @@ impl ExternalGuider for ExternalGuiderPhd2 {
     fn connect_events_handler(&self, handler: ExtGuiderEventFn) {
         let mut data = self.data.lock().unwrap();
         data.evt_handlers.push(Arc::from(handler));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disconnect_unregisters_phd2_handler() {
+        let conn = Arc::new(Connection::new());
+        let guider = ExternalGuiderPhd2::new(&conn);
+        assert_eq!(conn.event_handler_count(), 1);
+        // The PHD2 thread was never started, so `stop()` fails,
+        // but the handler must still be unregistered
+        assert!(guider.disconnect().is_err());
+        assert_eq!(conn.event_handler_count(), 0);
+        // The shutdown sequence must not panic on the guider's Drop
+        conn.disconnect_all_event_handlers();
+        drop(guider);
     }
 }
