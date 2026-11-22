@@ -38,6 +38,7 @@ enum XmlStreamReaderState {
 pub enum XmlStream<'a> {
     Read(&'a mut dyn std::io::Read),
     #[cfg(target_os = "linux")]
+    // Also collects fast blob shared memory fds via SCM_RIGHTS.
     Unix(&'a std::os::unix::net::UnixStream),
 }
 
@@ -60,7 +61,7 @@ pub struct XmlStreamReader {
     blob_size:           Option<usize>,
     blob_dl_start:       std::time::Instant,
     blobs:               Vec<(Vec<u8>, f64)>,
-    files:               Vec<std::fs::File>,
+    files:               Vec<std::fs::File>, // fast blob fds received via SCM_RIGHTS
     xml_text:            String,
 }
 
@@ -145,6 +146,7 @@ impl XmlStreamReader {
                         if self.is_blob_xml {
                             let xml = xmltree::Element::parse(self.xml_text.as_bytes())?;
                             for mut xml_elem in xml.into_elements(None) {
+                                // `attached='true'` (fast blob): data is not in the XML, it came in a passed fd.
                                 let as_file = xml_elem.attr_str("attached") == Some("true");
                                 let (data, dl_time) = if !as_file {
                                     if self.blobs.is_empty() {
@@ -217,6 +219,7 @@ impl XmlStreamReader {
                         let len = xml_elem.attributes.get("len").and_then(|attr| attr.parse::<usize>().ok());
                         let blob_is_sent_by_fd = xml_elem.attr_str("attached") == Some("true");
 
+                        // Fast blobs have no base64 body: data is read from the fd when the XML is complete.
                         if !blob_is_sent_by_fd {
                             self.blob_size = size.or(len);
                             self.base64_decoder.clear(usize::min(self.blob_size.unwrap_or_default(), 100_000_000));
@@ -281,7 +284,7 @@ impl XmlStreamReader {
                 #[cfg(target_os = "linux")]
                 XmlStream::Unix(stream) => {
                     use unix_ancillary::UnixStreamExt;
-                    // read data and file descriptors from the socket
+                    // Read data and fast blob shared memory fds (SCM_RIGHTS) from the socket
                     match stream.recv_fds_into::<42>(&mut self.read_buffer[cur_buf_size..]) {
                         Ok((size_read, fds)) => {
                             for fd in fds {
