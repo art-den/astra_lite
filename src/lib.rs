@@ -27,3 +27,4 @@ pub mod plate_solve;
 pub mod core;
 pub mod sky_math;
 pub mod options;
+pub mod version;

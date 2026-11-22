@@ -67,7 +67,7 @@ fn show_panic_dialog(file_path: &str) {
             "{} {} ver {} crashed ;-(",
             env!("CARGO_PKG_NAME"),
             std::env::consts::ARCH,
-            env!("CARGO_PKG_VERSION")
+            astra_lite::version::full_version()
         ))
         .secondary_text(message_text)
         .build();
@@ -126,7 +126,7 @@ fn app_activate_handler(app: &gtk::Application) {
         "{} {} ver. {} is started",
         env!("CARGO_PKG_NAME"),
         std::env::consts::ARCH,
-        env!("CARGO_PKG_VERSION")
+        astra_lite::version::full_version()
     );
 
     // Enable stack trace in errors in debug builds

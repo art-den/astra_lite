@@ -740,7 +740,7 @@ impl MainUi {
     fn update_window_title(&self) {
         let mut title = "AstraLite (${arch} ver. ${ver})  --  Deepsky astrophotography and livestacking".to_string();
         title = title.replace("${arch}", std::env::consts::ARCH);
-        title = title.replace("${ver}",  env!("CARGO_PKG_VERSION"));
+        title = title.replace("${ver}",  &crate::version::full_version());
 
         let mut append_if_not_empty = |string_to_append: &str| {
             if string_to_append.is_empty() {
