@@ -206,7 +206,7 @@ struct HardwareUi {
     /// write handlers must not run, so the widget echo does not re-commit
     /// the just-synced values.
     opts_syncing: Cell<bool>,
-    pending_cmds: RefCell<HashMap<u64, ConnectPending>>,
+    pending_cmds: RefCell<HashMap<u64, PendingEntry>>,
 }
 
 #[derive(PartialEq)]
@@ -220,14 +220,46 @@ enum ConnectPending {
     GetSites,
 }
 
-/// Drops pending entries that can never complete after a HAL disconnect and
-/// returns their count. The disconnect command's own entry survives: its reply
-/// trails the `Disconnected` event on the same main-thread channel
-/// (see `MainUi::connect_hal_and_core_events`).
-fn prune_aborted_by_disconnect(pending: &mut HashMap<u64, ConnectPending>) -> usize {
+/// Owning domain of a pending command: decides which `Disconnected` event
+/// may prune it. `Guider` and `MountQuery` are independent of any single
+/// HAL and are never pruned (the engine command queue always replies).
+#[derive(Clone, Copy, PartialEq)]
+enum PendingDomain {
+    Indi,
+    #[cfg(windows)]
+    Alpaca,
+    Guider,
+    MountQuery,
+}
+
+struct PendingEntry {
+    domain: PendingDomain,
+    kind:   ConnectPending,
+}
+
+/// Drops pending entries of the HAL domains that just transitioned to
+/// `Disconnected` (the caller detects the transitions from per-HAL snapshot
+/// states; `HalEvent::StateChanged` itself carries no source) and returns
+/// their count. A disconnect command's own entry survives: its reply trails
+/// the `Disconnected` event on the same main-thread channel (see
+/// `MainUi::connect_hal_and_core_events`).
+fn prune_aborted_by_disconnect(
+    pending: &mut HashMap<u64, PendingEntry>,
+    dropped_domains: &[PendingDomain],
+) -> usize {
     let before = pending.len();
-    pending.retain(|_, p| matches!(p, ConnectPending::Disconnect));
+    pending.retain(|_, e| {
+        e.kind == ConnectPending::Disconnect || !dropped_domains.contains(&e.domain)
+    });
     before - pending.len()
+}
+
+/// Stores `new` into the per-HAL state cell and reports a transition from a
+/// different state into `Disconnected` (duplicate `Disconnected` events do
+/// not re-trigger).
+fn hal_transitioned_to_disconnected(stored: &RefCell<HalState>, new: &HalState) -> bool {
+    let old = stored.replace(new.clone());
+    *new == HalState::Disconnected && new != &old
 }
 
 impl Drop for HardwareUi {
@@ -338,7 +370,7 @@ impl UiModule for HardwareUi {
                 };
                 match result {
                     Err(err_msg) => show_error_message(Some(&self.window), "Error", err_msg),
-                    Ok(reply) => match pending {
+                    Ok(reply) => match pending.kind {
                         ConnectPending::Plain | ConnectPending::Disconnect => {}
                         ConnectPending::IndiConnect => {
                             let remote = self.main_ui.snapshot().options.indi.remote;
@@ -368,20 +400,35 @@ impl UiModule for HardwareUi {
                 if let HalState::Error(err) = &state {
                     self.add_log_record(&Some(Utc::now()), "", err)
                 }
-                if matches!(state, HalState::Disconnected) {
+                // Snapshot is refreshed before dispatch (`process_hal_event`),
+                // so the stored values are the previous per-HAL states: a
+                // transition to Disconnected is detected per domain. ASCOM
+                // Classic drops match no domain: no pending entry owns it
+                let snap = self.main_ui.snapshot();
+                let mut dropped_domains: Vec<PendingDomain> = Vec::new();
+                if hal_transitioned_to_disconnected(
+                    &self.indi_state, &snap.devices.indi_state
+                ) {
+                    dropped_domains.push(PendingDomain::Indi);
+                }
+
+                #[cfg(windows)] {
+                    if hal_transitioned_to_disconnected(
+                        &self.aa_state, &snap.devices.alpaca_state
+                    ) {
+                        dropped_domains.push(PendingDomain::Alpaca);
+                    }
+                }
+
+                if !dropped_domains.is_empty() {
                     let aborted = prune_aborted_by_disconnect(
-                        &mut self.pending_cmds.borrow_mut()
+                        &mut self.pending_cmds.borrow_mut(), &dropped_domains
                     );
                     for _ in 0..aborted {
                         show_error_message(
                             Some(&self.window), "Error", "command aborted (disconnected)"
                         );
                     }
-                }
-                *self.indi_state.borrow_mut() = self.main_ui.snapshot().devices.indi_state.clone();
-
-                #[cfg(windows)] {
-                    *self.aa_state.borrow_mut() = self.main_ui.snapshot().devices.alpaca_state.clone();
                 }
 
                 self.correct_widgets_by_cur_state();
@@ -823,7 +870,9 @@ impl HardwareUi {
                 aux2:      options.indi.aux2.clone(),
             }
         };
-        self.submit_connect_cmd(Command::Connect(cmd), ConnectPending::IndiConnect);
+        self.submit_connect_cmd(
+            Command::Connect(cmd), PendingDomain::Indi, ConnectPending::IndiConnect
+        );
     }
 
     fn handler_action_disconn_indi(&self) {
@@ -831,7 +880,7 @@ impl HardwareUi {
             Command::Connect(ConnectCommand::DisconnectIndi {
                 disable_all: !self.is_remote.get(),
             }),
-            ConnectPending::Disconnect
+            PendingDomain::Indi, ConnectPending::Disconnect
         );
     }
 
@@ -841,7 +890,7 @@ impl HardwareUi {
         let address = self.main_ui.fresh_snapshot().options.ascom_alpaca.address.clone();
         self.submit_connect_cmd(
             Command::Connect(ConnectCommand::ConnectAlpaca { address }),
-            ConnectPending::Plain
+            PendingDomain::Alpaca, ConnectPending::Plain
         );
     }
 
@@ -849,21 +898,21 @@ impl HardwareUi {
     fn handler_action_disconn_aa(&self) {
         self.submit_connect_cmd(
             Command::Connect(ConnectCommand::DisconnectAlpaca),
-            ConnectPending::Disconnect
+            PendingDomain::Alpaca, ConnectPending::Disconnect
         );
     }
 
     fn handler_action_conn_phd2(&self) {
         self.submit_connect_cmd(
             Command::Guider(GuiderCommand::ConnectPhd2),
-            ConnectPending::Guider
+            PendingDomain::Guider, ConnectPending::Guider
         );
     }
 
     fn handler_action_disconn_phd2(&self) {
         self.submit_connect_cmd(
             Command::Guider(GuiderCommand::DisconnectPhd2),
-            ConnectPending::Guider
+            PendingDomain::Guider, ConnectPending::Guider
         );
     }
 
@@ -1111,7 +1160,7 @@ impl HardwareUi {
                 prop: prop_name.to_string(),
                 element: elem_name.to_string(),
             }),
-            ConnectPending::Plain
+            PendingDomain::Indi, ConnectPending::Plain
         );
     }
 
@@ -1126,16 +1175,29 @@ impl HardwareUi {
         );
     }
 
-    fn submit_connect_cmd(&self, cmd: Command, pending: ConnectPending) {
+    /// Submits `cmd` and records it pending under its owning `domain`
+    /// (decides prune eligibility) and reply-handling `kind`.
+    fn submit_connect_cmd(
+        &self,
+        cmd: Command,
+        domain: PendingDomain,
+        kind: ConnectPending,
+    ) {
         match self.engine.submit_command(cmd) {
-            Ok(id) => { _ = self.pending_cmds.borrow_mut().insert(id, pending); }
+            Ok(id) => {
+                _ = self.pending_cmds.borrow_mut()
+                    .insert(id, PendingEntry { domain, kind });
+            }
             Err(err) => show_error_message(Some(&self.window), "Error", &err.to_string()),
         }
     }
 
     fn handler_action_get_site_from_devices(self: &Rc<Self>) {
         // Blocking `site()` HAL calls: run on the command queue thread
-        self.submit_connect_cmd(Command::Query(Query::AllMountSites), ConnectPending::GetSites);
+        self.submit_connect_cmd(
+            Command::Query(Query::AllMountSites),
+            PendingDomain::MountQuery, ConnectPending::GetSites
+        );
     }
 
     fn apply_mount_sites(&self, entries: &[MountSite]) {
@@ -1205,17 +1267,66 @@ impl HardwareUi {
 mod tests {
     use super::*;
 
+    fn entry(domain: PendingDomain, kind: ConnectPending) -> PendingEntry {
+        PendingEntry { domain, kind }
+    }
+
     #[test]
-    fn disconnect_prune_keeps_only_own_entry() {
-        let mut pending: HashMap<u64, ConnectPending> = [
-            (1, ConnectPending::Plain),
-            (2, ConnectPending::Disconnect),
-            (3, ConnectPending::Guider),
-            (4, ConnectPending::GetSites),
-            (5, ConnectPending::IndiConnect),
+    fn disconnect_prune_drops_only_transitioned_domain() {
+        let mut pending: HashMap<u64, PendingEntry> = [
+            (1, entry(PendingDomain::Indi, ConnectPending::Plain)),
+            (2, entry(PendingDomain::Indi, ConnectPending::Disconnect)),
+            (3, entry(PendingDomain::Guider, ConnectPending::Guider)),
+            (4, entry(PendingDomain::MountQuery, ConnectPending::GetSites)),
+            (5, entry(PendingDomain::Indi, ConnectPending::IndiConnect)),
         ].into_iter().collect();
-        assert_eq!(prune_aborted_by_disconnect(&mut pending), 4);
-        assert_eq!(pending.keys().copied().collect::<Vec<_>>(), vec![2]);
-        assert_eq!(prune_aborted_by_disconnect(&mut pending), 0);
+        // INDI transitioned to Disconnected: only its non-Disconnect entries go
+        assert_eq!(
+            prune_aborted_by_disconnect(&mut pending, &[PendingDomain::Indi]), 2
+        );
+        let mut survivors: Vec<u64> = pending.keys().copied().collect();
+        survivors.sort_unstable();
+        assert_eq!(survivors, vec![2, 3, 4]);
+        assert_eq!(
+            prune_aborted_by_disconnect(&mut pending, &[PendingDomain::Indi]), 0
+        );
+    }
+
+    #[test]
+    fn hal_transition_detection_ignores_duplicates_and_other_states() {
+        let stored = RefCell::new(HalState::Connecting);
+        assert!(hal_transitioned_to_disconnected(&stored, &HalState::Disconnected));
+        // Duplicate `Disconnected` must not re-trigger the prune
+        assert!(!hal_transitioned_to_disconnected(&stored, &HalState::Disconnected));
+        assert!(!hal_transitioned_to_disconnected(&stored, &HalState::Connecting));
+        assert_eq!(*stored.borrow(), HalState::Connecting);
+    }
+
+    #[test]
+    fn disconnect_prune_keeps_guider_and_mount_query_entries() {
+        let mut pending: HashMap<u64, PendingEntry> = [
+            (1, entry(PendingDomain::Guider, ConnectPending::Guider)),
+            (2, entry(PendingDomain::MountQuery, ConnectPending::GetSites)),
+        ].into_iter().collect();
+        assert_eq!(
+            prune_aborted_by_disconnect(&mut pending, &[PendingDomain::Indi]), 0
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn disconnect_prune_spares_foreign_hal_domain() {
+        let mut pending: HashMap<u64, PendingEntry> = [
+            (1, entry(PendingDomain::Alpaca, ConnectPending::Plain)),
+            (2, entry(PendingDomain::Alpaca, ConnectPending::Disconnect)),
+            (3, entry(PendingDomain::Indi, ConnectPending::IndiConnect)),
+        ].into_iter().collect();
+        // Only Alpaca transitioned: its Plain goes, INDI entries survive
+        assert_eq!(
+            prune_aborted_by_disconnect(&mut pending, &[PendingDomain::Alpaca]), 1
+        );
+        let mut survivors: Vec<u64> = pending.keys().copied().collect();
+        survivors.sort_unstable();
+        assert_eq!(survivors, vec![2, 3]);
     }
 }
