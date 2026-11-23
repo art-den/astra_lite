@@ -1,11 +1,11 @@
-use std::{cell::{Cell, RefCell}, collections::HashSet, rc::Rc, sync::Arc};
+use std::{cell::{Cell, RefCell}, collections::HashMap, rc::Rc, sync::Arc};
 use gtk::{glib, prelude::*, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
     core::{
         api::{Command, MountCommand, MountPatch, Query, QueryReply, Reply},
-        engine::Engine, events::*, snapshot::DeviceState,
+        engine::Engine, events::*, snapshot::{DeviceState, TelescopeDeviceState},
     },
     hal::{DeviceType, HalState, TelescopeMoveDir, TelescopeState, events::HalEvent},
     options::*,
@@ -37,7 +37,7 @@ pub fn init_ui(
         prev_info_ra:    Cell::new(0.0),
         prev_info_dec:   Cell::new(0.0),
         state_syncing:   Cell::new(false),
-        pending_cmds:    RefCell::new(HashSet::new()),
+        pending_cmds:    RefCell::new(HashMap::new()),
     });
 
     obj.init_widgets();
@@ -50,6 +50,17 @@ pub fn init_ui(
     );
 
     obj
+}
+
+// The mount command behind an in-flight `pending_cmds` entry, so a failed
+// reply knows which checkbox to revert
+enum MountPending {
+    Park,
+    Unpark,
+    Track,
+    Untrack,
+    /// No widget state to revert (nav buttons / abort)
+    Other,
 }
 
 #[derive(Hash, Eq, PartialEq)]
@@ -131,7 +142,7 @@ struct MountUi {
     prev_info_dec:   Cell<f64>,
     // Suppresses command handlers while widgets mirror the device state
     state_syncing: Cell<bool>,
-    pending_cmds:  RefCell<HashSet<u64>>,
+    pending_cmds:  RefCell<HashMap<u64, MountPending>>,
 }
 
 impl Drop for MountUi {
@@ -182,11 +193,12 @@ impl UiModule for MountUi {
                 self.correct_widgets_props();
             }
             Event::CommandReply { id, result } => {
-                if !self.pending_cmds.borrow_mut().remove(id) {
+                let Some(pending) = self.pending_cmds.borrow_mut().remove(id) else {
                     return;
-                }
+                };
                 if let Err(err_msg) = result {
                     show_error_message(Some(&self.window), "Error", err_msg);
+                    self.rollback_pending_cmd(pending);
                 }
             }
             Event::MountDeviceChanged(new_device_name) => {
@@ -242,12 +254,14 @@ impl UiModule for MountUi {
                 let snap = self.main_ui.snapshot();
                 if snap.options.mount.device == **device_id {
                     self.show_mount_parked_state(true);
+                    self.correct_widgets_props();
                 }
             }
             HalEvent::TelescopeUnparked(device_id) => {
                 let snap = self.main_ui.snapshot();
                 if snap.options.mount.device == **device_id {
                     self.show_mount_parked_state(false);
+                    self.correct_widgets_props();
                 }
             }
             _ => {}
@@ -308,20 +322,24 @@ impl MountUi {
         self.widgets.chb_tracking.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 if self_.state_syncing.get() { return; }
-                self_.submit_mount_cmd(MountCommand::Track(chb.is_active()));
+                let (cmd, pending) = if chb.is_active() {
+                    (MountCommand::Track(true), MountPending::Track)
+                } else {
+                    (MountCommand::Track(false), MountPending::Untrack)
+                };
+                self_.submit_mount_cmd(cmd, pending);
             })
         );
 
         self.widgets.chb_parked.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 if self_.state_syncing.get() { return; }
-                let cmd = if chb.is_active() {
-                    MountCommand::Park
+                let (cmd, pending) = if chb.is_active() {
+                    (MountCommand::Park, MountPending::Park)
                 } else {
-                    MountCommand::Unpark
+                    (MountCommand::Unpark, MountPending::Unpark)
                 };
-                self_.submit_mount_cmd(cmd);
-                self_.correct_widgets_props();
+                self_.submit_mount_cmd(cmd, pending);
             })
         );
 
@@ -371,11 +389,26 @@ impl MountUi {
         );
     }
 
-    fn submit_mount_cmd(&self, cmd: MountCommand) {
+    fn submit_mount_cmd(&self, cmd: MountCommand, pending: MountPending) {
         match self.engine.submit_command(Command::Mount(cmd)) {
-            Ok(id) => { _ = self.pending_cmds.borrow_mut().insert(id); }
-            Err(err) => show_error_message(Some(&self.window), "Error", &err.to_string()),
+            Ok(id) => { _ = self.pending_cmds.borrow_mut().insert(id, pending); }
+            Err(err) => {
+                show_error_message(Some(&self.window), "Error", &err.to_string());
+                self.rollback_pending_cmd(pending);
+            }
         }
+    }
+
+    fn rollback_pending_cmd(&self, pending: MountPending) {
+        // `show_mount_*_state()` set the checkbox under the `state_syncing` guard
+        match pending {
+            MountPending::Park    => self.show_mount_parked_state(false),
+            MountPending::Unpark  => self.show_mount_parked_state(true),
+            MountPending::Track   => self.show_mount_tracking_state(false),
+            MountPending::Untrack => self.show_mount_tracking_state(true),
+            MountPending::Other   => {}
+        }
+        self.correct_widgets_props();
     }
 
     fn correct_widgets_props(&self) {
@@ -384,7 +417,11 @@ impl MountUi {
 
         let mount_ctrl_sensitive = mnt_active && snap.permissions.can_change_mode;
 
-        let move_enabled = !self.widgets.chb_parked.is_active() && mount_ctrl_sensitive;
+        // Parked-ness comes from the device, not from the (possibly unconfirmed)
+        // checkbox; a failed `is_parked` read is `false` in the snapshot (fail open)
+        let is_parked = self.snapshot_mount_ts().is_some_and(|ts| ts.is_parked);
+
+        let move_enabled = !is_parked && mount_ctrl_sensitive;
 
         self.widgets.bx_widgets.set_sensitive(mount_ctrl_sensitive);
         self.widgets.chb_tracking.set_sensitive(move_enabled);
@@ -430,14 +467,14 @@ impl MountUi {
                 speed_id: self.widgets.cb_speed.active_id().map(|id| id.to_string()),
             }
         };
-        self.submit_mount_cmd(cmd);
+        self.submit_mount_cmd(cmd, MountPending::Other);
     }
 
     fn handler_nav_mount_btn_released(&self, button: &gtk::Button) {
         if button == &self.widgets.btn_stop {
             return;
         }
-        self.submit_mount_cmd(MountCommand::AbortMotion);
+        self.submit_mount_cmd(MountCommand::AbortMotion, MountPending::Other);
     }
 
     fn fill_devices_list(&self) {
@@ -508,12 +545,16 @@ impl MountUi {
         self.state_syncing.set(prev);
     }
 
+    fn snapshot_mount_ts(&self) -> Option<TelescopeDeviceState> {
+        let snap = self.main_ui.snapshot();
+        snap.devices.mount.as_ref().and_then(|m| match &m.state {
+            Some(DeviceState::Telescope(ts)) => Some(ts.clone()),
+            _ => None,
+        })
+    }
+
     fn show_cur_mount_state(&self) {
-        let Some(mnt) = &self.main_ui.snapshot().devices.mount else { return; };
-        let ts = match &mnt.state {
-            Some(DeviceState::Telescope(ts)) => ts,
-            _ => return,
-        };
+        let Some(ts) = self.snapshot_mount_ts() else { return; };
         self.show_mount_parked_state(ts.is_parked);
         self.show_mount_tracking_state(ts.is_tracking);
     }
@@ -540,11 +581,7 @@ impl MountUi {
             return;
         };
 
-        let snap_state = self.main_ui.snapshot().devices.mount.as_ref()
-            .and_then(|m| match &m.state {
-                Some(DeviceState::Telescope(ts)) => ts.state,
-                _ => None,
-            });
+        let snap_state = self.snapshot_mount_ts().and_then(|ts| ts.state);
         let new_state = state
             .or(snap_state)
             .unwrap_or(TelescopeState::Error);
