@@ -595,7 +595,9 @@ impl FocuserUi {
         // `abs_position_range()` reads; the snapshot API has no focuser state yet
         if let Some(focuser) = self.engine.cur_devices.focuser() {
             let abs_position = value.unwrap_or_else(|| focuser.abs_position().unwrap_or(0.0) as i32 );
+            // Heuristic: a 0.0 value means the widget was never configured yet
             if force_configure_widget || self.widgets.spb_val.value() == 0.0 {
+                let prev = self.state_syncing.replace(true);
                 if let Ok(range) = focuser.abs_position_range() {
                     self.widgets.spb_val.set_range(*range.start(), *range.end());
                     self.widgets.spb_val.set_digits(0);
@@ -617,7 +619,6 @@ impl FocuserUi {
                     self.widgets.btn_inc.set_tooltip_text(Some(&format!("+ {}", step)));
                     self.widgets.btn_inc_large.set_tooltip_text(Some(&format!("+ {}", large_step)));
                 }
-                let prev = self.state_syncing.replace(true);
                 self.widgets.spb_val.set_value(abs_position as f64);
                 self.state_syncing.set(prev);
             }
