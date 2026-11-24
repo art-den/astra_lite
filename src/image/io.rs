@@ -1,16 +1,29 @@
-use std::{fs::File, io::{BufReader, BufWriter}, path::{Path, PathBuf}};
+use std::{borrow::Cow, fs::File, io::{BufReader, BufWriter}, path::{Path, PathBuf}};
 
 use itertools::{izip, Itertools};
 
-use crate::{hal::{CameraShot, CameraShotType}, ui::gtk_utils::*};
+use crate::hal::{CameraShot, CameraShotType};
 
 use super::{image::{Image, ImageLayer}, raw::*, simple_fits::{FitsReader, FitsWriter, Header, SeekNRead}};
 
 /// Gamma used to linearize display-referred pixels on load
 pub const READY_IMAGE_GAMMA: f32 = 2.4;
 
+/// Max allowed length of one side of a raster (JPEG/PNG) image loaded by this module
+pub const MAX_READY_IMAGE_SIZE: usize = 6000;
+
 /// Max allowed length of one side of a FITS image loaded by this module
 const MAX_FITS_SIDE: usize = 16384;
+
+static READY_IMAGE_U8_TO_U16: once_cell::sync::Lazy<[u16; 256]> = once_cell::sync::Lazy::new(|| {
+    let mut table = [0u16; 256];
+    for (i, v) in table.iter_mut().enumerate() {
+        let f32_v = i as f32 / 255.0;
+        let linear = f32_v.powf(READY_IMAGE_GAMMA);
+        *v = (linear * 65535.0) as u16;
+    }
+    table
+});
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -319,61 +332,59 @@ pub fn load_image_from_fits_file(image: &mut Image, file_name: &Path) -> eyre::R
     load_image_from_fits_reader(image, &reader, &mut stream)
 }
 
-pub fn load_image_using_pixbuf(
+pub fn load_image_from_file(
     image:     &mut Image,
     file_name: &Path,
     max_size:  usize,
 ) -> eyre::Result<()> {
-    let pixbuf = gtk::gdk_pixbuf::Pixbuf::from_file(file_name)?;
-    let pixbuf = limit_pixbuf_by_longest_size(pixbuf, max_size as i32);
-    let has_alpha = pixbuf.has_alpha();
-    let bytes = pixbuf
-        .pixel_bytes()
-        .ok_or_else(|| eyre::eyre!("pixbuf doesn't contain pixel_bytes()"))?;
+    use image::ImageReader;
+    use image::imageops::FilterType;
+    use crate::utils::math::scaled_dims;
 
-    let width = pixbuf.width() as usize;
-    let height = pixbuf.height() as usize;
-    let row_size = pixbuf.rowstride() as usize;
+    let img = ImageReader::open(file_name)?.decode()?;
+    let (width, height) = (img.width() as usize, img.height() as usize);
+    let (new_width, new_height) = scaled_dims(width, height, max_size);
+    let img = if (new_width, new_height) != (width, height) {
+        img.resize_exact(new_width as u32, new_height as u32, FilterType::Nearest)
+    } else {
+        img
+    };
+    let width = img.width() as usize;
+    let height = img.height() as usize;
 
     image.make_color(width, height, u16::MAX, true);
 
-    let u8_to_u16 = |value: u8| -> u16 {
-        let f32_v = value as f32 / 255.0;
-        let linear = f32_v.powf(READY_IMAGE_GAMMA);
-        (linear * 65535.0) as u16
+    // Avoid the RGBA round-trip for 8-bit images; RGB is treated as fully opaque
+    let (raw, channels) = match &img {
+        image::DynamicImage::ImageRgba8(rgba) => (Cow::Borrowed(rgba.as_raw()), 4),
+        image::DynamicImage::ImageRgb8(rgb)   => (Cow::Borrowed(rgb.as_raw()), 3),
+        _ => (Cow::Owned(img.to_rgba8().into_raw()), 4),
     };
 
-    for (r_row, g_row, b_row, row) in
-    izip!(
-        image.r.as_slice_mut().chunks_exact_mut(width),
-        image.g.as_slice_mut().chunks_exact_mut(width),
-        image.b.as_slice_mut().chunks_exact_mut(width),
-        bytes.chunks_exact(row_size)
-    ) {
-        if !has_alpha {
-            for (dst_r, dst_g, dst_b, (src_r, src_g, src_b)) in izip!(
-                r_row, g_row, b_row,
-                row.iter().tuples()
-            ) {
-                *dst_r = u8_to_u16(*src_r);
-                *dst_g = u8_to_u16(*src_g);
-                *dst_b = u8_to_u16(*src_b);
+    let r = image.r.as_slice_mut();
+    let g = image.g.as_slice_mut();
+    let b = image.b.as_slice_mut();
+
+    if channels == 4 {
+        for (i, ((dst_r, dst_g), dst_b)) in r.iter_mut().zip(g.iter_mut()).zip(b.iter_mut()).enumerate() {
+            let o = i * 4;
+            // Only fully opaque pixels are loaded; semi-transparent pixels become black
+            if raw[o + 3] == 255 {
+                *dst_r = READY_IMAGE_U8_TO_U16[raw[o] as usize];
+                *dst_g = READY_IMAGE_U8_TO_U16[raw[o + 1] as usize];
+                *dst_b = READY_IMAGE_U8_TO_U16[raw[o + 2] as usize];
+            } else {
+                *dst_r = 0;
+                *dst_g = 0;
+                *dst_b = 0;
             }
-        } else {
-            for (dst_r, dst_g, dst_b, (src_r, src_g, src_b, src_a)) in izip!(
-                r_row, g_row, b_row,
-                row.iter().tuples()
-            ) {
-                if *src_a == 255 {
-                    *dst_r = u8_to_u16(*src_r);
-                    *dst_g = u8_to_u16(*src_g);
-                    *dst_b = u8_to_u16(*src_b);
-                } else {
-                    *dst_r = 0;
-                    *dst_g = 0;
-                    *dst_b = 0;
-                }
-            }
+        }
+    } else {
+        for (i, ((dst_r, dst_g), dst_b)) in r.iter_mut().zip(g.iter_mut()).zip(b.iter_mut()).enumerate() {
+            let o = i * 3;
+            *dst_r = READY_IMAGE_U8_TO_U16[raw[o] as usize];
+            *dst_g = READY_IMAGE_U8_TO_U16[raw[o + 1] as usize];
+            *dst_b = READY_IMAGE_U8_TO_U16[raw[o + 2] as usize];
         }
     }
 
@@ -432,7 +443,7 @@ impl CameraShot for FromFileCameraShot {
         } else if is_tif {
             load_image_from_tif_file(image, &self.file_name)?;
         } else if is_jpeg || is_png {
-            load_image_using_pixbuf(image, &self.file_name, 6000)?;
+            load_image_from_file(image, &self.file_name, MAX_READY_IMAGE_SIZE)?;
         } else {
             eyre::bail!("Image format with extension {ext} not supported");
         }
@@ -453,5 +464,59 @@ impl CameraShot for FromFileCameraShot {
 
     fn save_to_file(&self, _file_name: &Path) -> eyre::Result<()> {
         unreachable!()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_load_jpeg_image() {
+        let mut image = Image::new_empty();
+        load_image_from_file(&mut image, Path::new("docs/screenshot1.jpg"), MAX_READY_IMAGE_SIZE).unwrap();
+        assert_eq!(image.width(), 1440);
+        assert_eq!(image.height(), 810);
+        assert!(image.is_color());
+    }
+
+    #[test]
+    fn test_load_jpeg_image_downscaled() {
+        let mut image = Image::new_empty();
+        load_image_from_file(&mut image, Path::new("docs/screenshot1.jpg"), 500).unwrap();
+        assert_eq!(image.width(), 500);
+        assert_eq!(image.height(), 281);
+    }
+
+    #[test]
+    fn test_load_rgba_png_transparent_pixel() {
+        use image::{Rgba, RgbaImage};
+        let mut img = RgbaImage::from_pixel(2, 1, Rgba([200, 100, 50, 255]));
+        img.put_pixel(1, 0, Rgba([200, 100, 50, 0]));
+        std::fs::create_dir_all(".tmp").unwrap();
+        let tmp = Path::new(".tmp").join(format!("astra_lite_test_rgba_{}.png", std::process::id()));
+        img.save(&tmp).unwrap();
+
+        let mut image = Image::new_empty();
+        let result = load_image_from_file(&mut image, &tmp, MAX_READY_IMAGE_SIZE);
+        std::fs::remove_file(&tmp).ok();
+        result.unwrap();
+
+        assert_eq!(image.width(), 2);
+        assert_eq!(image.height(), 1);
+        let expected_r = (200.0f32 / 255.0).powf(READY_IMAGE_GAMMA) * 65535.0;
+        assert!((image.r.get(0, 0).unwrap() as f32 - expected_r).abs() < 2.0);
+        assert_eq!(image.r.get(1, 0), Some(0));
+        assert_eq!(image.g.get(1, 0), Some(0));
+        assert_eq!(image.b.get(1, 0), Some(0));
+    }
+
+    #[test]
+    fn test_load_rgba_png_image() {
+        let mut image = Image::new_empty();
+        load_image_from_file(&mut image, Path::new("docs/screenshot2.png"), MAX_READY_IMAGE_SIZE).unwrap();
+        assert_eq!(image.width(), 1887);
+        assert_eq!(image.height(), 1080);
+        assert!(image.is_color());
     }
 }

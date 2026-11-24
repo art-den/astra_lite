@@ -25,6 +25,24 @@ fn test_median3() {
     assert_eq!(median3(3, 2, 1), 2);
 }
 
+/// Target dimensions with the longest side capped at `max_size`
+pub fn scaled_dims(width: usize, height: usize, max_size: usize) -> (usize, usize) {
+    let longest = usize::max(width, height);
+    if longest <= max_size {
+        return (width, height);
+    }
+    let new_width = usize::max(max_size * width / longest, 1);
+    let new_height = usize::max(max_size * height / longest, 1);
+    (new_width, new_height)
+}
+
+#[test]
+fn test_scaled_dims() {
+    assert_eq!(scaled_dims(1440, 810, 6000), (1440, 810));
+    assert_eq!(scaled_dims(1440, 810, 500), (500, 281));
+    assert_eq!(scaled_dims(100, 1, 50), (50, 1));
+}
+
 pub fn median4_u16(a: u16, b: u16, c: u16, d: u16) -> u16
 {
     let f = u16::max(u16::min(a, b), u16::min(c, d));

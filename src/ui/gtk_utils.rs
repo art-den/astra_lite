@@ -354,19 +354,19 @@ pub fn limit_pixbuf_by_longest_size(
     pixbuf: gdk::gdk_pixbuf::Pixbuf,
     max_size: i32,
 ) -> gdk::gdk_pixbuf::Pixbuf {
-    if pixbuf.width() > max_size
-    || pixbuf.height() > max_size {
-        let longest_size = i32::max(pixbuf.width(), pixbuf.height());
-        let new_width = max_size * pixbuf.width() / longest_size;
-        let new_height = max_size * pixbuf.height() / longest_size;
-        pixbuf.scale_simple(
-            new_width as _,
-            new_height as _,
-            gtk::gdk_pixbuf::InterpType::Tiles,
-        ).unwrap()
-    } else {
-        pixbuf
+    let (new_width, new_height) = crate::utils::math::scaled_dims(
+        pixbuf.width() as usize,
+        pixbuf.height() as usize,
+        max_size as usize,
+    );
+    if new_width == pixbuf.width() as usize && new_height == pixbuf.height() as usize {
+        return pixbuf;
     }
+    pixbuf.scale_simple(
+        new_width as _,
+        new_height as _,
+        gtk::gdk_pixbuf::InterpType::Tiles,
+    ).unwrap()
 }
 
 pub fn clear_container(container: &impl IsA<gtk::Container>) {

@@ -21,6 +21,7 @@ async-channel = "2.0"
 eyre = "0.6"
 bitstream-io="4.10"
 itertools = "0.10"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 tiff = "0.9"
 rayon = "1.5"
 serde = { version = "1.0", features = ["derive"] }
