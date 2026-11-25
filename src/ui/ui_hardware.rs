@@ -420,6 +420,101 @@ impl HardwareUi {
             })
         );
 
+        self.widgets.indi_drv.chb_remote.connect_active_notify(
+            clone!(@weak self as self_ => move |chb| {
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                options.indi.remote = chb.is_active();
+            })
+        );
+
+        self.widgets.indi_drv.e_remote_addr.connect_changed(
+            clone!(@weak self as self_ => move |e| {
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                options.indi.address = e.text().into();
+            })
+        );
+
+        self.widgets.aa_drv.e_addr.connect_changed(
+            clone!(@weak self as self_ => move |e| {
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                options.ascom_alpaca.address = e.text().into();
+            })
+        );
+
+        self.widgets.indi_drv.cb_mount_drivers.connect_active_id_notify(
+            clone!(@weak self as self_ => move |cb| {
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                options.indi.mount = cb.active_id().map(|id| id.to_string());
+            })
+        );
+
+        self.widgets.indi_drv.cb_camera_drivers.connect_active_id_notify(
+            clone!(@weak self as self_ => move |cb| {
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                options.indi.camera = cb.active_id().map(|id| id.to_string());
+            })
+        );
+
+        self.widgets.indi_drv.cb_guid_cam_drivers.connect_active_id_notify(
+            clone!(@weak self as self_ => move |cb| {
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                options.indi.guid_cam = cb.active_id().map(|id| id.to_string());
+            })
+        );
+
+        self.widgets.indi_drv.cb_focuser_drivers.connect_active_id_notify(
+            clone!(@weak self as self_ => move |cb| {
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                options.indi.focuser = cb.active_id().map(|id| id.to_string());
+            })
+        );
+
+        self.widgets.indi_drv.cb_flt_wheel_drivers.connect_active_id_notify(
+            clone!(@weak self as self_ => move |cb| {
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                options.indi.flt_wheel = cb.active_id().map(|id| id.to_string());
+            })
+        );
+
+        self.widgets.indi_drv.cb_aux1_drivers.connect_active_id_notify(
+            clone!(@weak self as self_ => move |cb| {
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                options.indi.aux1 = cb.active_id().map(|id| id.to_string());
+            })
+        );
+
+        self.widgets.indi_drv.cb_aux2_drivers.connect_active_id_notify(
+            clone!(@weak self as self_ => move |cb| {
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                options.indi.aux2 = cb.active_id().map(|id| id.to_string());
+            })
+        );
+
+        self.widgets.telescope.chb_corr_foc_len.connect_active_notify(
+            clone!(@weak self as self_ => move |chb| {
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                options.telescope.from_platesolve = chb.is_active();
+            })
+        );
+
+        self.widgets.site.e_lat.connect_changed(
+            clone!(@weak self as self_ => move |e| {
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                if let Some(latitude) = sexagesimal_to_value(&e.text()) {
+                    options.site.latitude = latitude;
+                }
+            })
+        );
+
+        self.widgets.site.e_long.connect_changed(
+            clone!(@weak self as self_ => move |e| {
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                if let Some(longitude) = sexagesimal_to_value(&e.text()) {
+                    options.site.longitude = longitude;
+                }
+            })
+        );
+
         self.window.add_events(gdk::EventMask::KEY_PRESS_MASK);
         self.window.connect_key_press_event(
             clone!(@weak self as self_ => @default-return glib::Propagation::Proceed,

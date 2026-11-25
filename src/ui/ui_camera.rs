@@ -765,6 +765,30 @@ impl CameraUi {
             self_.show_total_raw_time();
         }));
 
+        self.widgets.raw.chb_frames_cnt.connect_active_notify(
+            clone!(@weak self as self_ => move |chb| {
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                options.raw_frames.use_cnt = chb.is_active();
+                drop(options);
+            })
+        );
+
+        self.widgets.raw.fcb_path.connect_file_set(
+            clone!(@weak self as self_ => move |fch| {
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                options.raw_frames.out_path = fch.filename().unwrap_or_default();
+                drop(options);
+            })
+        );
+
+        self.widgets.raw.chb_save_master.connect_active_notify(
+            clone!(@weak self as self_ => move |chb| {
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                options.raw_frames.create_master = chb.is_active();
+                drop(options);
+            })
+        );
+
         self.widgets.quality.chb_max_fwhm.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 let Ok(mut options) = self_.engine.options.try_write() else { return; };
@@ -874,6 +898,46 @@ impl CameraUi {
             options.live.frame_cnt = sb.value() as usize;
             drop(options);
         }));
+
+        self.widgets.live_st.chb_frames_cnt.connect_active_notify(
+            clone!(@weak self as self_ => move |chb| {
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                options.live.use_cnt = chb.is_active();
+                drop(options);
+            })
+        );
+
+        self.widgets.live_st.chb_save_period.connect_active_notify(
+            clone!(@weak self as self_ => move |chb| {
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                options.live.save_enabled = chb.is_active();
+                drop(options);
+            })
+        );
+
+        self.widgets.live_st.spb_save_period.connect_value_changed(
+            clone!(@weak self as self_ => move |sb| {
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                options.live.save_minutes = sb.value() as usize;
+                drop(options);
+            })
+        );
+
+        self.widgets.live_st.chb_save_orig.connect_active_notify(
+            clone!(@weak self as self_ => move |chb| {
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                options.live.save_orig = chb.is_active();
+                drop(options);
+            })
+        );
+
+        self.widgets.live_st.fch_path.connect_file_set(
+            clone!(@weak self as self_ => move |fch| {
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                options.live.out_dir = fch.filename().unwrap_or_default();
+                drop(options);
+            })
+        );
 
         self.widgets.info.bx.connect_screen_changed(
             clone!(@weak self as self_ =>  move |_, _| {

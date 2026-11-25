@@ -452,7 +452,8 @@ struct UiOptions {
 #[derive(FromBuilder)]
 struct CommonWidgets {
     bx:               gtk::Box,
-    fch_dark_library: gtk::FileChooser,
+    // FileChooserButton (not FileChooser): needed for connect_file_set
+    fch_dark_library: gtk::FileChooserButton,
     nb_modes:         gtk::Notebook,
 }
 
@@ -950,6 +951,14 @@ impl DarksLibraryUI {
         connect_checkbtn(&bias.chb_bias_crop50);
         connect_checkbtn(&bias.chb_bias_crop33);
         connect_checkbtn(&bias.chb_bias_crop25);
+
+        self.widgets.common.fch_dark_library.connect_file_set(
+            clone!(@weak self as self_ => move |fch| {
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                options.calibr.dark_library_path = fch.filename().unwrap_or_default();
+                drop(options);
+            })
+        );
 
         connect_action(&self.window, self, "open_dark_lib_folder",             Self::handler_action_open_dark_lib_folder);
         connect_action(&self.window, self, "create_defect_pixel_files",        Self::handler_action_create_defect_pixels_files);

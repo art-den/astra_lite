@@ -315,6 +315,27 @@ impl MountUi {
                 });
             })
         );
+
+        self.widgets.chb_inv_ns.connect_active_notify(
+            clone!(@weak self as self_ => move |chb| {
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                options.mount.inv_ns = chb.is_active();
+            })
+        );
+
+        self.widgets.chb_inv_we.connect_active_notify(
+            clone!(@weak self as self_ => move |chb| {
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                options.mount.inv_we = chb.is_active();
+            })
+        );
+
+        self.widgets.cb_speed.connect_active_id_notify(
+            clone!(@weak self as self_ => move |cb| {
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                options.mount.speed = cb.active_id().map(|s| s.to_string());
+            })
+        );
     }
 
     fn correct_widgets_props(&self) {

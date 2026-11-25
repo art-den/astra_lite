@@ -182,6 +182,27 @@ impl PlateSolveUi {
                 options.plate_solver.bin = Binning::from_active_id(cb.active_id().as_deref());
             })
         );
+
+        self.widgets.cbx_solver.connect_active_id_notify(
+            clone!(@weak self as self_ => move |cb| {
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                options.plate_solver.solver = PlateSolverType::from_active_id(cb.active_id().as_deref());
+            })
+        );
+
+        self.widgets.spb_timeout.connect_value_changed(
+            clone!(@weak self as self_ => move |sb| {
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                options.plate_solver.timeout = sb.value() as _;
+            })
+        );
+
+        self.widgets.spb_blind_timeout.connect_value_changed(
+            clone!(@weak self as self_ => move |sb| {
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                options.plate_solver.blind_timeout = sb.value() as _;
+            })
+        );
     }
 
     fn connect_delayed_actions_events(self: &Rc<Self>) {

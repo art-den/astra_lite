@@ -353,16 +353,54 @@ impl FocuserUi {
             self_.update_focuser_value(self_.step_large.get());
         }));
 
-        self.widgets.chb_temp.connect_active_notify(clone!(@weak self as self_ => move |_| {
+        // In subscriptions with an action, the action must run before the guarded
+        // options write, so it is not lost when the lock is busy
+        self.widgets.chb_temp.connect_active_notify(clone!(@weak self as self_ => move |chb| {
             self_.correct_widgets_props();
+            let Ok(mut options) = self_.engine.options.try_write() else { return; };
+            options.focuser.on_temp_change = chb.is_active();
         }));
 
-        self.widgets.chb_fwhm.connect_active_notify(clone!(@weak self as self_ => move |_| {
-            self_.correct_widgets_props();
+        self.widgets.spb_temp.connect_value_changed(clone!(@weak self as self_ => move |sb| {
+            let Ok(mut options) = self_.engine.options.try_write() else { return; };
+            options.focuser.max_temp_change = sb.value();
         }));
 
-        self.widgets.chb_period.connect_active_notify(clone!(@weak self as self_ => move |_| {
+        self.widgets.chb_fwhm.connect_active_notify(clone!(@weak self as self_ => move |chb| {
             self_.correct_widgets_props();
+            let Ok(mut options) = self_.engine.options.try_write() else { return; };
+            options.focuser.on_fwhm_change = chb.is_active();
+        }));
+
+        self.widgets.cb_fwhm.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
+            let Ok(mut options) = self_.engine.options.try_write() else { return; };
+            options.focuser.max_fwhm_change = cb.active_id().and_then(|v| v.parse().ok()).unwrap_or(20);
+        }));
+
+        self.widgets.chb_period.connect_active_notify(clone!(@weak self as self_ => move |chb| {
+            self_.correct_widgets_props();
+            let Ok(mut options) = self_.engine.options.try_write() else { return; };
+            options.focuser.periodically = chb.is_active();
+        }));
+
+        self.widgets.cb_period.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
+            let Ok(mut options) = self_.engine.options.try_write() else { return; };
+            options.focuser.period_minutes = cb.active_id().and_then(|v| v.parse().ok()).unwrap_or(120);
+        }));
+
+        self.widgets.spb_measures.connect_value_changed(clone!(@weak self as self_ => move |sb| {
+            let Ok(mut options) = self_.engine.options.try_write() else { return; };
+            options.focuser.measures = sb.value() as u32;
+        }));
+
+        self.widgets.spb_auto_step.connect_value_changed(clone!(@weak self as self_ => move |sb| {
+            let Ok(mut options) = self_.engine.options.try_write() else { return; };
+            options.focuser.step = sb.value();
+        }));
+
+        self.widgets.spb_extra_steps.connect_value_changed(clone!(@weak self as self_ => move |sb| {
+            let Ok(mut options) = self_.engine.options.try_write() else { return; };
+            options.focuser.anti_backlash_steps = sb.value() as usize;
         }));
 
         self.widgets.da_auto.connect_draw(

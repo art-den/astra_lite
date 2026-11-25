@@ -1,4 +1,4 @@
-use std::{rc::Rc, sync::Arc};
+use std::{cell::Cell, rc::Rc, sync::Arc};
 use gtk::{glib::{self, clone}, pango, prelude::*};
 use macros::FromBuilder;
 use crate::{
@@ -18,10 +18,11 @@ pub fn init_ui(
     let widgets = Widgets::from_builder_str(include_str!(r"resources/polar_align.ui"));
     let obj = Rc::new(PolarAlignUi {
         widgets,
-        window:          window.clone(),
-        main_ui:         Rc::clone(main_ui),
-        engine:          Arc::clone(engine),
-        delayed_actions: DelayedActions::new(200),
+        window:             window.clone(),
+        main_ui:            Rc::clone(main_ui),
+        engine:             Arc::clone(engine),
+        delayed_actions:    DelayedActions::new(200),
+        filling_speed_list: Cell::new(false),
     });
 
     obj.init_widgets();
@@ -71,11 +72,12 @@ struct Widgets {
 }
 
 struct PolarAlignUi {
-    widgets:         Widgets,
-    main_ui:         Rc<MainUi>,
-    window:          gtk::ApplicationWindow,
-    engine:          Arc<Engine>,
-    delayed_actions: DelayedActions<DelayedAction>,
+    widgets:            Widgets,
+    main_ui:            Rc<MainUi>,
+    window:             gtk::ApplicationWindow,
+    engine:             Arc<Engine>,
+    delayed_actions:    DelayedActions<DelayedAction>,
+    filling_speed_list: Cell<bool>,
 }
 
 impl Drop for PolarAlignUi {
@@ -184,6 +186,36 @@ impl PolarAlignUi {
                 self_.correct_widgets_props();
             })
         );
+
+        self.widgets.spb_angle.connect_value_changed(
+            clone!(@weak self as self_ => move |spb| {
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                options.polar_align.angle = spb.value();
+            })
+        );
+
+        self.widgets.cbx_dir.connect_active_id_notify(
+            clone!(@weak self as self_ => move |cbx| {
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                options.polar_align.direction = PolarAlignDir::from_active_id(cbx.active_id().as_deref())
+                    .unwrap_or(PolarAlignDir::West);
+            })
+        );
+
+        self.widgets.cbx_speed.connect_active_id_notify(
+            clone!(@weak self as self_ => move |cbx| {
+                if self_.filling_speed_list.get() { return; }
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                options.polar_align.speed = cbx.active_id().map(|s| s.to_string());
+            })
+        );
+
+        self.widgets.chb_auto_refresh.connect_active_notify(
+            clone!(@weak self as self_ => move |chb| {
+                let Ok(mut options) = self_.engine.options.try_write() else { return; };
+                options.polar_align.auto_refresh = chb.is_active();
+            })
+        );
     }
 
     fn correct_widgets_props(&self) {
@@ -243,6 +275,9 @@ impl PolarAlignUi {
     }
 
     fn update_mount_speed_list(&self) {
+        // Programmatic list refill must not clobber the saved speed via the active_id_notify subscription.
+        self.filling_speed_list.set(true);
+
         if let Some(mount) = self.engine.cur_devices.telescope() {
             let list = mount.slew_speed_list().unwrap_or_default();
             self.widgets.cbx_speed.remove_all();
@@ -266,6 +301,8 @@ impl PolarAlignUi {
         } else {
             self.widgets.cbx_speed.remove_all();
         }
+
+        self.filling_speed_list.set(false);
     }
 
     fn handler_action_start_polar_align(&self) {

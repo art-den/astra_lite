@@ -200,7 +200,19 @@ impl GuidingUi {
         connect_action(&self.window, self, "stop_dither_calibr",  Self::handler_action_stop_dither_calibr);
 
         let connect_rbtn = |rbtn: &gtk::RadioButton| {
-            rbtn.connect_active_notify(clone!(@weak self as self_ => move |_| {
+            rbtn.connect_active_notify(clone!(@weak self as self_ => move |rbtn| {
+                if rbtn.is_active()
+                && let Ok(mut options) = self_.engine.options.try_write()
+                {
+                    options.guiding.mode =
+                        if self_.widgets.rbtn_guide_main_cam.is_active() {
+                            GuidingMode::MainCamera
+                        } else if self_.widgets.rbtn_guide_ext.is_active() {
+                            GuidingMode::External
+                        } else {
+                            GuidingMode::Disabled
+                        };
+                }
                 self_.correct_widgets_props();
             }));
         };
@@ -208,6 +220,26 @@ impl GuidingUi {
         connect_rbtn(&self.widgets.rbtn_no_guiding);
         connect_rbtn(&self.widgets.rbtn_guide_main_cam);
         connect_rbtn(&self.widgets.rbtn_guide_ext);
+
+        self.widgets.cb_dith_period.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
+            let Ok(mut options) = self_.engine.options.try_write() else { return; };
+            options.guiding.dith_period = cb.active_id().and_then(|v| v.parse().ok()).unwrap_or(0);
+        }));
+
+        self.widgets.spb_dith_dist.connect_value_changed(clone!(@weak self as self_ => move |sb| {
+            let Ok(mut options) = self_.engine.options.try_write() else { return; };
+            options.guiding.main_cam.dith_dist = sb.value() as i32;
+        }));
+
+        self.widgets.spb_guid_max_err.connect_value_changed(clone!(@weak self as self_ => move |sb| {
+            let Ok(mut options) = self_.engine.options.try_write() else { return; };
+            options.guiding.main_cam.max_error = sb.value();
+        }));
+
+        self.widgets.spb_ext_dith_dist.connect_value_changed(clone!(@weak self as self_ => move |sb| {
+            let Ok(mut options) = self_.engine.options.try_write() else { return; };
+            options.guiding.ext_guider.dith_dist = sb.value() as i32;
+        }));
 
         self.widgets.spb_mnt_cal_exp.connect_value_changed(clone!(@weak self as self_ => move |sb| {
             let Ok(mut options) = self_.engine.options.try_write() else { return; };

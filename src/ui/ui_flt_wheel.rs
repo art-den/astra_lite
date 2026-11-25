@@ -144,6 +144,7 @@ impl FltWheelUi {
     fn connect_widgets_events(self: &Rc<Self>) {
         self.widgets.cb_device.connect_active_notify(clone!(@weak self as self_ => move |cb| {
             let Some(new_device_name) = cb.active_id() else { return; };
+            // `change_filter_wheel_impl` saves device to options itself
             self_.excl_caller.exec(|| {
                 self_.engine.cur_devices.change_filter_wheel(&new_device_name);
             });
