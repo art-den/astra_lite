@@ -765,26 +765,25 @@ impl PreviewUi {
     }
 
     fn correct_widgets_props(&self) {
-        let auto_color_checked = self.widgets.ctrl.chb_wb_auto.is_active();
-        let is_color_image = self.is_color_image.get();
-        // Display-referred images have fixed display levels and WB
-        let levels_unlocked = !self.levels_locked.get();
-        let rgb_enabled = !auto_color_checked && is_color_image && levels_unlocked;
+        let state = crate::api::ui_state::preview_panel_state(&self.engine);
+        self.apply_widgets_state(&state);
+    }
 
-        self.widgets.ctrl.cb_color.set_sensitive(is_color_image);
-        self.widgets.ctrl.chb_wb_auto.set_sensitive(is_color_image && levels_unlocked);
+    fn apply_widgets_state(&self, s: &crate::api::ui_state::PreviewPanelState) {
+        self.widgets.ctrl.cb_color.set_sensitive(s.cb_color_sensitive);
+        self.widgets.ctrl.chb_wb_auto.set_sensitive(s.chb_wb_auto_sensitive);
 
-        self.widgets.ctrl.l_dark.set_sensitive(levels_unlocked);
-        self.widgets.ctrl.scl_dark.set_sensitive(levels_unlocked);
-        self.widgets.ctrl.l_highlight.set_sensitive(levels_unlocked);
-        self.widgets.ctrl.scl_highlight.set_sensitive(levels_unlocked);
+        self.widgets.ctrl.l_dark.set_sensitive(s.l_dark_sensitive);
+        self.widgets.ctrl.scl_dark.set_sensitive(s.scl_dark_sensitive);
+        self.widgets.ctrl.l_highlight.set_sensitive(s.l_highlight_sensitive);
+        self.widgets.ctrl.scl_highlight.set_sensitive(s.scl_highlight_sensitive);
 
-        self.widgets.ctrl.l_wb_red.set_sensitive(rgb_enabled);
-        self.widgets.ctrl.scl_wb_red.set_sensitive(rgb_enabled);
-        self.widgets.ctrl.l_wb_green.set_sensitive(rgb_enabled);
-        self.widgets.ctrl.scl_wb_green.set_sensitive(rgb_enabled);
-        self.widgets.ctrl.l_wb_blue.set_sensitive(rgb_enabled);
-        self.widgets.ctrl.scl_wb_blue.set_sensitive(rgb_enabled);
+        self.widgets.ctrl.l_wb_red.set_sensitive(s.l_wb_red_sensitive);
+        self.widgets.ctrl.scl_wb_red.set_sensitive(s.scl_wb_red_sensitive);
+        self.widgets.ctrl.l_wb_green.set_sensitive(s.l_wb_green_sensitive);
+        self.widgets.ctrl.scl_wb_green.set_sensitive(s.scl_wb_green_sensitive);
+        self.widgets.ctrl.l_wb_blue.set_sensitive(s.l_wb_blue_sensitive);
+        self.widgets.ctrl.scl_wb_blue.set_sensitive(s.scl_wb_blue_sensitive);
     }
 
     /// Marks READY_IMAGE_GAMMA: the gamma that undoes the load-time

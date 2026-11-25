@@ -3,7 +3,7 @@ use gtk::{glib, prelude::*, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
-    core::{engine::{Engine, ModeKind}, events::*},
+    core::{engine::Engine, events::*},
     hal::{DeviceType, HalState, TelescopeState, events::HalEvent},
     options::*,
     ui::ui_main::MainUi,
@@ -228,13 +228,17 @@ impl UiModule for MountUi {
             HalEvent::TelescopeParked(device_id) => {
                 let option = self.engine.options.read().unwrap();
                 if option.mount.device == **device_id {
+                    drop(option);
                     self.show_mount_parked_state(true);
+                    self.correct_widgets_props();
                 }
             }
             HalEvent::TelescopeUnparked(device_id) => {
                 let option = self.engine.options.read().unwrap();
                 if option.mount.device == **device_id {
+                    drop(option);
                     self.show_mount_parked_state(false);
+                    self.correct_widgets_props();
                 }
             }
             _ => {}
@@ -339,34 +343,23 @@ impl MountUi {
     }
 
     fn correct_widgets_props(&self) {
-        let mnt_active = self.engine.cur_devices.telescope()
-            .and_then(|t| t.is_active().ok())
-            .unwrap_or(false);
+        let state = crate::api::ui_state::mount_panel_state(&self.engine);
+        self.apply_widgets_state(&state);
+        self.show_info(None);
+    }
 
-        let modes = self.engine.modes();
-        let mode_kind = modes.active.kind();
-        let waiting = mode_kind == ModeKind::Waiting;
-        let live_view = mode_kind == ModeKind::LiveView;
-        let single_shot = mode_kind == ModeKind::SingleShot;
-
-        let mount_ctrl_sensitive =
-            mnt_active &&
-            (waiting || single_shot || live_view);
-
-        let move_enabled = !self.widgets.chb_parked.is_active() && mount_ctrl_sensitive;
-
-        self.widgets.bx_widgets.set_sensitive(mount_ctrl_sensitive);
-        self.widgets.chb_tracking.set_sensitive(move_enabled);
-        self.widgets.cb_speed.set_sensitive(move_enabled);
-        self.widgets.chb_inv_ns.set_sensitive(move_enabled);
-        self.widgets.chb_inv_we.set_sensitive(move_enabled);
+    fn apply_widgets_state(&self, s: &crate::api::ui_state::MountPanelState) {
+        self.widgets.bx_widgets.set_sensitive(s.bx_widgets_sensitive);
+        self.widgets.chb_tracking.set_sensitive(s.chb_tracking_sensitive);
+        self.widgets.cb_speed.set_sensitive(s.cb_speed_sensitive);
+        self.widgets.chb_inv_ns.set_sensitive(s.chb_inv_ns_sensitive);
+        self.widgets.chb_inv_we.set_sensitive(s.chb_inv_we_sensitive);
 
         for btn in self.get_nav_buttons() {
-            btn.set_sensitive(move_enabled);
+            btn.set_sensitive(s.nav_buttons_sensitive);
         }
 
-        self.main_ui.set_module_panel_visible(self.info_widgets.bx.upcast_ref(), mnt_active);
-        self.show_info(None);
+        self.main_ui.set_module_panel_visible(self.info_widgets.bx.upcast_ref(), s.module_panel_visible);
     }
 
     fn handler_nav_mount_btn_pressed(&self, button: &gtk::Button) {

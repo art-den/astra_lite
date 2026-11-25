@@ -163,6 +163,13 @@ impl StarRecognSensitivity {
     }
 }
 
+fn apply_spin_range(spb: &gtk::SpinButton, range: Option<&crate::api::ui_state::SpinRange>) {
+    match range {
+        Some(r) => correct_spinbutton_by_range(spb, Some(r.start..=r.end), r.digits, r.step),
+        None    => correct_spinbutton_by_range(spb, None, 0, None),
+    }
+}
+
 #[derive(FromBuilder)]
 struct InfoWidgets {
     bx:              gtk::Box,
@@ -427,8 +434,7 @@ impl UiModule for CameraUi {
                 self.fill_conv_gain_items_list_impl(&options);
                 drop(options);
 
-                self.correct_widgets_props_impl();
-                self.correct_frame_quality_widgets_props();
+                self.correct_widgets_props();
             }
             Event::CameraCoolingOptionsChanged => {
                 let options = self.engine.options.read().unwrap();
@@ -794,7 +800,7 @@ impl CameraUi {
                 let Ok(mut options) = self_.engine.options.try_write() else { return; };
                 options.quality.use_max_fwhm = chb.is_active();
                 drop(options);
-                self_.correct_frame_quality_widgets_props();
+                self_.correct_widgets_props();
             })
         );
 
@@ -809,7 +815,8 @@ impl CameraUi {
             clone!(@weak self as self_ => move |chb| {
                 let Ok(mut options) = self_.engine.options.try_write() else { return; };
                 options.quality.use_max_ovality = chb.is_active();
-                self_.correct_frame_quality_widgets_props();
+                drop(options);
+                self_.correct_widgets_props();
             })
         );
 
@@ -840,7 +847,8 @@ impl CameraUi {
             clone!(@weak self as self_ => move |chb| {
                 let Ok(mut options) = self_.engine.options.try_write() else { return; };
                 options.quality.check_ccd_temp = chb.is_active();
-                self_.correct_frame_quality_widgets_props();
+                drop(options);
+                self_.correct_widgets_props();
             })
         );
 
@@ -1110,187 +1118,89 @@ impl CameraUi {
         }
     }
 
-    fn correct_widgets_props_impl(&self) {
+    fn correct_widgets_props(&self) {
+        let state = crate::api::ui_state::camera_panel_state(&self.engine);
+        self.apply_widgets_state(&state);
+    }
+
+    fn apply_widgets_state(&self, s: &crate::api::ui_state::CameraPanelState) {
         let widgets = &self.widgets;
 
-        let Some(camera) = self.engine.cur_devices.camera() else {
-            widgets.common.bx_take_shot.set_sensitive(false);
-            widgets.ctrl.grid.set_sensitive(false);
-            widgets.frame.grid.set_sensitive(false);
-            widgets.calibr.grid.set_sensitive(false);
-            widgets.raw.grid.set_sensitive(false);
-            widgets.live_st.grid.set_sensitive(false);
-            widgets.quality.bx.set_sensitive(false);
-            return;
-        };
-        widgets.common.bx_take_shot.set_sensitive(true);
+        // Ranges (also set sensitive internally; explicit sensitivity below wins)
+        apply_spin_range(&widgets.frame.spb_exp,   s.frame.spb_exp_range.as_ref());
+        apply_spin_range(&widgets.ctrl.spb_temp,   s.ctrl.spb_temp_range.as_ref());
+        apply_spin_range(&widgets.frame.spb_gain,  s.frame.spb_gain_range.as_ref());
+        apply_spin_range(&widgets.frame.spb_offset, s.frame.spb_offset_range.as_ref());
 
-        // Exposure
-        let exp_range = camera.exposure_range().ok();
-        let exposure_supported = exp_range.is_some();
-        correct_spinbutton_by_range(&widgets.frame.spb_exp, exp_range, 4, Some(1.0));
-
-        // Temperature
-        let temp_supported = camera.is_cooler_supported().unwrap_or(false);
-        if temp_supported {
-            let temp_range = camera.temperature_range().ok();
-            correct_spinbutton_by_range(&widgets.ctrl.spb_temp, temp_range, 0, Some(1.0));
-        }
-
-        // Gain
-        let gain_supported = camera.is_gain_supported().unwrap_or(false);
-        if gain_supported {
-            let gain_range = camera.gain_range().ok();
-            correct_spinbutton_by_range(&widgets.frame.spb_gain, gain_range, 0, None);
-        }
-
-        // Offset
-        let offset_supported = camera.is_offset_supported().unwrap_or(false);
-        if offset_supported {
-            let offset_range = camera.offset_range().ok();
-            correct_spinbutton_by_range(&widgets.frame.spb_offset, offset_range, 0, None);
-        }
-
-        // Crop
-        let crop_supported = camera.is_frame_supported().unwrap_or(false);
-
-        // Binning
-        // TODO: use max bin
-        let binning_supported = camera.is_binning_supported().unwrap_or(false);
-
-        // Fan
-        let fan_supported = camera.is_fan_ctrl_supported().unwrap_or(false);
-
-        // Heater
-        let heater_supported = camera.is_heater_supported().unwrap_or(false);
-
-        // Low noise
-        let low_noise_supported = camera.is_low_noise_supported().unwrap_or(false);
-
-        // Conversion gain
-        let conv_gain_supported = camera.is_conversion_gain_supported().unwrap_or(false);
-
-        // High fullwell mode
-        let high_fullwell_supported = camera.is_high_fullwell_supported().unwrap_or(false);
-
-        let cooler_active = widgets.ctrl.chb_cooler.is_active();
-        let frame_mode_str = widgets.frame.cb_mode.active_id();
-
-        let frame_mode = FrameType::from_active_id(frame_mode_str.as_deref());
-
-        let frame_mode_is_lights = frame_mode == FrameType::Lights;
-        let frame_mode_is_flat = frame_mode == FrameType::Flats;
-        let frame_mode_is_dark = frame_mode == FrameType::Darks;
-
-        let modes = self.engine.modes();
-        let mode_kind = modes.active.kind();
-        let waiting = mode_kind == ModeKind::Waiting;
-        let single_shot = mode_kind == ModeKind::SingleShot;
-        let liveview_active = mode_kind == ModeKind::LiveView;
-        let saving_frames = mode_kind == ModeKind::SavingRawFrames;
-        let saving_frames_paused = modes.aborted
-            .as_ref()
-            .map(|mode| mode.kind() == ModeKind::SavingRawFrames)
-            .unwrap_or(false);
-        let live_active = mode_kind == ModeKind::LiveStacking;
-        let livestacking_paused = modes.aborted
-            .as_ref()
-            .map(|mode| mode.kind() == ModeKind::LiveStacking)
-            .unwrap_or(false);
-        drop(modes);
-
-        let save_raw_btn_cap = match frame_mode {
-            FrameType::Lights => "Start save\nLIGHTS",
-            FrameType::Darks  => "Start save\nDARKS",
-            FrameType::Biases => "Start save\nBIASES",
-            FrameType::Flats  => "Start save\nFLATS",
-        };
-        self.widgets.raw.btn_start.set_label(save_raw_btn_cap);
-
-        let cam_active = camera.is_active().unwrap_or(false);
-
-        let can_change_cam_opts = !saving_frames && !live_active;
-        let can_change_mode = waiting || single_shot || liveview_active;
-        let can_change_frame_opts = waiting || liveview_active;
-        let can_change_live_stacking_opts = waiting || liveview_active;
-        let can_change_cal_ops = !liveview_active;
-
-        self.main_ui.set_module_panel_visible(self.widgets.info.bx.upcast_ref(), cam_active);
+        self.main_ui.set_module_panel_visible(widgets.info.bx.upcast_ref(), s.module_panel_visible);
 
         enable_actions(&self.window, &[
-            ("take_shot",              exposure_supported && !single_shot && waiting),
-            ("stop_shot",              single_shot),
+            ("take_shot",              s.actions.take_shot),
+            ("stop_shot",              s.actions.stop_shot),
 
-            ("start_save_raw_frames",  exposure_supported && !saving_frames && can_change_mode),
-            ("stop_save_raw_frames",   saving_frames),
-            ("continue_save_raw",      saving_frames_paused && can_change_mode),
+            ("start_save_raw_frames",  s.actions.start_save_raw_frames),
+            ("stop_save_raw_frames",   s.actions.stop_save_raw_frames),
+            ("continue_save_raw",      s.actions.continue_save_raw),
 
-            ("start_live_stacking",    exposure_supported && !live_active && can_change_mode && frame_mode_is_lights),
-            ("stop_live_stacking",     live_active),
-            ("continue_live_stacking", livestacking_paused && can_change_mode),
-            ("load_image",             waiting),
+            ("start_live_stacking",    s.actions.start_live_stacking),
+            ("stop_live_stacking",     s.actions.stop_live_stacking),
+            ("continue_live_stacking", s.actions.continue_live_stacking),
+            ("load_image",             s.actions.load_image),
         ]);
 
-        widgets.common.l_cam_list   .set_sensitive(waiting);
-        widgets.common.cb_cam_list  .set_sensitive(waiting);
-        widgets.common.chb_live_view.set_sensitive((exposure_supported && liveview_active) || can_change_mode);
+        widgets.common.l_cam_list   .set_sensitive(s.common.l_cam_list_sensitive);
+        widgets.common.cb_cam_list  .set_sensitive(s.common.cb_cam_list_sensitive);
+        widgets.common.chb_live_view.set_sensitive(s.common.chb_live_view_sensitive);
+        widgets.common.bx_take_shot .set_sensitive(s.common.bx_take_shot_sensitive);
 
-        widgets.ctrl.grid         .set_sensitive(cam_active);
-        widgets.ctrl.chb_fan      .set_visible(fan_supported);
-        widgets.ctrl.l_heater     .set_visible(heater_supported);
-        widgets.ctrl.cb_heater    .set_visible(heater_supported);
-        widgets.ctrl.l_conv_gain  .set_visible(conv_gain_supported);
-        widgets.ctrl.cb_conv_gain .set_visible(conv_gain_supported);
-        widgets.ctrl.chb_high_fw  .set_visible(high_fullwell_supported);
-        widgets.ctrl.chb_low_noise.set_visible(low_noise_supported);
-        widgets.ctrl.chb_fan      .set_sensitive(!cooler_active);
-        widgets.ctrl.chb_cooler   .set_sensitive(temp_supported && can_change_cam_opts);
-        widgets.ctrl.spb_temp     .set_sensitive(cooler_active && temp_supported && can_change_cam_opts);
-        widgets.ctrl.chb_low_noise.set_sensitive(cam_active && can_change_cam_opts);
-        widgets.ctrl.l_conv_gain  .set_sensitive(cam_active && can_change_cam_opts);
-        widgets.ctrl.cb_conv_gain .set_sensitive(cam_active && can_change_cam_opts);
-        widgets.ctrl.chb_high_fw  .set_sensitive(cam_active && can_change_cam_opts);
+        widgets.ctrl.grid         .set_sensitive(s.ctrl.grid_sensitive);
+        widgets.ctrl.chb_fan      .set_visible(s.ctrl.chb_fan_visible);
+        widgets.ctrl.l_heater     .set_visible(s.ctrl.l_heater_visible);
+        widgets.ctrl.cb_heater    .set_visible(s.ctrl.cb_heater_visible);
+        widgets.ctrl.l_conv_gain  .set_visible(s.ctrl.l_conv_gain_visible);
+        widgets.ctrl.cb_conv_gain .set_visible(s.ctrl.cb_conv_gain_visible);
+        widgets.ctrl.chb_high_fw  .set_visible(s.ctrl.chb_high_fw_visible);
+        widgets.ctrl.chb_low_noise.set_visible(s.ctrl.chb_low_noise_visible);
+        widgets.ctrl.chb_fan      .set_sensitive(s.ctrl.chb_fan_sensitive);
+        widgets.ctrl.chb_cooler   .set_sensitive(s.ctrl.chb_cooler_sensitive);
+        widgets.ctrl.spb_temp     .set_sensitive(s.ctrl.spb_temp_sensitive);
+        widgets.ctrl.chb_low_noise.set_sensitive(s.ctrl.chb_low_noise_sensitive);
+        widgets.ctrl.l_conv_gain  .set_sensitive(s.ctrl.l_conv_gain_sensitive);
+        widgets.ctrl.cb_conv_gain .set_sensitive(s.ctrl.cb_conv_gain_sensitive);
+        widgets.ctrl.chb_high_fw  .set_sensitive(s.ctrl.chb_high_fw_sensitive);
 
-        widgets.frame.grid        .set_sensitive(cam_active);
-        widgets.frame.cb_mode     .set_sensitive(waiting);
-        widgets.frame.chb_auto_exp.set_sensitive(exposure_supported && can_change_frame_opts && frame_mode_is_flat);
-        widgets.frame.spb_exp     .set_sensitive(exposure_supported && can_change_frame_opts);
-        widgets.frame.cb_crop     .set_sensitive(crop_supported && can_change_frame_opts);
-        widgets.frame.spb_gain    .set_sensitive(gain_supported && can_change_frame_opts);
-        widgets.frame.spb_offset  .set_sensitive(offset_supported && can_change_frame_opts);
-        widgets.frame.cb_bin      .set_sensitive(binning_supported && can_change_frame_opts);
+        widgets.frame.grid        .set_sensitive(s.frame.grid_sensitive);
+        widgets.frame.cb_mode     .set_sensitive(s.frame.cb_mode_sensitive);
+        widgets.frame.chb_auto_exp.set_sensitive(s.frame.chb_auto_exp_sensitive);
+        widgets.frame.spb_exp     .set_sensitive(s.frame.spb_exp_sensitive);
+        widgets.frame.cb_crop     .set_sensitive(s.frame.cb_crop_sensitive);
+        widgets.frame.spb_gain    .set_sensitive(s.frame.spb_gain_sensitive);
+        widgets.frame.spb_offset  .set_sensitive(s.frame.spb_offset_sensitive);
+        widgets.frame.cb_bin      .set_sensitive(s.frame.cb_bin_sensitive);
 
-        widgets.calibr.grid    .set_sensitive(cam_active);
-        widgets.calibr.chb_dark.set_sensitive(can_change_cal_ops);
-        widgets.calibr.chb_flat.set_sensitive(can_change_cal_ops);
-        widgets.calibr.fch_flat.set_sensitive(can_change_cal_ops);
+        widgets.calibr.grid    .set_sensitive(s.calibr.grid_sensitive);
+        widgets.calibr.chb_dark.set_sensitive(s.calibr.chb_dark_sensitive);
+        widgets.calibr.chb_flat.set_sensitive(s.calibr.chb_flat_sensitive);
+        widgets.calibr.fch_flat.set_sensitive(s.calibr.fch_flat_sensitive);
 
-        widgets.raw.grid           .set_sensitive(cam_active);
-        widgets.raw.chb_save_master.set_sensitive(can_change_cal_ops && (frame_mode_is_flat || frame_mode_is_dark) && !saving_frames);
-        widgets.raw.chb_frames_cnt .set_sensitive(!saving_frames && can_change_mode);
-        widgets.raw.spb_frames_cnt .set_sensitive(!saving_frames && can_change_mode);
+        widgets.raw.grid           .set_sensitive(s.raw.grid_sensitive);
+        widgets.raw.btn_start      .set_label(&s.raw.btn_start_label);
+        widgets.raw.chb_save_master.set_sensitive(s.raw.chb_save_master_sensitive);
+        widgets.raw.chb_frames_cnt .set_sensitive(s.raw.chb_frames_cnt_sensitive);
+        widgets.raw.spb_frames_cnt .set_sensitive(s.raw.spb_frames_cnt_sensitive);
 
-        widgets.live_st.grid           .set_sensitive(cam_active);
-        widgets.live_st.chb_save_period.set_sensitive(can_change_live_stacking_opts);
-        widgets.live_st.spb_save_period.set_sensitive(can_change_live_stacking_opts);
-        widgets.live_st.chb_save_orig  .set_sensitive(can_change_live_stacking_opts);
-        widgets.live_st.chb_frames_cnt .set_sensitive(can_change_live_stacking_opts);
-        widgets.live_st.spb_frames_cnt .set_sensitive(can_change_live_stacking_opts);
-        widgets.live_st.fch_path       .set_sensitive(can_change_live_stacking_opts);
+        widgets.live_st.grid           .set_sensitive(s.live_st.grid_sensitive);
+        widgets.live_st.chb_save_period.set_sensitive(s.live_st.chb_save_period_sensitive);
+        widgets.live_st.spb_save_period.set_sensitive(s.live_st.spb_save_period_sensitive);
+        widgets.live_st.chb_save_orig  .set_sensitive(s.live_st.chb_save_orig_sensitive);
+        widgets.live_st.chb_frames_cnt .set_sensitive(s.live_st.chb_frames_cnt_sensitive);
+        widgets.live_st.spb_frames_cnt .set_sensitive(s.live_st.spb_frames_cnt_sensitive);
+        widgets.live_st.fch_path       .set_sensitive(s.live_st.fch_path_sensitive);
 
-        widgets.quality.bx.set_sensitive(cam_active);
-    }
-
-    fn correct_widgets_props(&self) {
-        self.correct_widgets_props_impl();
-        self.correct_frame_quality_widgets_props();
-    }
-
-    fn correct_frame_quality_widgets_props(&self) {
-        let qual = &self.widgets.quality;
-        qual.spb_max_fwhm.set_sensitive(qual.chb_max_fwhm.is_active());
-        qual.spb_max_oval.set_sensitive(qual.chb_max_oval.is_active());
-        qual.spb_max_temp_diff.set_sensitive(qual.chb_max_temp_diff.is_active());
+        widgets.quality.bx.set_sensitive(s.quality.bx_sensitive);
+        widgets.quality.spb_max_fwhm.set_sensitive(s.quality.spb_max_fwhm_sensitive);
+        widgets.quality.spb_max_oval.set_sensitive(s.quality.spb_max_oval_sensitive);
+        widgets.quality.spb_max_temp_diff.set_sensitive(s.quality.spb_max_temp_diff_sensitive);
     }
 
     fn init_fn_utils(&self) {

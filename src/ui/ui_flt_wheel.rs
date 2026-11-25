@@ -213,10 +213,11 @@ impl FltWheelUi {
     }
 
     fn correct_widgets_props(&self) {
-        let Some(filter_wheel) = self.engine.cur_devices.filter_wheel() else {
-            self.widgets.cb_filter.set_sensitive(false);
-            return;
-        };
-        self.widgets.cb_filter.set_sensitive(filter_wheel.is_active().unwrap_or(false));
+        let state = crate::api::ui_state::flt_wheel_panel_state(&self.engine);
+        self.apply_widgets_state(&state);
+    }
+
+    fn apply_widgets_state(&self, s: &crate::api::ui_state::FltWheelPanelState) {
+        self.widgets.cb_filter.set_sensitive(s.cb_filter_sensitive);
     }
 }

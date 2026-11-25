@@ -155,7 +155,7 @@ impl UiModule for GuidingUi {
                 let options = self.engine.options.read().unwrap();
                 self.show_options(&options);
                 drop(options);
-                self.correct_widgets_props_impl();
+                self.correct_widgets_props();
             }
             Event::Guider(evt) => {
                 self.process_ext_guider_event(evt);
@@ -171,6 +171,13 @@ impl UiModule for GuidingUi {
             }
             _ => {}
         }
+    }
+}
+
+fn apply_spin_range(spb: &gtk::SpinButton, range: Option<&crate::api::ui_state::SpinRange>) {
+    match range {
+        Some(r) => correct_spinbutton_by_range(spb, Some(r.start..=r.end), r.digits, r.step),
+        None    => correct_spinbutton_by_range(spb, None, 0, None),
     }
 }
 
@@ -252,48 +259,33 @@ impl GuidingUi {
         }));
     }
 
-    fn correct_widgets_props_impl(&self) {
-        let modes = self.engine.modes();
-        let mode_kind = modes.active.kind();
-        drop(modes);
-        let can_change_mode =
-            mode_kind == ModeKind::Waiting ||
-            mode_kind == ModeKind::SingleShot ||
-            mode_kind == ModeKind::LiveView;
-        let dither_calibr = mode_kind == ModeKind::DitherCalibr;
+    fn correct_widgets_props(&self) {
+        let state = crate::api::ui_state::guiding_panel_state(&self.engine);
+        self.apply_widgets_state(&state);
+    }
 
-        let disabled = self.widgets.rbtn_no_guiding.is_active();
-        let by_main_cam = self.widgets.rbtn_guide_main_cam.is_active();
-        let by_ext = self.widgets.rbtn_guide_ext.is_active();
+    fn apply_widgets_state(&self, s: &crate::api::ui_state::GuidingPanelState) {
+        apply_spin_range(&self.widgets.spb_mnt_cal_exp, s.spb_mnt_cal_exp_range.as_ref());
 
-        if let Ok(camera) = self.engine.cur_devices.camera_or_err() {
-            let exp_range = camera.exposure_range().ok();
-            correct_spinbutton_by_range(&self.widgets.spb_mnt_cal_exp, exp_range, 1, Some(1.0));
-        }
-
-        self.widgets.grd.set_sensitive(true);
-        self.widgets.rbtn_no_guiding.set_sensitive(can_change_mode);
-        self.widgets.rbtn_guide_main_cam.set_sensitive(can_change_mode);
-        self.widgets.rbtn_guide_ext.set_sensitive(can_change_mode);
-        self.widgets.cb_dith_period.set_sensitive(!disabled && can_change_mode);
-        self.widgets.spb_dith_dist.set_sensitive(by_main_cam && can_change_mode);
-        self.widgets.spb_guid_max_err.set_sensitive(by_main_cam && can_change_mode);
-        self.widgets.spb_mnt_cal_exp.set_sensitive(by_main_cam && can_change_mode);
-        self.widgets.spb_ext_dith_dist.set_sensitive(by_ext && can_change_mode);
+        self.widgets.grd.set_sensitive(s.grd_sensitive);
+        self.widgets.rbtn_no_guiding.set_sensitive(s.rbtn_no_guiding_sensitive);
+        self.widgets.rbtn_guide_main_cam.set_sensitive(s.rbtn_guide_main_cam_sensitive);
+        self.widgets.rbtn_guide_ext.set_sensitive(s.rbtn_guide_ext_sensitive);
+        self.widgets.cb_dith_period.set_sensitive(s.cb_dith_period_sensitive);
+        self.widgets.spb_dith_dist.set_sensitive(s.spb_dith_dist_sensitive);
+        self.widgets.spb_guid_max_err.set_sensitive(s.spb_guid_max_err_sensitive);
+        self.widgets.spb_mnt_cal_exp.set_sensitive(s.spb_mnt_cal_exp_sensitive);
+        self.widgets.spb_ext_dith_dist.set_sensitive(s.spb_ext_dith_dist_sensitive);
 
         enable_actions(&self.window, &[
-            ("start_dither_calibr", !dither_calibr && by_main_cam && can_change_mode),
-            ("stop_dither_calibr", dither_calibr),
+            ("start_dither_calibr", s.actions.start_dither_calibr),
+            ("stop_dither_calibr",  s.actions.stop_dither_calibr),
         ]);
 
         self.main_ui.set_module_panel_visible(
             self.info_widgets.bx.upcast_ref(),
-            self.widgets.rbtn_guide_ext.is_active()
+            s.module_panel_visible
         );
-    }
-
-    fn correct_widgets_props(&self) {
-        self.correct_widgets_props_impl();
     }
 
     fn handler_action_start_dither_calibr(&self) {

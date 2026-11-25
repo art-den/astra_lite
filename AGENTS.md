@@ -27,6 +27,7 @@ Note for those editing this file: The file should contain only general informati
 
 ## Architecture (Modules)
 
+- `src/api` - UI-independent API: panel states for future web interface
 - `src/core` - System core: engine, working modes, frame processing, events, camera control, guiding by main camera, live stacking, raw calibration.
 - `src/guiding` - API for external auto-guiding software (PHD2).
 - `src/hal` - Hardware Abstraction Layer for connecting cameras, telescopes (mounts), focusers, filter wheels (interfaces and implementations):

@@ -2,7 +2,7 @@ use std::{cell::Cell, rc::Rc, sync::Arc};
 use gtk::{glib::{self, clone}, pango, prelude::*};
 use macros::FromBuilder;
 use crate::{
-    core::{commands::{ModeCommand, ModeCommandReply}, engine::{Engine, ModeKind}, events::*, mode_polar_align::{PolarAlignCommand, PolarAlignMode, PolarAlignState, PolarAlignmentEvent}},
+    core::{commands::ModeCommand, engine::{Engine, ModeKind}, events::*, mode_polar_align::{PolarAlignCommand, PolarAlignMode, PolarAlignmentEvent}},
     hal::{DeviceType, events::HalEvent},
     options::*,
     sky_math::math::*,
@@ -181,12 +181,6 @@ impl PolarAlignUi {
         connect_action(&self.window, self, "stop_polar_alignment", Self::handler_action_stop_polar_align);
         connect_action(&self.window, self, "pa_manual_refresh", Self::handler_action_manual_refresh);
 
-        self.widgets.chb_auto_refresh.connect_active_notify(
-            clone!(@weak self as self_ => move |_| {
-                self_.correct_widgets_props();
-            })
-        );
-
         self.widgets.spb_angle.connect_value_changed(
             clone!(@weak self as self_ => move |spb| {
                 let Ok(mut options) = self_.engine.options.try_write() else { return; };
@@ -212,46 +206,27 @@ impl PolarAlignUi {
 
         self.widgets.chb_auto_refresh.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.polar_align.auto_refresh = chb.is_active();
+                if let Ok(mut options) = self_.engine.options.try_write() {
+                    options.polar_align.auto_refresh = chb.is_active();
+                }
+                self_.correct_widgets_props();
             })
         );
     }
 
     fn correct_widgets_props(&self) {
-        let camera = self.engine.cur_devices.camera();
-        let mount = self.engine.cur_devices.telescope();
-        let cam_active = camera.and_then(|c| c.is_active().ok()).unwrap_or(false);
-        let mnt_active = mount.and_then(|c| c.is_active().ok()).unwrap_or(false);
+        let state = crate::api::ui_state::polar_align_panel_state(&self.engine);
+        self.apply_widgets_state(&state);
+    }
 
-        let modes = self.engine.modes();
-        let mode_kind = modes.active.kind();
-        drop(modes);
-        let waiting = mode_kind == ModeKind::Waiting;
-        let live_view = mode_kind == ModeKind::LiveView;
-        let single_shot = mode_kind == ModeKind::SingleShot;
-        let polar_align = mode_kind == ModeKind::PolarAlignment;
-
-        let polar_alignment_can_be_started =
-            !polar_align &&
-            mnt_active && cam_active &&
-            (waiting || single_shot || live_view);
-
-        self.widgets.chb_auto_refresh.set_sensitive(!polar_align);
-
-        let mut allow_refresh = false;
-        if polar_align
-            && let Ok(ModeCommandReply::PolarAlignState(state)) =
-                self.engine.exec_mode_command(ModeCommand::PolarAlign(PolarAlignCommand::GetState))
-        {
-            allow_refresh = matches!(state, PolarAlignState::WaitForManualRefresh);
-        }
+    fn apply_widgets_state(&self, s: &crate::api::ui_state::PolarAlignPanelState) {
+        self.widgets.chb_auto_refresh.set_sensitive(s.chb_auto_refresh_sensitive);
 
         enable_actions(&self.window, &[
-            ("start_polar_alignment",   polar_alignment_can_be_started),
-            ("restart_polar_alignment", polar_align),
-            ("stop_polar_alignment",    polar_align),
-            ("pa_manual_refresh",       allow_refresh && !self.widgets.chb_auto_refresh.is_active()),
+            ("start_polar_alignment",   s.actions.start_polar_alignment),
+            ("restart_polar_alignment", s.actions.restart_polar_alignment),
+            ("stop_polar_alignment",    s.actions.stop_polar_alignment),
+            ("pa_manual_refresh",       s.actions.pa_manual_refresh),
         ]);
     }
 

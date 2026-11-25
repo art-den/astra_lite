@@ -18,6 +18,7 @@
     clippy::new_without_default,
 )]
 
+pub mod api;
 pub mod ui;
 pub mod utils;
 pub mod image;

@@ -3,7 +3,7 @@ use gtk::{glib, gdk, prelude::*, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
-    core::{engine::{Engine, ModeKind}, events::*, mode_focusing::*},
+    core::{engine::Engine, events::*, mode_focusing::*},
     hal::{DeviceType, FocuserState, HalState, events::HalEvent},
     options::*,
     ui::plots::*,
@@ -283,6 +283,13 @@ impl UiModule for FocuserUi {
     }
 }
 
+fn apply_spin_range(spb: &gtk::SpinButton, range: Option<&crate::api::ui_state::SpinRange>) {
+    match range {
+        Some(r) => correct_spinbutton_by_range(spb, Some(r.start..=r.end), r.digits, r.step),
+        None    => correct_spinbutton_by_range(spb, None, 0, None),
+    }
+}
+
 impl FocuserUi {
     fn init_widgets(&self) {
         self.widgets.spb_temp.set_range(0.1, 10.0);
@@ -353,12 +360,11 @@ impl FocuserUi {
             self_.update_focuser_value(self_.step_large.get());
         }));
 
-        // In subscriptions with an action, the action must run before the guarded
-        // options write, so it is not lost when the lock is busy
         self.widgets.chb_temp.connect_active_notify(clone!(@weak self as self_ => move |chb| {
+            if let Ok(mut options) = self_.engine.options.try_write() {
+                options.focuser.on_temp_change = chb.is_active();
+            }
             self_.correct_widgets_props();
-            let Ok(mut options) = self_.engine.options.try_write() else { return; };
-            options.focuser.on_temp_change = chb.is_active();
         }));
 
         self.widgets.spb_temp.connect_value_changed(clone!(@weak self as self_ => move |sb| {
@@ -367,9 +373,10 @@ impl FocuserUi {
         }));
 
         self.widgets.chb_fwhm.connect_active_notify(clone!(@weak self as self_ => move |chb| {
+            if let Ok(mut options) = self_.engine.options.try_write() {
+                options.focuser.on_fwhm_change = chb.is_active();
+            }
             self_.correct_widgets_props();
-            let Ok(mut options) = self_.engine.options.try_write() else { return; };
-            options.focuser.on_fwhm_change = chb.is_active();
         }));
 
         self.widgets.cb_fwhm.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
@@ -378,9 +385,10 @@ impl FocuserUi {
         }));
 
         self.widgets.chb_period.connect_active_notify(clone!(@weak self as self_ => move |chb| {
+            if let Ok(mut options) = self_.engine.options.try_write() {
+                options.focuser.periodically = chb.is_active();
+            }
             self_.correct_widgets_props();
-            let Ok(mut options) = self_.engine.options.try_write() else { return; };
-            options.focuser.periodically = chb.is_active();
         }));
 
         self.widgets.cb_period.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
@@ -421,40 +429,28 @@ impl FocuserUi {
     }
 
     fn correct_widgets_props(&self) {
-        let modes = self.engine.modes();
-        let mode_kind = modes.active.kind();
-        drop(modes);
+        let state = crate::api::ui_state::focuser_panel_state(&self.engine);
+        self.apply_widgets_state(&state);
+        self.show_info();
+    }
 
-        if let Ok(camera) = self.engine.cur_devices.camera_or_err() {
-            let exp_range = camera.exposure_range().ok();
-            correct_spinbutton_by_range(&self.widgets.spb_exp, exp_range, 1, Some(1.0));
-        }
+    fn apply_widgets_state(&self, s: &crate::api::ui_state::FocuserPanelState) {
+        apply_spin_range(&self.widgets.spb_exp, s.spb_exp_range.as_ref());
 
-        let waiting = mode_kind == ModeKind::Waiting;
-        let live_view = mode_kind == ModeKind::LiveView;
-        let single_shot = mode_kind == ModeKind::SingleShot;
-        let focusing = mode_kind == ModeKind::Focusing;
-        let can_change_mode = waiting || live_view || single_shot;
-
-        let device_enabled = self.engine.cur_devices.focuser()
-            .and_then(|f| f.is_active().ok())
-            .unwrap_or(false);
-
-        self.widgets.grd.set_sensitive(device_enabled);
-        self.widgets.spb_temp.set_sensitive(self.widgets.chb_temp.is_active());
-        self.widgets.cb_fwhm.set_sensitive(self.widgets.chb_fwhm.is_active());
-        self.widgets.cb_period.set_sensitive(self.widgets.chb_period.is_active());
-        self.widgets.spb_val.set_sensitive(!focusing);
-        self.widgets.cb_list.set_sensitive(!focusing);
-        self.widgets.bx_ctrl_btns.set_sensitive(!focusing);
+        self.widgets.grd.set_sensitive(s.grd_sensitive);
+        self.widgets.spb_temp.set_sensitive(s.spb_temp_sensitive);
+        self.widgets.cb_fwhm.set_sensitive(s.cb_fwhm_sensitive);
+        self.widgets.cb_period.set_sensitive(s.cb_period_sensitive);
+        self.widgets.spb_val.set_sensitive(s.spb_val_sensitive);
+        self.widgets.cb_list.set_sensitive(s.cb_list_sensitive);
+        self.widgets.bx_ctrl_btns.set_sensitive(s.bx_ctrl_btns_sensitive);
 
         enable_actions(&self.window, &[
-            ("manual_focus",      !focusing && can_change_mode),
-            ("stop_manual_focus", focusing),
+            ("manual_focus",      s.actions.manual_focus),
+            ("stop_manual_focus", s.actions.stop_manual_focus),
         ]);
 
-        self.main_ui.set_module_panel_visible(self.info_widgets.bx.upcast_ref(), device_enabled);
-        self.show_info();
+        self.main_ui.set_module_panel_visible(self.info_widgets.bx.upcast_ref(), s.module_panel_visible);
     }
 
     fn update_devices_list(&self) {

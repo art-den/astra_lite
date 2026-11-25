@@ -671,14 +671,14 @@ impl MainUi {
     }
 
     fn correct_widgets_props(&self) {
-        let modes = self.engine.modes();
-        let can_be_continued = modes.aborted
-            .as_ref()
-            .map(|m| m.can_be_continued_after_stop())
-            .unwrap_or(false);
+        let state = crate::api::ui_state::main_panel_state(&self.engine);
+        self.apply_widgets_state(&state);
+    }
+
+    fn apply_widgets_state(&self, s: &crate::api::ui_state::MainPanelState) {
         enable_actions(&self.widgets.window, &[
-            ("stop",     modes.active.can_be_stopped()),
-            ("continue", can_be_continued),
+            ("stop",     s.actions.stop),
+            ("continue", s.actions.continue_),
         ]);
     }
 

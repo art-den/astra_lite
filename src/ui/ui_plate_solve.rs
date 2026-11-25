@@ -3,7 +3,7 @@ use gtk::{glib, prelude::*, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
-    core::{engine::{Engine, ModeKind}, events::*},
+    core::{engine::Engine, events::*},
     hal::{DeviceType, events::HalEvent},
     options::*,
 };
@@ -143,6 +143,13 @@ impl UiModule for PlateSolveUi {
     }
 }
 
+fn apply_spin_range(spb: &gtk::SpinButton, range: Option<&crate::api::ui_state::SpinRange>) {
+    match range {
+        Some(r) => correct_spinbutton_by_range(spb, Some(r.start..=r.end), r.digits, r.step),
+        None    => correct_spinbutton_by_range(spb, None, 0, None),
+    }
+}
+
 impl PlateSolveUi {
     fn init_widgets(&self) {
         self.widgets.spb_exp.set_range(0.5, 30.0);
@@ -214,33 +221,13 @@ impl PlateSolveUi {
     }
 
     fn correct_widgets_props(&self) {
-        let camera = self.engine.cur_devices.camera();
-        let mount = self.engine.cur_devices.telescope();
+        let state = crate::api::ui_state::plate_solve_panel_state(&self.engine);
+        self.apply_widgets_state(&state);
+    }
 
-        let cam_active = camera
-            .as_ref()
-            .and_then(|cam| cam.is_active().ok())
-            .unwrap_or(false);
-        let mnt_active = mount
-            .and_then(|cam| cam.is_active().ok())
-            .unwrap_or(false);
-
-        let modes = self.engine.modes();
-        let mode_kind = modes.active.kind();
-        let waiting = mode_kind == ModeKind::Waiting;
-        let live_view = mode_kind == ModeKind::LiveView;
-        let single_shot = mode_kind == ModeKind::SingleShot;
-
-        let plate_solve_sensitive =
-            mnt_active && cam_active &&
-            (waiting || single_shot || live_view);
-
-        if let Some(camera) = camera {
-            let exp_range = camera.exposure_range().ok();
-            correct_spinbutton_by_range(&self.widgets.spb_exp, exp_range, 1, Some(1.0));
-        }
-
-        self.widgets.grd.set_sensitive(plate_solve_sensitive);
+    fn apply_widgets_state(&self, s: &crate::api::ui_state::PlateSolvePanelState) {
+        apply_spin_range(&self.widgets.spb_exp, s.spb_exp_range.as_ref());
+        self.widgets.grd.set_sensitive(s.grd_sensitive);
     }
 
     fn handler_delayed_action(&self, action: &DelayedAction) {
