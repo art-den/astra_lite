@@ -2,6 +2,8 @@ use std::{path::Path, sync::{Arc, Mutex}, time::Duration};
 
 use astra_lite::{core::{engine::*, events::*, frame_processing::{FrameProcessNotification, FrameProcessEvent}}, hal::{DeviceType, FrameType, HalImpl}, image::io::load_raw_image_from_fits_file};
 
+use astra_lite::core::commands::ModeStart;
+
 mod common;
 
 /// Exposure time per frame in seconds.
@@ -124,14 +126,12 @@ fn saving_raw_frames() {
     drop(opts);
 
     engine.check_before_saving_raw_or_live_stacking().unwrap();
-    engine.start_saving_raw_frames().unwrap();
 
     // Shared state for the event handler
     #[derive(Default)]
     struct State {
         finished_count: usize,      // number of ShotProcessingFinished events received
         idle_seconds: i64,          // silence watchdog timer
-        mode_changed: bool,         // ensures the core switched out of SavingRawFrames
     }
 
     let shared_state = Arc::new(Mutex::new(State::default()));
@@ -177,10 +177,12 @@ fn saving_raw_frames() {
                 println!("Event::ModeChanged");
                 let mut state = shared_state.lock().unwrap();
                 state.idle_seconds = 0;
-                state.mode_changed = true;
             }
         }
     });
+
+    // Start SavingRawFrames mode through the public command API
+    common::start_mode(&engine, ModeStart::SavingRawFrames);
 
     // Wait for all frames to be processed and the mode to switch, with a safety watchdog.
     // 5 frames × 1 s exposure + processing overhead ≈ 10–15 s; watchdog triggers at 20 s of silence.
@@ -188,8 +190,8 @@ fn saving_raw_frames() {
         std::thread::sleep(Duration::from_secs(1));
 
         let mut state = shared_state.lock().unwrap();
-        // All frames must be processed AND mode must have switched away from SavingRawFrames.
-        if state.finished_count >= EXPECTED_FRAME_COUNT && state.mode_changed {
+        // All frames must be processed AND the core must have switched back to WaitingMode.
+        if state.finished_count >= EXPECTED_FRAME_COUNT && engine.modes().active.kind() == ModeKind::Waiting {
             break;
         }
 
@@ -283,13 +285,11 @@ fn saving_raw_frames_with_master() {
     drop(opts);
 
     engine.check_before_saving_raw_or_live_stacking().unwrap();
-    engine.start_saving_raw_frames().unwrap();
 
     #[derive(Default)]
     struct State {
         finished_count: usize,
         idle_seconds: i64,
-        mode_changed: bool,
         master_saved: bool,
         master_file_name: std::path::PathBuf,
     }
@@ -343,17 +343,19 @@ fn saving_raw_frames_with_master() {
                 println!("Event::ModeChanged");
                 let mut state = shared_state.lock().unwrap();
                 state.idle_seconds = 0;
-                state.mode_changed = true;
             }
         }
     });
+
+    // Start SavingRawFrames mode through the public command API
+    common::start_mode(&engine, ModeStart::SavingRawFrames);
 
     // Wait for all frames to be processed and the mode to switch.
     loop {
         std::thread::sleep(Duration::from_secs(1));
 
         let mut state = shared_state.lock().unwrap();
-        if state.finished_count >= EXPECTED_FRAME_COUNT && state.mode_changed {
+        if state.finished_count >= EXPECTED_FRAME_COUNT && engine.modes().active.kind() == ModeKind::Waiting {
             break;
         }
 
@@ -469,13 +471,11 @@ fn saving_raw_frames_with_abort_and_resume() {
     drop(opts);
 
     engine.check_before_saving_raw_or_live_stacking().unwrap();
-    engine.start_saving_raw_frames().unwrap();
 
     #[derive(Default)]
     struct State {
         finished_count: usize,
         idle_seconds: i64,
-        mode_changed: bool,
         mode_continued: bool,
     }
 
@@ -516,7 +516,6 @@ fn saving_raw_frames_with_abort_and_resume() {
                 println!("Event::ModeChanged");
                 let mut state = shared_state.lock().unwrap();
                 state.idle_seconds = 0;
-                state.mode_changed = true;
             }
 
             if let Event::ModeContinued = &event {
@@ -527,6 +526,9 @@ fn saving_raw_frames_with_abort_and_resume() {
             }
         }
     });
+
+    // Start SavingRawFrames mode through the public command API
+    common::start_mode(&engine, ModeStart::SavingRawFrames);
 
     // --- Phase 1: capture frames up to ABORT_AFTER_FRAMES, then abort ---
     loop {
@@ -560,7 +562,6 @@ fn saving_raw_frames_with_abort_and_resume() {
     {
         let mut state = shared_state.lock().unwrap();
         state.mode_continued = false;
-        state.mode_changed = false;
         state.idle_seconds = 0;
     }
 
@@ -571,7 +572,7 @@ fn saving_raw_frames_with_abort_and_resume() {
         std::thread::sleep(Duration::from_secs(1));
 
         let mut state = shared_state.lock().unwrap();
-        if state.finished_count >= EXPECTED_FRAME_COUNT && state.mode_changed {
+        if state.finished_count >= EXPECTED_FRAME_COUNT && engine.modes().active.kind() == ModeKind::Waiting {
             break;
         }
 

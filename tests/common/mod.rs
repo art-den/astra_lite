@@ -134,3 +134,27 @@ impl Drop for EngineTeardown {
         self.engine.stop();
     }
 }
+
+/// Queues a mode-start command through the public `Engine::exec_command` API
+/// and waits until the mode becomes active (so tests can proceed as if the
+/// start was synchronous). Panics on timeout.
+pub fn start_mode(engine: &Engine, mode_start: astra_lite::core::commands::ModeStart) {
+    use astra_lite::core::commands::Command;
+    use astra_lite::core::engine::ModeKind;
+
+    const START_TIMEOUT: Duration = Duration::from_secs(10);
+
+    engine.exec_command(Command::StartMode(mode_start));
+    let start = Instant::now();
+    loop {
+        if engine.modes().active.kind() != ModeKind::Waiting {
+            return;
+        }
+        assert!(
+            start.elapsed() < START_TIMEOUT,
+            "mode did not start within {} s",
+            START_TIMEOUT.as_secs()
+        );
+        thread::sleep(Duration::from_millis(100));
+    }
+}

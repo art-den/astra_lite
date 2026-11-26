@@ -2,6 +2,8 @@ use std::{sync::{Arc, Mutex}, time::Duration};
 
 use astra_lite::{core::{engine::*, events::*, frame_processing::{FrameProcessNotification, FrameProcessEvent}}, hal::{DeviceType, HalImpl}};
 
+use astra_lite::core::commands::ModeStart;
+
 mod common;
 
 /// Exposure time per frame in seconds.
@@ -60,9 +62,8 @@ fn live_view() {
     engine.cur_devices.change_camera(&all_cameras[0].id);
     drop(all_cameras);
 
-    // Configure exposure for LiveView and start the mode
+    // Configure exposure
     engine.options.write().unwrap().cam.frame.set_exposure(EXPOSURE_SECS);
-    engine.start_live_view().unwrap();
 
     // Shared state for the event handler
     #[derive(Default)]
@@ -106,6 +107,9 @@ fn live_view() {
             }
         }
     });
+
+    // Start LiveView mode through the public command API
+    common::start_mode(&engine, ModeStart::LiveView);
 
     let mut time_passed = 0_i64; // in seconds
 

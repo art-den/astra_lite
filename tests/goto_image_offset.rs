@@ -12,6 +12,8 @@ use astra_lite::{
     sky_math::math::{degree_to_radian, hour_to_radian, radian_to_degree, EqCoord},
 };
 
+use astra_lite::core::commands::ModeStart;
+
 mod common;
 
 /// Target sky coordinates. The telescope emulator accepts any valid coordinates,
@@ -211,7 +213,7 @@ fn run_goto_image_flow(engine: &Arc<Engine>, match_plate_solver_binning: bool) {
         dec: degree_to_radian(TARGET_DEC),
     };
     println!("Step 1: goto RA = {} h, Dec = {} deg", TARGET_RA, TARGET_DEC);
-    engine.start_goto_coord(&coord1, GotoConfig::OnlyGoto).expect("start_goto_coord");
+    common::start_mode(engine, ModeStart::GotoCoord { eq_coord: coord1, config: GotoConfig::OnlyGoto });
     wait_for_waiting_mode(engine, Duration::from_secs(120));
     assert_no_error(&shared, "step 1 (goto)");
     println!("Step 1: done");
@@ -219,7 +221,7 @@ fn run_goto_image_flow(engine: &Arc<Engine>, match_plate_solver_binning: bool) {
     // === Step 2: sky shot; the image with stars becomes the reference one ===
 
     println!("Step 2: single shot, {} s", EXPOSURE_SECS);
-    engine.start_single_shot().expect("start_single_shot");
+    common::start_mode(engine, ModeStart::SingleShot);
     wait_for_waiting_mode(engine, Duration::from_secs(60));
     assert_no_error(&shared, "step 2 (single shot)");
 
@@ -250,7 +252,7 @@ fn run_goto_image_flow(engine: &Arc<Engine>, match_plate_solver_binning: bool) {
         dec: coord1.dec,
     };
     println!("Step 3: goto with RA shifted by {} arcmin", SHIFT_RA_ARCMIN);
-    engine.start_goto_coord(&coord2, GotoConfig::OnlyGoto).expect("start_goto_coord");
+    common::start_mode(engine, ModeStart::GotoCoord { eq_coord: coord2, config: GotoConfig::OnlyGoto });
     wait_for_waiting_mode(engine, Duration::from_secs(120));
     assert_no_error(&shared, "step 3 (goto with shift)");
     println!("Step 3: done");
@@ -258,7 +260,7 @@ fn run_goto_image_flow(engine: &Arc<Engine>, match_plate_solver_binning: bool) {
     // === Step 4: "Platesolve current image and goto" ===
 
     println!("Step 4: platesolve current image and goto");
-    engine.start_goto_image().expect("start_goto_image");
+    common::start_mode(engine, ModeStart::GotoImage);
 
     let start = Instant::now();
     let checking = loop {

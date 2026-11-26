@@ -2,6 +2,8 @@ use std::{sync::{Arc, Mutex}, time::Duration};
 
 use astra_lite::{core::{engine::*, events::*, frame_processing::{FrameProcessNotification, FrameProcessEvent}}, hal::{DeviceType, HalImpl}};
 
+use astra_lite::core::commands::ModeStart;
+
 mod common;
 
 /// Exposure time per frame in seconds.
@@ -53,16 +55,14 @@ fn single_shot() {
     engine.cur_devices.change_camera(&all_cameras[0].id);
     drop(all_cameras);
 
-    // Configure exposure and start single-shot mode
+    // Configure exposure
     engine.options.write().unwrap().cam.frame.set_exposure(EXPOSURE_SECS);
-    engine.start_single_shot().unwrap();
 
     // Shared state for the event handler
     #[derive(Default)]
     struct State {
         finished_flag: bool, // completion flag
         idle_seconds: i64,         // silence watchdog timer
-        mode_changed: bool, // ensures the core actually switched out of SingleShot into WaitingMode after the shot.
     }
 
     let shared_state = Arc::new(Mutex::new(State::default()));
@@ -99,10 +99,12 @@ fn single_shot() {
                 println!("Event::ModeChanged");
                 let mut state = shared_state.lock().unwrap();
                 state.idle_seconds = 0;
-                state.mode_changed = true;
             }
         }
     });
+
+    // Start single-shot mode through the public command API
+    common::start_mode(&engine, ModeStart::SingleShot);
 
     // Wait for the processing pipeline to finish, with a safety watchdog.
     // The watchdog panics if no FrameProcessing event arrives for 5+ seconds,
@@ -111,8 +113,8 @@ fn single_shot() {
         std::thread::sleep(Duration::from_secs(1));
 
         let mut state = shared_state.lock().unwrap();
-        // Both events must arrive: frame processed AND mode switched away from SingleShot.
-        if state.finished_flag && state.mode_changed {
+        // Both events must arrive: frame processed AND the core switched back to WaitingMode.
+        if state.finished_flag && engine.modes().active.kind() == ModeKind::Waiting {
             break;
         }
 

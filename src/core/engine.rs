@@ -858,31 +858,31 @@ impl Engine {
         Ok(())
     }
 
-    pub fn start_single_shot(&self) -> eyre::Result<()> {
+    fn start_single_shot(&self) -> eyre::Result<()> {
         let mode = TakingPicturesMode::new(CameraMode::SingleShot, self)?;
         self.start_new_mode(mode, false, true)?;
         Ok(())
     }
 
-    pub fn start_live_view(&self) -> eyre::Result<()> {
+    fn start_live_view(&self) -> eyre::Result<()> {
         let mode = TakingPicturesMode::new(CameraMode::LiveView, self)?;
         self.start_new_mode(mode, false, true)?;
         Ok(())
     }
 
-    pub fn start_saving_raw_frames(&self) -> eyre::Result<()> {
+    fn start_saving_raw_frames(&self) -> eyre::Result<()> {
         let mode = TakingPicturesMode::new(CameraMode::SavingRawFrames, self)?;
         self.start_new_mode(mode, true, true)?;
         Ok(())
     }
 
-    pub fn start_live_stacking(&self) -> eyre::Result<()> {
+    fn start_live_stacking(&self) -> eyre::Result<()> {
         let mode = TakingPicturesMode::new(CameraMode::LiveStacking, self)?;
         self.start_new_mode(mode, true, true)?;
         Ok(())
     }
 
-    pub fn start_focusing(&self) -> eyre::Result<()> {
+    fn start_focusing(&self) -> eyre::Result<()> {
         let mode = FocusingMode::new(
             self,
             None,
@@ -893,13 +893,13 @@ impl Engine {
         Ok(())
     }
 
-    pub fn start_mount_calibr(&self) -> eyre::Result<()> {
+    fn start_mount_calibr(&self) -> eyre::Result<()> {
         let mode = MountCalibrMode::new(self, None)?;
         self.start_new_mode(mode, false, false)?;
         Ok(())
     }
 
-    pub fn start_creating_dark_library(
+    fn start_creating_dark_library(
         &self,
         dark_lib_mode: DarkLibMode,
         program: &[MasterFileCreationProgramItem]
@@ -914,7 +914,7 @@ impl Engine {
         Ok(())
     }
 
-    pub fn start_goto_coord(
+    fn start_goto_coord(
         self:     &Arc<Self>,
         eq_coord: &EqCoord,
         config:   GotoConfig,
@@ -924,7 +924,7 @@ impl Engine {
         Ok(())
     }
 
-    pub fn start_goto_image(self: &Arc<Self>) -> eyre::Result<()> {
+    fn start_goto_image(self: &Arc<Self>) -> eyre::Result<()> {
         let image = self.preview.image.read().unwrap();
         if image.is_empty() {
             eyre::bail!("Image is empty");
@@ -947,13 +947,13 @@ impl Engine {
         Ok(())
     }
 
-    pub fn start_capture_and_platesolve(self: &Arc<Self>) -> eyre::Result<()> {
+    fn start_capture_and_platesolve(self: &Arc<Self>) -> eyre::Result<()> {
         let mode = PlatesolveMode::new(self)?;
         self.start_new_mode(mode, false, false)?;
         Ok(())
     }
 
-    pub fn start_polar_alignment(self: &Arc<Self>) -> eyre::Result<()> {
+    fn start_polar_alignment(self: &Arc<Self>) -> eyre::Result<()> {
         let mode = PolarAlignMode::new(self)?;
         self.start_new_mode(mode, false, false)?;
         Ok(())

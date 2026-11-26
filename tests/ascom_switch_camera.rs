@@ -5,6 +5,8 @@ use astra_lite::{
 };
 
 #[cfg(windows)]
+use astra_lite::core::commands::ModeStart;
+
 mod common;
 
 /// The hub camera and the plain camera it hubs underneath on the dev machine.
@@ -94,7 +96,7 @@ fn run_switch_camera() {
     });
 
     engine.options.write().unwrap().cam.frame.set_exposure(EXPOSURE_SECS);
-    engine.start_single_shot().expect("single shot must start on the reactivated camera");
+    common::start_mode(&engine, ModeStart::SingleShot);
 
     for _ in 0..15 {
         std::thread::sleep(std::time::Duration::from_secs(1));

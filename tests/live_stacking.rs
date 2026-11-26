@@ -2,6 +2,8 @@ use std::{path::Path, sync::{Arc, Mutex}, time::Duration};
 
 use astra_lite::{core::{engine::*, events::*, frame_processing::{FrameProcessNotification, FrameProcessEvent}}, hal::{DeviceType, FrameType, HalImpl}, image::io::load_raw_image_from_fits_file};
 
+use astra_lite::core::commands::ModeStart;
+
 mod common;
 
 /// Exposure time per frame in seconds.
@@ -129,14 +131,12 @@ fn live_stacking() {
     drop(opts);
 
     engine.check_before_saving_raw_or_live_stacking().unwrap();
-    engine.start_live_stacking().unwrap();
 
     // Shared state for the event handler
     #[derive(Default)]
     struct State {
         finished_count: usize,      // number of ShotProcessingFinished events received
         idle_seconds: i64,          // silence watchdog timer
-        mode_changed: bool,         // ensures the core switched out of LiveStacking
     }
 
     let shared_state = Arc::new(Mutex::new(State::default()));
@@ -191,10 +191,12 @@ fn live_stacking() {
                 println!("Event::ModeChanged");
                 let mut state = shared_state.lock().unwrap();
                 state.idle_seconds = 0;
-                state.mode_changed = true;
             }
         }
     });
+
+    // Start LiveStacking mode through the public command API
+    common::start_mode(&engine, ModeStart::LiveStacking);
 
     // Wait for all frames to be processed and the mode to switch, with a safety watchdog.
     // 5 frames × 1 s exposure + processing overhead ≈ 10–15 s; watchdog triggers at 20 s of silence.
@@ -202,8 +204,8 @@ fn live_stacking() {
         std::thread::sleep(Duration::from_secs(1));
 
         let mut state = shared_state.lock().unwrap();
-        // All frames must be processed AND mode must have switched away from LiveStacking.
-        if state.finished_count >= EXPECTED_FRAME_COUNT && state.mode_changed {
+        // All frames must be processed AND the core must have switched back to WaitingMode.
+        if state.finished_count >= EXPECTED_FRAME_COUNT && engine.modes().active.kind() == ModeKind::Waiting {
             break;
         }
 
