@@ -583,7 +583,8 @@ impl MainUi {
                 self.widgets.da_progress.queue_draw();
                 self.show_mode_caption();
             },
-            // Signal for future remote clients; GTK panels refresh themselves.
+            // Panels that refresh themselves on any applied option change
+            // do so in their own `on_event`.
             Event::NeedRefreshOptionsView => {}
             _ => {},
         }

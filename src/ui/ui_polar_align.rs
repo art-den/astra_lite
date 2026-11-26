@@ -139,6 +139,9 @@ impl UiModule for PolarAlignUi {
             Event::PolarAlignment(event) => {
                 self.show_polar_alignment_error(event);
             }
+            Event::NeedRefreshOptionsView => {
+                self.correct_widgets_props();
+            }
             _ => {}
         }
     }
@@ -184,9 +187,7 @@ impl PolarAlignUi {
         self.widgets.spb_angle.connect_value_changed(
             clone!(@weak self as self_ => move |spb| {
                 let patch = OptionPatch::PolarAlign(PolarAlignOptionPatch { angle: Some(spb.value()), ..Default::default() });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change polar_align options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
@@ -195,9 +196,7 @@ impl PolarAlignUi {
                 let direction = PolarAlignDir::from_active_id(cbx.active_id().as_deref())
                     .unwrap_or(PolarAlignDir::West);
                 let patch = OptionPatch::PolarAlign(PolarAlignOptionPatch { direction: Some(direction), ..Default::default() });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change polar_align options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
@@ -206,20 +205,14 @@ impl PolarAlignUi {
                 if self_.filling_speed_list.get() { return; }
                 let speed = cbx.active_id().map(|s| s.to_string());
                 let patch = OptionPatch::PolarAlign(PolarAlignOptionPatch { speed: Some(speed), ..Default::default() });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change polar_align options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.chb_auto_refresh.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 let patch = OptionPatch::PolarAlign(PolarAlignOptionPatch { auto_refresh: Some(chb.is_active()), ..Default::default() });
-                if self_.engine.exec_command(Command::ChangeOptions(patch)).is_err() {
-                    log::error!("Failed to change polar_align options");
-                    return;
-                }
-                self_.correct_widgets_props();
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
     }

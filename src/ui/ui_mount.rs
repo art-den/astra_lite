@@ -323,18 +323,14 @@ impl MountUi {
         self.widgets.chb_inv_ns.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 let patch = OptionPatch::Mount(MountOptionPatch { inv_ns: Some(chb.is_active()), ..Default::default() });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change mount options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.chb_inv_we.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 let patch = OptionPatch::Mount(MountOptionPatch { inv_we: Some(chb.is_active()), ..Default::default() });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change mount options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
@@ -342,9 +338,7 @@ impl MountUi {
             clone!(@weak self as self_ => move |cb| {
                 let speed = cb.active_id().map(|s| s.to_string());
                 let patch = OptionPatch::Mount(MountOptionPatch { speed: Some(speed), ..Default::default() });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change mount options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
     }

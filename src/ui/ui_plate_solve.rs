@@ -172,9 +172,7 @@ impl PlateSolveUi {
         self.widgets.spb_exp.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
                 let patch = OptionPatch::PlateSolver(PlateSolverOptionPatch { exposure: Some(sb.value()), ..Default::default() });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change plate_solver options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
@@ -182,9 +180,7 @@ impl PlateSolveUi {
             clone!(@weak self as self_ => move |cb| {
                 let gain = Gain::from_active_id(cb.active_id().as_deref());
                 let patch = OptionPatch::PlateSolver(PlateSolverOptionPatch { gain: Some(gain), ..Default::default() });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change plate_solver options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
@@ -192,9 +188,7 @@ impl PlateSolveUi {
             clone!(@weak self as self_ => move |cb| {
                 let bin = Binning::from_active_id(cb.active_id().as_deref());
                 let patch = OptionPatch::PlateSolver(PlateSolverOptionPatch { bin: Some(bin), ..Default::default() });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change plate_solver options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
@@ -202,27 +196,21 @@ impl PlateSolveUi {
             clone!(@weak self as self_ => move |cb| {
                 let solver = PlateSolverType::from_active_id(cb.active_id().as_deref());
                 let patch = OptionPatch::PlateSolver(PlateSolverOptionPatch { solver: Some(solver), ..Default::default() });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change plate_solver options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.spb_timeout.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
                 let patch = OptionPatch::PlateSolver(PlateSolverOptionPatch { timeout: Some(sb.value() as _), ..Default::default() });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change plate_solver options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.spb_blind_timeout.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
                 let patch = OptionPatch::PlateSolver(PlateSolverOptionPatch { blind_timeout: Some(sb.value() as _), ..Default::default() });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change plate_solver options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
     }

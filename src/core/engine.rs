@@ -1,6 +1,7 @@
 use std::{
     any::Any, fmt::Display, path::Path,
-    sync::{Arc, Mutex, RwLock, RwLockReadGuard, atomic::AtomicBool},
+    sync::{Arc, Mutex, RwLock, RwLockReadGuard, atomic::AtomicBool, mpsc},
+    thread::JoinHandle,
 };
 
 use crate::{
@@ -113,7 +114,8 @@ pub struct Engine {
     timer:              Arc<Timer>,
     img_proc_stop_flag: Mutex<Arc<AtomicBool>>, // stop flag for last command
     frame_processing:   Arc<FrameProcessing>,
-
+    cmd_tx:             mpsc::Sender<Command>,
+    cmd_thread:         Option<JoinHandle<()>>,
 }
 
 impl Drop for Engine {
@@ -123,6 +125,15 @@ impl Drop for Engine {
         // INDI needs no teardown here: the OS releases sockets at process exit.
         #[cfg(windows)]
         log_if_error(&self.hal.ascom_impl().disconnect_all(), "Disconnect ASCOM Classic on Engine::drop");
+
+        // Close the command channel and wait for the command thread to finish
+        {
+            let (dummy_tx, _dummy_rx) = mpsc::channel::<Command>();
+            drop(std::mem::replace(&mut self.cmd_tx, dummy_tx));
+        }
+        if let Some(handle) = self.cmd_thread.take() {
+            let _ = handle.join();
+        }
 
         log::info!("Engine dropped");
     }
@@ -138,6 +149,16 @@ impl Engine {
 
         let cur_devices = CurDevices::new(&options, &hal, &events);
 
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        let cmd_thread = {
+            let options = Arc::clone(&options);
+            let events  = Arc::clone(&events);
+            std::thread::Builder::new()
+                .name("engine_cmd".into())
+                .spawn(move || Self::command_worker(cmd_rx, &options, &events))
+                .expect("spawn engine_cmd thread")
+        };
+
         let this = Arc::new(Self {
             options:            Arc::clone(&options),
             modes:              RwLock::new(EngineModes::new()),
@@ -151,6 +172,8 @@ impl Engine {
             hal,
             frame_processing,
             events,
+            cmd_tx,
+            cmd_thread: Some(cmd_thread),
         });
 
         this.set_ext_guider_events_handler();
@@ -598,28 +621,66 @@ impl Engine {
         mode.active.command(&cmd)
     }
 
-    /// App-level command facade for UI clients. A busy options lock rejects
-    /// the change with an error (reentrant widget signals must not be applied).
+    /// Queues an app-level command for the engine command thread (fire and
+    /// forget: the executor logs errors and sends follow-up events, so their
+    /// side effects, incl. HAL device calls, run on that thread).
+    /// Phantom commands from reentrant widget signals are harmless here:
+    /// the widget value equals the option value, so applying them is a no-op
+    /// (`changed = false`).
     pub fn exec_command(
         &self,
         cmd:  Command,
-    ) -> eyre::Result<CommandReply> {
-        match cmd {
-            Command::ChangeOptions(patch) => {
-                let mut options = match self.options.try_write() {
-                    Ok(o) => o,
-                    // Busy (incl. reentrant call from widget redraw under read-guard):
-                    // the change is rejected, same as today's silent try_write skip.
-                    Err(_) => return Err(eyre::eyre!("Options are busy, option change rejected"))
-                };
-                let changed = patch.apply(&mut options);
-                options.validate()?;
-                drop(options);
-                if changed {
-                    self.events.send(Event::NeedRefreshOptionsView);
-                }
-                Ok(CommandReply::OptionsChanged { changed })
+    ) {
+        if let Err(e) = self.cmd_tx.send(cmd) {
+            log::error!("Engine command channel is closed: {e}");
+        }
+    }
+
+    fn command_worker(
+        rx:      mpsc::Receiver<Command>,
+        options: &RwLock<Options>,
+        events:  &EventHandlers,
+    ) {
+        while let Ok(cmd) = rx.recv() {
+            match cmd {
+                Command::ChangeOptions(patch) => Self::apply_change_options(&patch, options, events),
             }
+        }
+    }
+
+    fn apply_change_options(
+        patch:   &OptionPatch,
+        options: &RwLock<Options>,
+        events:  &EventHandlers,
+    ) {
+        let mut opts = options.write().unwrap();
+        let before_cam        = opts.cam.clone();
+        let before_preview    = opts.preview.clone();
+        let before_focal_len  = opts.telescope.focal_len;
+        let before_barlow     = opts.telescope.barlow;
+        let before_guider_len = opts.guiding.foc_len;
+
+        let changed = patch.apply(&mut opts);
+        if let Err(e) = opts.validate() {
+            // Keep the applied mutation (as the old synchronous path did), send no events
+            log::error!("Option change failed validation: {e}");
+            return;
+        }
+        // Snapshot follow-ups while holding the lock, send events without it
+        let followups = option_change_events(
+            &before_cam, &opts.cam,
+            &before_preview, &opts.preview,
+            before_focal_len, opts.telescope.focal_len,
+            before_barlow, opts.telescope.barlow,
+            before_guider_len, opts.guiding.foc_len,
+        );
+        drop(opts);
+
+        if changed {
+            events.send(Event::NeedRefreshOptionsView);
+        }
+        for event in followups {
+            events.send(event);
         }
     }
 
@@ -960,14 +1021,83 @@ impl Engine {
     }
 }
 
+/// Follow-up events for option fields the rest of the app reacts to:
+/// the engine pushes them to hardware, UI panels refresh themselves.
+fn option_change_events(
+    before_cam:        &CamOptions,
+    after_cam:         &CamOptions,
+    before_preview:    &PreviewOptions,
+    after_preview:     &PreviewOptions,
+    before_focal_len:  f64,
+    after_focal_len:   f64,
+    before_barlow:     f64,
+    after_barlow:      f64,
+    before_guider_len: f64,
+    after_guider_len:  f64,
+) -> Vec<Event> {
+    let mut events = Vec::new();
+    if before_cam.live_view != after_cam.live_view {
+        events.push(Event::CameraLiveViewChanged);
+    }
+    let (b_ctrl, a_ctrl) = (&before_cam.ctrl, &after_cam.ctrl);
+    if b_ctrl.enable_cooler != a_ctrl.enable_cooler || b_ctrl.temperature != a_ctrl.temperature {
+        events.push(Event::CameraCoolingOptionsChanged);
+    }
+    if b_ctrl.heater_str != a_ctrl.heater_str {
+        events.push(Event::CameraHeaterOptionsChanged);
+    }
+    if b_ctrl.enable_fan != a_ctrl.enable_fan {
+        events.push(Event::CameraFanOptionsChanged);
+    }
+    let (b_fr, a_fr) = (&before_cam.frame, &after_cam.frame);
+    if b_fr.frame_type != a_fr.frame_type {
+        events.push(Event::CameraFrameTypeChanged);
+    }
+    // The patch's `exposure` field routes into exp_main/exp_bias/exp_flat
+    // (see `FrameOptions::set_exposure`), so compare the three stored values
+    if b_fr.exp_main != a_fr.exp_main || b_fr.exp_bias != a_fr.exp_bias || b_fr.exp_flat != a_fr.exp_flat {
+        events.push(Event::CameraExposureChanged);
+    }
+    if b_fr.gain != a_fr.gain || b_fr.offset != a_fr.offset
+        || b_fr.binning != a_fr.binning || b_fr.crop != a_fr.crop
+    {
+        events.push(Event::CameraFrameOptionsChanged);
+    }
+    if before_preview != after_preview {
+        events.push(Event::PreviewOptionsChanged);
+    }
+    if before_focal_len != after_focal_len {
+        events.push(Event::TelescopeFocalLenChanged(after_focal_len));
+    }
+    if before_barlow != after_barlow {
+        events.push(Event::TelescopeBarlowChanged);
+    }
+    if before_guider_len != after_guider_len {
+        events.push(Event::GuiderFocalLenChanged(after_guider_len));
+    }
+    events
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::commands::{Command, CommandReply};
+    use crate::core::commands::Command;
     use crate::options::{MountOptionPatch, OptionPatch};
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Waits until `cond` becomes true (commands are applied asynchronously)
+    fn wait_until(cond: impl Fn() -> bool) -> bool {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            if cond() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        false
+    }
 
     #[test]
     fn exec_command_changes_options() {
@@ -976,9 +1106,8 @@ mod tests {
             inv_ns: Some(true),
             ..Default::default()
         }));
-        let reply = engine.exec_command(cmd).unwrap();
-        assert!(matches!(reply, CommandReply::OptionsChanged { changed: true }));
-        assert!(engine.options.read().unwrap().mount.inv_ns);
+        engine.exec_command(cmd);
+        assert!(wait_until(|| engine.options.read().unwrap().mount.inv_ns));
     }
 
     #[test]
@@ -994,27 +1123,146 @@ mod tests {
 
         // No-op patch: no event.
         let cmd = Command::ChangeOptions(OptionPatch::Mount(MountOptionPatch::default()));
-        engine.exec_command(cmd).unwrap();
-        assert_eq!(counter.load(Ordering::SeqCst), 0);
+        engine.exec_command(cmd);
 
-        // Real change: exactly one event.
+        // Real change: exactly one event (the queue is FIFO, so by the time
+        // this event arrives the no-op patch has already been processed).
         let cmd = Command::ChangeOptions(OptionPatch::Mount(MountOptionPatch {
             inv_ns: Some(true),
             ..Default::default()
         }));
-        engine.exec_command(cmd).unwrap();
+        engine.exec_command(cmd);
+        assert!(wait_until(|| counter.load(Ordering::SeqCst) == 1));
+        std::thread::sleep(std::time::Duration::from_millis(50));
         assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
 
     #[test]
-    fn exec_command_rejected_when_options_busy() {
+    fn exec_command_waits_for_busy_options() {
         let engine = Engine::new();
-        let _guard = engine.options.read().unwrap();
         let cmd = Command::ChangeOptions(OptionPatch::Mount(MountOptionPatch {
             inv_ns: Some(true),
             ..Default::default()
         }));
-        assert!(engine.exec_command(cmd).is_err());
-        assert!(!engine.options.read().unwrap().mount.inv_ns);
+        let guard = engine.options.read().unwrap();
+        engine.exec_command(cmd);
+        // The worker must wait for the lock, not drop the command
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        drop(guard);
+        assert!(wait_until(|| engine.options.read().unwrap().mount.inv_ns));
+    }
+
+    fn change_events(before: &Options, after: &Options) -> Vec<Event> {
+        option_change_events(
+            &before.cam, &after.cam,
+            &before.preview, &after.preview,
+            before.telescope.focal_len, after.telescope.focal_len,
+            before.telescope.barlow, after.telescope.barlow,
+            before.guiding.foc_len, after.guiding.foc_len,
+        )
+    }
+
+    #[test]
+    fn option_change_events_mapping() {
+        let base = Options::default();
+        assert!(change_events(&base, &base).is_empty());
+
+        let mut a = Options::default();
+        a.cam.ctrl.temperature = -10.0;
+        assert!(matches!(change_events(&base, &a)[..], [Event::CameraCoolingOptionsChanged]));
+
+        let mut a = Options::default();
+        a.cam.ctrl.enable_cooler = true;
+        assert!(matches!(change_events(&base, &a)[..], [Event::CameraCoolingOptionsChanged]));
+
+        let mut a = Options::default();
+        a.cam.ctrl.heater_str = Some("H1".into());
+        assert!(matches!(change_events(&base, &a)[..], [Event::CameraHeaterOptionsChanged]));
+
+        let mut a = Options::default();
+        a.cam.ctrl.enable_fan = true;
+        assert!(matches!(change_events(&base, &a)[..], [Event::CameraFanOptionsChanged]));
+
+        let mut a = Options::default();
+        a.cam.frame.frame_type = FrameType::Biases;
+        assert!(matches!(change_events(&base, &a)[..], [Event::CameraFrameTypeChanged]));
+
+        let mut a = Options::default();
+        a.cam.frame.exp_main = 5.0;
+        assert!(matches!(change_events(&base, &a)[..], [Event::CameraExposureChanged]));
+
+        let mut a = Options::default();
+        a.cam.frame.gain = 2.0;
+        assert!(matches!(change_events(&base, &a)[..], [Event::CameraFrameOptionsChanged]));
+
+        let mut a = Options::default();
+        a.cam.frame.crop = Crop::P50;
+        assert!(matches!(change_events(&base, &a)[..], [Event::CameraFrameOptionsChanged]));
+
+        let mut a = Options::default();
+        a.cam.live_view = true;
+        assert!(matches!(change_events(&base, &a)[..], [Event::CameraLiveViewChanged]));
+
+        let mut a = Options::default();
+        a.preview.gamma = 2.5;
+        assert!(matches!(change_events(&base, &a)[..], [Event::PreviewOptionsChanged]));
+
+        let mut a = Options::default();
+        a.telescope.focal_len = 1234.5;
+        assert!(matches!(change_events(&base, &a)[..], [Event::TelescopeFocalLenChanged(v)] if v == 1234.5));
+
+        let mut a = Options::default();
+        a.telescope.barlow = 1.5;
+        assert!(matches!(change_events(&base, &a)[..], [Event::TelescopeBarlowChanged]));
+
+        let mut a = Options::default();
+        a.guiding.foc_len = 300.0;
+        assert!(matches!(change_events(&base, &a)[..], [Event::GuiderFocalLenChanged(v)] if v == 300.0));
+    }
+
+    #[test]
+    fn option_change_events_ignores_unmapped_fields() {
+        let base = Options::default();
+
+        // Camera fields with no follow-ups
+        let mut a = Options::default();
+        a.cam.ctrl.conv_gain_str = Some("g".into());
+        assert!(change_events(&base, &a).is_empty());
+
+        let mut a = Options::default();
+        a.cam.ctrl.low_noise = true;
+        assert!(change_events(&base, &a).is_empty());
+
+        let mut a = Options::default();
+        a.cam.frame.auto_exp = !base.cam.frame.auto_exp;
+        assert!(change_events(&base, &a).is_empty());
+
+        // Unrelated section
+        let mut a = Options::default();
+        a.mount.inv_ns = true;
+        assert!(change_events(&base, &a).is_empty());
+    }
+
+    #[test]
+    fn exec_command_sends_followup_event() {
+        let engine = Engine::new();
+        let collected = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Event>::new()));
+        let collected2 = std::sync::Arc::clone(&collected);
+        let _id = engine.events.connect(move |event| {
+            if matches!(event, Event::NeedRefreshOptionsView | Event::CameraCoolingOptionsChanged) {
+                collected2.lock().unwrap().push(event);
+            }
+        });
+
+        engine.exec_command(Command::ChangeOptions(OptionPatch::Cam(CamOptionPatch {
+            ctrl: Some(CamCtrlOptionPatch { temperature: Some(-5.0), ..Default::default() }),
+            ..Default::default()
+        })));
+
+        assert!(wait_until(|| {
+            let events = collected.lock().unwrap();
+            events.iter().any(|e| matches!(e, Event::NeedRefreshOptionsView))
+                && events.iter().any(|e| matches!(e, Event::CameraCoolingOptionsChanged))
+        }));
     }
 }

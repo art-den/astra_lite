@@ -162,9 +162,7 @@ impl DebugUi {
                     sim_alt_err: Some(spb.value()),
                     ..Default::default()
                 });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change polar_align options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
@@ -174,9 +172,7 @@ impl DebugUi {
                     sim_az_err: Some(spb.value()),
                     ..Default::default()
                 });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change polar_align options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
     }

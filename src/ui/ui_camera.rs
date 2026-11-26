@@ -2,7 +2,7 @@ use std::{rc::Rc, sync::Arc, cell::RefCell};
 use gtk::{cairo, glib::{self, clone}, prelude::*};
 use macros::FromBuilder;
 use crate::{
-    core::{commands::{Command, CommandReply}, cur_devices::CurDevices, engine::*, events::*, frame_processing::*, utils::{FileNameArg, FileNameUtils}}, hal::{DeviceType, FrameType, HalState, events::HalEvent}, image::{info::*, raw::CalibrMethods}, options::*,
+    core::{commands::Command, cur_devices::CurDevices, engine::*, events::*, frame_processing::*, utils::{FileNameArg, FileNameUtils}}, hal::{DeviceType, FrameType, HalState, events::HalEvent}, image::{info::*, raw::CalibrMethods}, options::*,
 };
 use super::{gtk_utils::*, module::*, ui_main::*, ui_start_dialog::StartDialog, utils::*};
 
@@ -436,34 +436,25 @@ impl UiModule for CameraUi {
 
                 self.correct_widgets_props();
             }
-            Event::CameraCoolingOptionsChanged => {
-                let options = self.engine.options.read().unwrap();
-                self.show_calibr_file_for_frame(&options);
-                drop(options);
-                self.correct_widgets_props();
-            }
-            Event::CameraFanOptionsChanged |
-            Event::CameraHeaterOptionsChanged => {
-                self.correct_widgets_props();
-            }
+            // Panel refreshes for camera option changes are done by the
+            // NeedRefreshOptionsView arm below; the remaining camera events
+            // are consumed by the engine (hardware control).
             Event::CameraFrameTypeChanged => {
+                // Hold the guard across the widget sync: a concurrent option
+                // change must not make this snapshot stale (see AGENTS.md)
                 let options = self.engine.options.read().unwrap();
-                self.show_calibr_file_for_frame(&options);
                 let exposure = options.cam.frame.exposure();
-                drop(options);
                 self.widgets.frame.spb_exp.set_value(exposure);
-                self.correct_widgets_props();
-                self.show_total_raw_time();
             }
-            Event::CameraExposureChanged => {
+            Event::CameraLiveViewChanged => {
+                self.handler_live_view_changed();
+            }
+            Event::NeedRefreshOptionsView => {
                 let options = self.engine.options.read().unwrap();
                 self.show_calibr_file_for_frame(&options);
+                self.show_total_raw_time_impl(&options);
                 drop(options);
-                self.show_total_raw_time();
-            }
-            Event::CameraFrameOptionsChanged => {
-                let options = self.engine.options.read().unwrap();
-                self.show_calibr_file_for_frame(&options);
+                self.correct_widgets_props();
             }
             _ => {},
         }
@@ -625,37 +616,21 @@ impl CameraUi {
         self.widgets.common.chb_live_view.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 let patch = OptionPatch::Cam(CamOptionPatch { live_view: Some(chb.is_active()), ..Default::default() });
-                if self_.engine.exec_command(Command::ChangeOptions(patch)).is_err() {
-                    log::error!("Failed to change cam options");
-                    return;
-                }
-                self_.handler_live_view_changed();
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.ctrl.chb_cooler.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 let patch = OptionPatch::Cam(CamOptionPatch { ctrl: Some(CamCtrlOptionPatch { enable_cooler: Some(chb.is_active()), ..Default::default() }), ..Default::default() });
-                match self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    Ok(CommandReply::OptionsChanged { changed: true }) => {
-                        self_.engine.events.send(Event::CameraCoolingOptionsChanged);
-                    }
-                    Ok(_) => {}
-                    Err(e) => log::error!("Failed to change cam options: {e}"),
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.ctrl.spb_temp.connect_value_changed(
             clone!(@weak self as self_ => move |spb| {
                 let patch = OptionPatch::Cam(CamOptionPatch { ctrl: Some(CamCtrlOptionPatch { temperature: Some(spb.value()), ..Default::default() }), ..Default::default() });
-                match self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    Ok(CommandReply::OptionsChanged { changed: true }) => {
-                        self_.engine.events.send(Event::CameraCoolingOptionsChanged);
-                    }
-                    Ok(_) => {}
-                    Err(e) => log::error!("Failed to change cam options: {e}"),
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
@@ -663,26 +638,14 @@ impl CameraUi {
             clone!(@weak self as self_ => move |cb| {
                 let heater_str = cb.active_id().map(|id| id.to_string());
                 let patch = OptionPatch::Cam(CamOptionPatch { ctrl: Some(CamCtrlOptionPatch { heater_str: Some(heater_str), ..Default::default() }), ..Default::default() });
-                match self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    Ok(CommandReply::OptionsChanged { changed: true }) => {
-                        self_.engine.events.send(Event::CameraHeaterOptionsChanged);
-                    }
-                    Ok(_) => {}
-                    Err(e) => log::error!("Failed to change cam options: {e}"),
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.ctrl.chb_fan.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 let patch = OptionPatch::Cam(CamOptionPatch { ctrl: Some(CamCtrlOptionPatch { enable_fan: Some(chb.is_active()), ..Default::default() }), ..Default::default() });
-                match self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    Ok(CommandReply::OptionsChanged { changed: true }) => {
-                        self_.engine.events.send(Event::CameraFanOptionsChanged);
-                    }
-                    Ok(_) => {}
-                    Err(e) => log::error!("Failed to change cam options: {e}"),
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
@@ -690,27 +653,21 @@ impl CameraUi {
             clone!(@weak self as self_ => move |cb| {
                 let conv_gain_str = cb.active_id().map(|id| id.to_string());
                 let patch = OptionPatch::Cam(CamOptionPatch { ctrl: Some(CamCtrlOptionPatch { conv_gain_str: Some(conv_gain_str), ..Default::default() }), ..Default::default() });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change cam options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.ctrl.chb_low_noise.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 let patch = OptionPatch::Cam(CamOptionPatch { ctrl: Some(CamCtrlOptionPatch { low_noise: Some(chb.is_active()), ..Default::default() }), ..Default::default() });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change cam options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.ctrl.chb_high_fw.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 let patch = OptionPatch::Cam(CamOptionPatch { ctrl: Some(CamCtrlOptionPatch { high_fullwell: Some(chb.is_active()), ..Default::default() }), ..Default::default() });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change cam options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
@@ -718,48 +675,28 @@ impl CameraUi {
             clone!(@weak self as self_ => move |cb| {
                 let frame_type = FrameType::from_active_id(cb.active_id().as_deref());
                 let patch = OptionPatch::Cam(CamOptionPatch { frame: Some(FrameOptionPatch { frame_type: Some(frame_type), ..Default::default() }), ..Default::default() });
-                match self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    Ok(CommandReply::OptionsChanged { changed: true }) => {
-                        self_.engine.events.send(Event::CameraFrameTypeChanged);
-                    }
-                    Ok(_) => {}
-                    Err(e) => log::error!("Failed to change cam options: {e}"),
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.frame.chb_auto_exp.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 let patch = OptionPatch::Cam(CamOptionPatch { frame: Some(FrameOptionPatch { auto_exp: Some(chb.is_active()), ..Default::default() }), ..Default::default() });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change cam options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.frame.spb_exp.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
                 let patch = OptionPatch::Cam(CamOptionPatch { frame: Some(FrameOptionPatch { exposure: Some(sb.value()), ..Default::default() }), ..Default::default() });
-                match self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    Ok(CommandReply::OptionsChanged { changed: true }) => {
-                        self_.engine.events.send(Event::CameraExposureChanged);
-                    }
-                    Ok(_) => {}
-                    Err(e) => log::error!("Failed to change cam options: {e}"),
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.frame.spb_gain.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
                 let patch = OptionPatch::Cam(CamOptionPatch { frame: Some(FrameOptionPatch { gain: Some(sb.value()), ..Default::default() }), ..Default::default() });
-                match self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    Ok(CommandReply::OptionsChanged { changed: true }) => {
-                        self_.engine.events.send(Event::CameraFrameOptionsChanged);
-                    }
-                    Ok(_) => {}
-                    Err(e) => log::error!("Failed to change cam options: {e}"),
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
@@ -767,13 +704,7 @@ impl CameraUi {
             clone!(@weak self as self_ => move |sb| {
                 let offset = sb.value() as i32;
                 let patch = OptionPatch::Cam(CamOptionPatch { frame: Some(FrameOptionPatch { offset: Some(offset), ..Default::default() }), ..Default::default() });
-                match self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    Ok(CommandReply::OptionsChanged { changed: true }) => {
-                        self_.engine.events.send(Event::CameraFrameOptionsChanged);
-                    }
-                    Ok(_) => {}
-                    Err(e) => log::error!("Failed to change cam options: {e}"),
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
@@ -781,13 +712,7 @@ impl CameraUi {
             clone!(@weak self as self_ => move |cb| {
                 let binning = Binning::from_active_id(cb.active_id().as_deref());
                 let patch = OptionPatch::Cam(CamOptionPatch { frame: Some(FrameOptionPatch { binning: Some(binning), ..Default::default() }), ..Default::default() });
-                match self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    Ok(CommandReply::OptionsChanged { changed: true }) => {
-                        self_.engine.events.send(Event::CameraFrameOptionsChanged);
-                    }
-                    Ok(_) => {}
-                    Err(e) => log::error!("Failed to change cam options: {e}"),
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
@@ -795,98 +720,68 @@ impl CameraUi {
             clone!(@weak self as self_ => move |cb| {
                 let crop = Crop::from_active_id(cb.active_id().as_deref());
                 let patch = OptionPatch::Cam(CamOptionPatch { frame: Some(FrameOptionPatch { crop: Some(crop), ..Default::default() }), ..Default::default() });
-                match self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    Ok(CommandReply::OptionsChanged { changed: true }) => {
-                        self_.engine.events.send(Event::CameraFrameOptionsChanged);
-                    }
-                    Ok(_) => {}
-                    Err(e) => log::error!("Failed to change cam options: {e}"),
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.raw.spb_frames_cnt.connect_value_changed(clone!(@weak self as self_ => move |sb| {
             let patch = OptionPatch::RawFrames(RawFrameOptionPatch { frame_cnt: Some(sb.value() as usize), ..Default::default() });
-            if self_.engine.exec_command(Command::ChangeOptions(patch)).is_err() {
-                log::error!("Failed to change raw_frames options");
-                return;
-            }
-            self_.show_total_raw_time();
+            self_.engine.exec_command(Command::ChangeOptions(patch));
         }));
 
         self.widgets.raw.chb_frames_cnt.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 let patch = OptionPatch::RawFrames(RawFrameOptionPatch { use_cnt: Some(chb.is_active()), ..Default::default() });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change raw_frames options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.raw.fcb_path.connect_file_set(
             clone!(@weak self as self_ => move |fch| {
                 let patch = OptionPatch::RawFrames(RawFrameOptionPatch { out_path: Some(fch.filename().unwrap_or_default()), ..Default::default() });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change raw_frames options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.raw.chb_save_master.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 let patch = OptionPatch::RawFrames(RawFrameOptionPatch { create_master: Some(chb.is_active()), ..Default::default() });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change raw_frames options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.quality.chb_max_fwhm.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 let patch = OptionPatch::Quality(QualityOptionPatch { use_max_fwhm: Some(chb.is_active()), ..Default::default() });
-                if self_.engine.exec_command(Command::ChangeOptions(patch)).is_err() {
-                    log::error!("Failed to change quality options");
-                    return;
-                }
-                self_.correct_widgets_props();
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.quality.spb_max_fwhm.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
                 let patch = OptionPatch::Quality(QualityOptionPatch { max_fwhm: Some(sb.value() as f32), ..Default::default() });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change quality options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.quality.chb_max_oval.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 let patch = OptionPatch::Quality(QualityOptionPatch { use_max_ovality: Some(chb.is_active()), ..Default::default() });
-                if self_.engine.exec_command(Command::ChangeOptions(patch)).is_err() {
-                    log::error!("Failed to change quality options");
-                    return;
-                }
-                self_.correct_widgets_props();
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.quality.spb_max_oval.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
                 let patch = OptionPatch::Quality(QualityOptionPatch { max_ovality: Some(sb.value() as f32), ..Default::default() });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change quality options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.quality.chb_ignore_3px_stars.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 let patch = OptionPatch::Quality(QualityOptionPatch { ignore_3px_stars: Some(chb.is_active()), ..Default::default() });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change quality options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
@@ -894,68 +789,42 @@ impl CameraUi {
             clone!(@weak self as self_ => move |cb| {
                 let sens = StarRecognSensitivity::from_active_id(cb.active_id().as_deref());
                 let patch = OptionPatch::Quality(QualityOptionPatch { star_recogn_sens: Some(sens), ..Default::default() });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change quality options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.quality.chb_max_temp_diff.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 let patch = OptionPatch::Quality(QualityOptionPatch { check_ccd_temp: Some(chb.is_active()), ..Default::default() });
-                if self_.engine.exec_command(Command::ChangeOptions(patch)).is_err() {
-                    log::error!("Failed to change quality options");
-                    return;
-                }
-                self_.correct_widgets_props();
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.quality.spb_max_temp_diff.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
                 let patch = OptionPatch::Quality(QualityOptionPatch { max_ccd_temp_diff: Some(sb.value()), ..Default::default() });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change quality options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.calibr.chb_dark.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 let patch = OptionPatch::Calibr(CalibrOptionPatch { dark_frame_en: Some(chb.is_active()), ..Default::default() });
-                match self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    Ok(CommandReply::OptionsChanged { changed: true }) => {}
-                    Ok(_) => return,
-                    Err(e) => { log::error!("Failed to change calibr options: {e}"); return; }
-                }
-                let Ok(options) = self_.engine.options.try_read() else { return; };
-                self_.show_calibr_file_for_frame(&options);
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.calibr.chb_flat.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 let patch = OptionPatch::Calibr(CalibrOptionPatch { flat_frame_en: Some(chb.is_active()), ..Default::default() });
-                match self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    Ok(CommandReply::OptionsChanged { changed: true }) => {}
-                    Ok(_) => return,
-                    Err(e) => { log::error!("Failed to change calibr options: {e}"); return; }
-                }
-                let Ok(options) = self_.engine.options.try_read() else { return; };
-                self_.show_calibr_file_for_frame(&options);
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.calibr.fch_flat.connect_file_set(
             clone!(@weak self as self_ => move |fch| {
                 let patch = OptionPatch::Calibr(CalibrOptionPatch { flat_frame_fname: Some(fch.filename().unwrap_or_default()), ..Default::default() });
-                match self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    Ok(CommandReply::OptionsChanged { changed: true }) => {}
-                    Ok(_) => return,
-                    Err(e) => { log::error!("Failed to change calibr options: {e}"); return; }
-                }
-                let Ok(options) = self_.engine.options.try_read() else { return; };
-                self_.show_calibr_file_for_frame(&options);
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
@@ -963,9 +832,7 @@ impl CameraUi {
             clone!(@weak self as self_ => move |chb| {
                 self_.widgets.calibr.l_hot_px_warn.set_visible(chb.is_active());
                 let patch = OptionPatch::Calibr(CalibrOptionPatch { hot_pixels: Some(chb.is_active()), ..Default::default() });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change calibr options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
@@ -973,61 +840,47 @@ impl CameraUi {
             clone!(@weak self as self_ => move |chb| {
                 self_.widgets.live_st.l_no_tracks.set_visible(chb.is_active());
                 let patch = OptionPatch::LiveStacking(LiveStackingOptionPatch { remove_tracks: Some(chb.is_active()), ..Default::default() });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change live stacking options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.live_st.spb_frames_cnt.connect_value_changed(clone!(@weak self as self_ => move |sb| {
             let patch = OptionPatch::LiveStacking(LiveStackingOptionPatch { frame_cnt: Some(sb.value() as usize), ..Default::default() });
-            if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                log::error!("Failed to change live stacking options: {e}");
-            }
+            self_.engine.exec_command(Command::ChangeOptions(patch));
         }));
 
         self.widgets.live_st.chb_frames_cnt.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 let patch = OptionPatch::LiveStacking(LiveStackingOptionPatch { use_cnt: Some(chb.is_active()), ..Default::default() });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change live stacking options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.live_st.chb_save_period.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 let patch = OptionPatch::LiveStacking(LiveStackingOptionPatch { save_enabled: Some(chb.is_active()), ..Default::default() });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change live stacking options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.live_st.spb_save_period.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
                 let patch = OptionPatch::LiveStacking(LiveStackingOptionPatch { save_minutes: Some(sb.value() as usize), ..Default::default() });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change live stacking options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.live_st.chb_save_orig.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 let patch = OptionPatch::LiveStacking(LiveStackingOptionPatch { save_orig: Some(chb.is_active()), ..Default::default() });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change live stacking options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.live_st.fch_path.connect_file_set(
             clone!(@weak self as self_ => move |fch| {
                 let patch = OptionPatch::LiveStacking(LiveStackingOptionPatch { out_dir: Some(fch.filename().unwrap_or_default()), ..Default::default() });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change live stacking options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
@@ -1731,11 +1584,6 @@ impl CameraUi {
             seconds_to_total_time_str(total_time, false)
         );
         self.widgets.raw.l_time_info.set_label(&text);
-    }
-
-    fn show_total_raw_time(&self) {
-        let options = self.engine.options.read().unwrap();
-        self.show_total_raw_time_impl(&options);
     }
 
     fn show_frame_processing_result(&self, result: &FrameProcessNotification) {

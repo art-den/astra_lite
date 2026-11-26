@@ -289,14 +289,18 @@ impl UiModule for HardwareUi {
 
     fn on_event(&self, event: &Event) {
         match event {
+            // Ignore the event if the option already moved on (a newer user
+            // change won); hold the guard across the widget sync (AGENTS.md)
             Event::TelescopeFocalLenChanged(focal_len) => {
-                let diff_with_cur = f64::abs(self.widgets.telescope.spb_foc_len.value() - focal_len);
-                if diff_with_cur < 0.1 { return; }
+                let options = self.engine.options.read().unwrap();
+                if f64::abs(options.telescope.focal_len - focal_len) >= 0.1 { return; }
+                if f64::abs(self.widgets.telescope.spb_foc_len.value() - focal_len) < 0.1 { return; }
                 self.widgets.telescope.spb_foc_len.set_value(*focal_len);
             }
             Event::GuiderFocalLenChanged(focal_len) => {
-                let diff_with_cur = f64::abs(self.widgets.telescope.spb_guid_foc_len.value() - focal_len);
-                if diff_with_cur < 0.1 { return; }
+                let options = self.engine.options.read().unwrap();
+                if f64::abs(options.guiding.foc_len - focal_len) >= 0.1 { return; }
+                if f64::abs(self.widgets.telescope.spb_guid_foc_len.value() - focal_len) < 0.1 { return; }
                 self.widgets.telescope.spb_guid_foc_len.set_value(*focal_len);
             }
             _ => {},
@@ -396,22 +400,14 @@ impl HardwareUi {
                 if f64::abs(options.telescope.focal_len - value) < 0.1 { return; }
                 drop(options);
                 let patch = OptionPatch::Telescope(TelescopeOptionPatch { focal_len: Some(value), ..Default::default() });
-                if self_.engine.exec_command(Command::ChangeOptions(patch)).is_err() {
-                    log::error!("Failed to change telescope options");
-                    return;
-                }
-                self_.engine.events.send(Event::TelescopeFocalLenChanged(value));
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.telescope.spb_barlow.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
                 let patch = OptionPatch::Telescope(TelescopeOptionPatch { barlow: Some(sb.value()), ..Default::default() });
-                if self_.engine.exec_command(Command::ChangeOptions(patch)).is_err() {
-                    log::error!("Failed to change telescope options");
-                    return;
-                }
-                self_.engine.events.send(Event::TelescopeBarlowChanged);
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
@@ -422,38 +418,28 @@ impl HardwareUi {
                 if f64::abs(options.guiding.foc_len - value) < 0.1 { return; }
                 drop(options);
                 let patch = OptionPatch::Guiding(GuidingOptionPatch { foc_len: Some(value), ..Default::default() });
-                if self_.engine.exec_command(Command::ChangeOptions(patch)).is_err() {
-                    log::error!("Failed to change guiding options");
-                    return;
-                }
-                self_.engine.events.send(Event::GuiderFocalLenChanged(value));
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.indi_drv.chb_remote.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 let patch = OptionPatch::Indi(IndiOptionPatch { remote: Some(chb.is_active()), ..Default::default() });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change indi options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.indi_drv.e_remote_addr.connect_changed(
             clone!(@weak self as self_ => move |e| {
                 let patch = OptionPatch::Indi(IndiOptionPatch { address: Some(e.text().into()), ..Default::default() });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change indi options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.aa_drv.e_addr.connect_changed(
             clone!(@weak self as self_ => move |e| {
                 let patch = OptionPatch::AscomAlpaca(AscomAlpacaOptionPatch { address: Some(e.text().into()) });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change ascom_alpaca options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
@@ -509,9 +495,7 @@ impl HardwareUi {
         self.widgets.telescope.chb_corr_foc_len.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 let patch = OptionPatch::Telescope(TelescopeOptionPatch { from_platesolve: Some(chb.is_active()), ..Default::default() });
-                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                    log::error!("Failed to change telescope options: {e}");
-                }
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
@@ -519,9 +503,7 @@ impl HardwareUi {
             clone!(@weak self as self_ => move |e| {
                 if let Some(latitude) = sexagesimal_to_value(&e.text()) {
                     let patch = OptionPatch::Site(SiteOptionPatch { latitude: Some(latitude), ..Default::default() });
-                    if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                        log::error!("Failed to change site options: {e}");
-                    }
+                    self_.engine.exec_command(Command::ChangeOptions(patch));
                 }
             })
         );
@@ -530,9 +512,7 @@ impl HardwareUi {
             clone!(@weak self as self_ => move |e| {
                 if let Some(longitude) = sexagesimal_to_value(&e.text()) {
                     let patch = OptionPatch::Site(SiteOptionPatch { longitude: Some(longitude), ..Default::default() });
-                    if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
-                        log::error!("Failed to change site options: {e}");
-                    }
+                    self_.engine.exec_command(Command::ChangeOptions(patch));
                 }
             })
         );

@@ -45,8 +45,9 @@ pub fn init_ui(
         is_color_image:     Cell::new(false),
         levels_locked:      Cell::new(false),
         gamma_mark:         Cell::new(false),
-        size_adj_pair:      Cell::new(None),
-        image_size:         Cell::new((0, 0)),
+        size_adj_pair:         Cell::new(None),
+        image_size:            Cell::new((0, 0)),
+        options_refresh_pending: Cell::new(false),
     });
 
     obj.init_widgets();
@@ -357,6 +358,8 @@ struct PreviewUi {
     gamma_mark:         Cell<bool>,
     size_adj_pair:      Cell<Option<(f64, f64)>>,
     image_size:         Cell<(usize, usize)>,
+    // Preview display refresh coalesced into the 250 ms timer (slider drags)
+    options_refresh_pending: Cell<bool>,
 }
 
 impl Drop for PreviewUi {
@@ -418,6 +421,14 @@ impl UiModule for PreviewUi {
         self.correct_widgets_props();
     }
 
+    fn on_250ms_timer(&self) {
+        if !self.options_refresh_pending.replace(false) { return; }
+        self.update_preview(None);
+        self.repaint_histogram();
+        self.show_histogram_stat();
+        self.show_image_info();
+    }
+
     fn on_full_screen(&self, full_screen: bool) {
         let options = self.engine.options.read().unwrap();
         let preview_scale = options.preview.scale;
@@ -458,6 +469,10 @@ impl UiModule for PreviewUi {
             }
             Event::OverlayMessage { pos, text } => {
                 self.show_overlay_message(pos, text);
+            }
+            Event::PreviewOptionsChanged => {
+                // Heavy redraw: coalesced into on_250ms_timer
+                self.options_refresh_pending.set(true);
             }
             _ => {},
         }
@@ -540,14 +555,7 @@ impl PreviewUi {
             clone!(@weak self as self_ => move |cb| {
                 let source = PreviewSource::from_active_id(cb.active_id().as_deref());
                 let patch = OptionPatch::Preview(PreviewOptionPatch { source: Some(source), ..Default::default() });
-                if self_.engine.exec_command(Command::ChangeOptions(patch)).is_err() {
-                    log::error!("Failed to change preview options");
-                    return;
-                }
-                self_.update_preview(None);
-                self_.repaint_histogram();
-                self_.show_histogram_stat();
-                self_.show_image_info();
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
@@ -564,11 +572,7 @@ impl PreviewUi {
             clone!(@weak self as self_ => move |cb| {
                 let scale = PreviewScale::from_active_id(cb.active_id().as_deref());
                 let patch = OptionPatch::Preview(PreviewOptionPatch { scale: Some(scale), ..Default::default() });
-                if self_.engine.exec_command(Command::ChangeOptions(patch)).is_err() {
-                    log::error!("Failed to change preview options");
-                    return;
-                }
-                self_.update_preview(None);
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
@@ -576,55 +580,35 @@ impl PreviewUi {
             clone!(@weak self as self_ => move |cb| {
                 let color = PreviewColorMode::from_active_id(cb.active_id().as_deref());
                 let patch = OptionPatch::Preview(PreviewOptionPatch { color: Some(color), ..Default::default() });
-                if self_.engine.exec_command(Command::ChangeOptions(patch)).is_err() {
-                    log::error!("Failed to change preview options");
-                    return;
-                }
-                self_.update_preview(None);
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.ctrl.scl_dark.connect_value_changed(
             clone!(@weak self as self_ => move |scl| {
                 let patch = OptionPatch::Preview(PreviewOptionPatch { dark_lvl: Some(scl.value()), ..Default::default() });
-                if self_.engine.exec_command(Command::ChangeOptions(patch)).is_err() {
-                    log::error!("Failed to change preview options");
-                    return;
-                }
-                self_.update_preview(None);
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.ctrl.scl_highlight.connect_value_changed(
             clone!(@weak self as self_ => move |scl| {
                 let patch = OptionPatch::Preview(PreviewOptionPatch { light_lvl: Some(scl.value()), ..Default::default() });
-                if self_.engine.exec_command(Command::ChangeOptions(patch)).is_err() {
-                    log::error!("Failed to change preview options");
-                    return;
-                }
-                self_.update_preview(None);
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.ctrl.scl_gamma.connect_value_changed(
             clone!(@weak self as self_ => move |scl| {
                 let patch = OptionPatch::Preview(PreviewOptionPatch { gamma: Some(scl.value()), ..Default::default() });
-                if self_.engine.exec_command(Command::ChangeOptions(patch)).is_err() {
-                    log::error!("Failed to change preview options");
-                    return;
-                }
-                self_.update_preview(None);
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.ctrl.chb_rem_grad.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 let patch = OptionPatch::Preview(PreviewOptionPatch { remove_grad: Some(chb.is_active()), ..Default::default() });
-                if self_.engine.exec_command(Command::ChangeOptions(patch)).is_err() {
-                    log::error!("Failed to change preview options");
-                    return;
-                }
-                self_.update_preview(None);
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
@@ -642,54 +626,34 @@ impl PreviewUi {
         self.widgets.ctrl.chb_wb_auto.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 let patch = OptionPatch::Preview(PreviewOptionPatch { wb_auto: Some(chb.is_active()), ..Default::default() });
-                if self_.engine.exec_command(Command::ChangeOptions(patch)).is_err() {
-                    log::error!("Failed to change preview options");
-                    return;
-                }
-                self_.update_preview(None);
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.ctrl.scl_wb_red.connect_value_changed(
             clone!(@weak self as self_ => move |scl| {
                 let patch = OptionPatch::Preview(PreviewOptionPatch { wb_red: Some(scl.value()), ..Default::default() });
-                if self_.engine.exec_command(Command::ChangeOptions(patch)).is_err() {
-                    log::error!("Failed to change preview options");
-                    return;
-                }
-                self_.update_preview(None);
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.ctrl.scl_wb_green.connect_value_changed(
             clone!(@weak self as self_ => move |scl| {
                 let patch = OptionPatch::Preview(PreviewOptionPatch { wb_green: Some(scl.value()), ..Default::default() });
-                if self_.engine.exec_command(Command::ChangeOptions(patch)).is_err() {
-                    log::error!("Failed to change preview options");
-                    return;
-                }
-                self_.update_preview(None);
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.ctrl.scl_wb_blue.connect_value_changed(
             clone!(@weak self as self_ => move |scl| {
                 let patch = OptionPatch::Preview(PreviewOptionPatch { wb_blue: Some(scl.value()), ..Default::default() });
-                if self_.engine.exec_command(Command::ChangeOptions(patch)).is_err() {
-                    log::error!("Failed to change preview options");
-                    return;
-                }
-                self_.update_preview(None);
+                self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.ctrl.chb_stars.connect_active_notify(clone!(@weak self as self_ => move |chb| {
             let patch = OptionPatch::Preview(PreviewOptionPatch { stars: Some(chb.is_active()), ..Default::default() });
-            if self_.engine.exec_command(Command::ChangeOptions(patch)).is_err() {
-                log::error!("Failed to change preview options");
-                return;
-            }
-            self_.update_preview(None);
+            self_.engine.exec_command(Command::ChangeOptions(patch));
         }));
     }
 

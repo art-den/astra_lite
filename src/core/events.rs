@@ -42,6 +42,8 @@ pub enum Event {
     CameraFrameTypeChanged,
     CameraExposureChanged,
     CameraFrameOptionsChanged,
+    CameraLiveViewChanged,
+    PreviewOptionsChanged,
     NeedRefreshOptionsView,
 }
 

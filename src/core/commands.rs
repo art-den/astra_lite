@@ -22,14 +22,10 @@ pub enum ModeCommandReply {
 use crate::options::OptionPatch;
 
 /// App-level command facade for UI clients (GTK now, web later).
+/// Commands are queued and executed asynchronously by the engine command
+/// thread; the caller gets no reply (the executor handles errors).
 /// Rule: plain data only (serializable).
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Command {
     ChangeOptions(OptionPatch),
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum CommandReply {
-    /// `changed` = false when the patch equalled current options (UI must suppress follow-ups).
-    OptionsChanged { changed: bool },
 }
