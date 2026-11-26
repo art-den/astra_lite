@@ -954,7 +954,10 @@ impl DarksLibraryUI {
 
         self.widgets.common.fch_dark_library.connect_file_set(
             clone!(@weak self as self_ => move |fch| {
-                let patch = OptionPatch::Calibr(CalibrOptionPatch { dark_library_path: Some(fch.filename().unwrap_or_default()), ..Default::default() });
+                let patch = OptionPatch::Calibr(CalibrOptionPatch {
+                    dark_library_path: Some(fch.filename().unwrap_or_default()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );

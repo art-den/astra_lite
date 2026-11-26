@@ -220,7 +220,10 @@ impl GuidingUi {
                         } else {
                             GuidingMode::Disabled
                         };
-                    let patch = OptionPatch::Guiding(GuidingOptionPatch { mode: Some(mode), ..Default::default() });
+                    let patch = OptionPatch::Guiding(GuidingOptionPatch {
+                        mode: Some(mode),
+                        ..Default::default()
+                    });
                     self_.engine.exec_command(Command::ChangeOptions(patch));
                 }
             }));
@@ -232,33 +235,51 @@ impl GuidingUi {
 
         self.widgets.cb_dith_period.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
             let dith_period = cb.active_id().and_then(|v| v.parse().ok()).unwrap_or(0);
-            let patch = OptionPatch::Guiding(GuidingOptionPatch { dith_period: Some(dith_period), ..Default::default() });
+            let patch = OptionPatch::Guiding(GuidingOptionPatch {
+                dith_period: Some(dith_period),
+                ..Default::default()
+            });
             self_.engine.exec_command(Command::ChangeOptions(patch));
         }));
 
         self.widgets.spb_dith_dist.connect_value_changed(clone!(@weak self as self_ => move |sb| {
-            let patch = OptionPatch::Guiding(GuidingOptionPatch { main_cam: Some(MainCamGuidingOptionPatch { dith_dist: Some(sb.value() as i32), ..Default::default() }), ..Default::default() });
+            let patch = OptionPatch::Guiding(GuidingOptionPatch {
+                main_cam: Some(MainCamGuidingOptionPatch { dith_dist: Some(sb.value() as i32), ..Default::default() }),
+                ..Default::default()
+            });
             self_.engine.exec_command(Command::ChangeOptions(patch));
         }));
 
         self.widgets.spb_guid_max_err.connect_value_changed(clone!(@weak self as self_ => move |sb| {
-            let patch = OptionPatch::Guiding(GuidingOptionPatch { main_cam: Some(MainCamGuidingOptionPatch { max_error: Some(sb.value()), ..Default::default() }), ..Default::default() });
+            let patch = OptionPatch::Guiding(GuidingOptionPatch {
+                main_cam: Some(MainCamGuidingOptionPatch { max_error: Some(sb.value()), ..Default::default() }),
+                ..Default::default()
+            });
             self_.engine.exec_command(Command::ChangeOptions(patch));
         }));
 
         self.widgets.spb_ext_dith_dist.connect_value_changed(clone!(@weak self as self_ => move |sb| {
-            let patch = OptionPatch::Guiding(GuidingOptionPatch { ext_guider: Some(ExtGuiderOptionPatch { dith_dist: Some(sb.value() as i32) }), ..Default::default() });
+            let patch = OptionPatch::Guiding(GuidingOptionPatch {
+                ext_guider: Some(ExtGuiderOptionPatch { dith_dist: Some(sb.value() as i32) }),
+                ..Default::default()
+            });
             self_.engine.exec_command(Command::ChangeOptions(patch));
         }));
 
         self.widgets.spb_mnt_cal_exp.connect_value_changed(clone!(@weak self as self_ => move |sb| {
-            let patch = OptionPatch::Guiding(GuidingOptionPatch { main_cam: Some(MainCamGuidingOptionPatch { calibr_exposure: Some(sb.value()), ..Default::default() }), ..Default::default() });
+            let patch = OptionPatch::Guiding(GuidingOptionPatch {
+                main_cam: Some(MainCamGuidingOptionPatch { calibr_exposure: Some(sb.value()), ..Default::default() }),
+                ..Default::default()
+            });
             self_.engine.exec_command(Command::ChangeOptions(patch));
         }));
 
         self.widgets.cbx_mnt_cal_gain.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
             let gain = Gain::from_active_id(cb.active_id().as_deref());
-            let patch = OptionPatch::Guiding(GuidingOptionPatch { main_cam: Some(MainCamGuidingOptionPatch { calibr_gain: Some(gain), ..Default::default() }), ..Default::default() });
+            let patch = OptionPatch::Guiding(GuidingOptionPatch {
+                main_cam: Some(MainCamGuidingOptionPatch { calibr_gain: Some(gain), ..Default::default() }),
+                ..Default::default()
+            });
             self_.engine.exec_command(Command::ChangeOptions(patch));
         }));
     }

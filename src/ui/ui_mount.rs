@@ -322,14 +322,20 @@ impl MountUi {
 
         self.widgets.chb_inv_ns.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let patch = OptionPatch::Mount(MountOptionPatch { inv_ns: Some(chb.is_active()), ..Default::default() });
+                let patch = OptionPatch::Mount(MountOptionPatch {
+                    inv_ns: Some(chb.is_active()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.chb_inv_we.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let patch = OptionPatch::Mount(MountOptionPatch { inv_we: Some(chb.is_active()), ..Default::default() });
+                let patch = OptionPatch::Mount(MountOptionPatch {
+                    inv_we: Some(chb.is_active()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
@@ -337,7 +343,10 @@ impl MountUi {
         self.widgets.cb_speed.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
                 let speed = cb.active_id().map(|s| s.to_string());
-                let patch = OptionPatch::Mount(MountOptionPatch { speed: Some(speed), ..Default::default() });
+                let patch = OptionPatch::Mount(MountOptionPatch {
+                    speed: Some(speed),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );

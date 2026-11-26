@@ -171,7 +171,10 @@ impl PlateSolveUi {
 
         self.widgets.spb_exp.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
-                let patch = OptionPatch::PlateSolver(PlateSolverOptionPatch { exposure: Some(sb.value()), ..Default::default() });
+                let patch = OptionPatch::PlateSolver(PlateSolverOptionPatch {
+                    exposure: Some(sb.value()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
@@ -179,7 +182,10 @@ impl PlateSolveUi {
         self.widgets.cbx_gain.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
                 let gain = Gain::from_active_id(cb.active_id().as_deref());
-                let patch = OptionPatch::PlateSolver(PlateSolverOptionPatch { gain: Some(gain), ..Default::default() });
+                let patch = OptionPatch::PlateSolver(PlateSolverOptionPatch {
+                    gain: Some(gain),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
@@ -187,7 +193,10 @@ impl PlateSolveUi {
         self.widgets.cbx_bin.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
                 let bin = Binning::from_active_id(cb.active_id().as_deref());
-                let patch = OptionPatch::PlateSolver(PlateSolverOptionPatch { bin: Some(bin), ..Default::default() });
+                let patch = OptionPatch::PlateSolver(PlateSolverOptionPatch {
+                    bin: Some(bin),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
@@ -195,21 +204,30 @@ impl PlateSolveUi {
         self.widgets.cbx_solver.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
                 let solver = PlateSolverType::from_active_id(cb.active_id().as_deref());
-                let patch = OptionPatch::PlateSolver(PlateSolverOptionPatch { solver: Some(solver), ..Default::default() });
+                let patch = OptionPatch::PlateSolver(PlateSolverOptionPatch {
+                    solver: Some(solver),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.spb_timeout.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
-                let patch = OptionPatch::PlateSolver(PlateSolverOptionPatch { timeout: Some(sb.value() as _), ..Default::default() });
+                let patch = OptionPatch::PlateSolver(PlateSolverOptionPatch {
+                    timeout: Some(sb.value() as _),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.spb_blind_timeout.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
-                let patch = OptionPatch::PlateSolver(PlateSolverOptionPatch { blind_timeout: Some(sb.value() as _), ..Default::default() });
+                let patch = OptionPatch::PlateSolver(PlateSolverOptionPatch {
+                    blind_timeout: Some(sb.value() as _),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );

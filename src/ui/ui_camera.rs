@@ -768,62 +768,89 @@ impl CameraUi {
         );
 
         self.widgets.raw.spb_frames_cnt.connect_value_changed(clone!(@weak self as self_ => move |sb| {
-            let patch = OptionPatch::RawFrames(RawFrameOptionPatch { frame_cnt: Some(sb.value() as usize), ..Default::default() });
+            let patch = OptionPatch::RawFrames(RawFrameOptionPatch {
+                frame_cnt: Some(sb.value() as usize),
+                ..Default::default()
+            });
             self_.engine.exec_command(Command::ChangeOptions(patch));
         }));
 
         self.widgets.raw.chb_frames_cnt.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let patch = OptionPatch::RawFrames(RawFrameOptionPatch { use_cnt: Some(chb.is_active()), ..Default::default() });
+                let patch = OptionPatch::RawFrames(RawFrameOptionPatch {
+                    use_cnt: Some(chb.is_active()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.raw.fcb_path.connect_file_set(
             clone!(@weak self as self_ => move |fch| {
-                let patch = OptionPatch::RawFrames(RawFrameOptionPatch { out_path: Some(fch.filename().unwrap_or_default()), ..Default::default() });
+                let patch = OptionPatch::RawFrames(RawFrameOptionPatch {
+                    out_path: Some(fch.filename().unwrap_or_default()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.raw.chb_save_master.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let patch = OptionPatch::RawFrames(RawFrameOptionPatch { create_master: Some(chb.is_active()), ..Default::default() });
+                let patch = OptionPatch::RawFrames(RawFrameOptionPatch {
+                    create_master: Some(chb.is_active()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.quality.chb_max_fwhm.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let patch = OptionPatch::Quality(QualityOptionPatch { use_max_fwhm: Some(chb.is_active()), ..Default::default() });
+                let patch = OptionPatch::Quality(QualityOptionPatch {
+                    use_max_fwhm: Some(chb.is_active()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.quality.spb_max_fwhm.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
-                let patch = OptionPatch::Quality(QualityOptionPatch { max_fwhm: Some(sb.value() as f32), ..Default::default() });
+                let patch = OptionPatch::Quality(QualityOptionPatch {
+                    max_fwhm: Some(sb.value() as f32),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.quality.chb_max_oval.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let patch = OptionPatch::Quality(QualityOptionPatch { use_max_ovality: Some(chb.is_active()), ..Default::default() });
+                let patch = OptionPatch::Quality(QualityOptionPatch {
+                    use_max_ovality: Some(chb.is_active()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.quality.spb_max_oval.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
-                let patch = OptionPatch::Quality(QualityOptionPatch { max_ovality: Some(sb.value() as f32), ..Default::default() });
+                let patch = OptionPatch::Quality(QualityOptionPatch {
+                    max_ovality: Some(sb.value() as f32),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.quality.chb_ignore_3px_stars.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let patch = OptionPatch::Quality(QualityOptionPatch { ignore_3px_stars: Some(chb.is_active()), ..Default::default() });
+                let patch = OptionPatch::Quality(QualityOptionPatch {
+                    ignore_3px_stars: Some(chb.is_active()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
@@ -831,42 +858,60 @@ impl CameraUi {
         self.widgets.quality.cbx_stars_sens.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
                 let sens = StarRecognSensitivity::from_active_id(cb.active_id().as_deref());
-                let patch = OptionPatch::Quality(QualityOptionPatch { star_recogn_sens: Some(sens), ..Default::default() });
+                let patch = OptionPatch::Quality(QualityOptionPatch {
+                    star_recogn_sens: Some(sens),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.quality.chb_max_temp_diff.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let patch = OptionPatch::Quality(QualityOptionPatch { check_ccd_temp: Some(chb.is_active()), ..Default::default() });
+                let patch = OptionPatch::Quality(QualityOptionPatch {
+                    check_ccd_temp: Some(chb.is_active()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.quality.spb_max_temp_diff.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
-                let patch = OptionPatch::Quality(QualityOptionPatch { max_ccd_temp_diff: Some(sb.value()), ..Default::default() });
+                let patch = OptionPatch::Quality(QualityOptionPatch {
+                    max_ccd_temp_diff: Some(sb.value()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.calibr.chb_dark.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let patch = OptionPatch::Calibr(CalibrOptionPatch { dark_frame_en: Some(chb.is_active()), ..Default::default() });
+                let patch = OptionPatch::Calibr(CalibrOptionPatch {
+                    dark_frame_en: Some(chb.is_active()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.calibr.chb_flat.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let patch = OptionPatch::Calibr(CalibrOptionPatch { flat_frame_en: Some(chb.is_active()), ..Default::default() });
+                let patch = OptionPatch::Calibr(CalibrOptionPatch {
+                    flat_frame_en: Some(chb.is_active()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.calibr.fch_flat.connect_file_set(
             clone!(@weak self as self_ => move |fch| {
-                let patch = OptionPatch::Calibr(CalibrOptionPatch { flat_frame_fname: Some(fch.filename().unwrap_or_default()), ..Default::default() });
+                let patch = OptionPatch::Calibr(CalibrOptionPatch {
+                    flat_frame_fname: Some(fch.filename().unwrap_or_default()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
@@ -874,7 +919,10 @@ impl CameraUi {
         self.widgets.calibr.chb_hot_pixels.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 self_.widgets.calibr.l_hot_px_warn.set_visible(chb.is_active());
-                let patch = OptionPatch::Calibr(CalibrOptionPatch { hot_pixels: Some(chb.is_active()), ..Default::default() });
+                let patch = OptionPatch::Calibr(CalibrOptionPatch {
+                    hot_pixels: Some(chb.is_active()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
@@ -882,47 +930,68 @@ impl CameraUi {
         self.widgets.live_st.chb_no_tracks.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 self_.widgets.live_st.l_no_tracks.set_visible(chb.is_active());
-                let patch = OptionPatch::LiveStacking(LiveStackingOptionPatch { remove_tracks: Some(chb.is_active()), ..Default::default() });
+                let patch = OptionPatch::LiveStacking(LiveStackingOptionPatch {
+                    remove_tracks: Some(chb.is_active()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.live_st.spb_frames_cnt.connect_value_changed(clone!(@weak self as self_ => move |sb| {
-            let patch = OptionPatch::LiveStacking(LiveStackingOptionPatch { frame_cnt: Some(sb.value() as usize), ..Default::default() });
+            let patch = OptionPatch::LiveStacking(LiveStackingOptionPatch {
+                frame_cnt: Some(sb.value() as usize),
+                ..Default::default()
+            });
             self_.engine.exec_command(Command::ChangeOptions(patch));
         }));
 
         self.widgets.live_st.chb_frames_cnt.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let patch = OptionPatch::LiveStacking(LiveStackingOptionPatch { use_cnt: Some(chb.is_active()), ..Default::default() });
+                let patch = OptionPatch::LiveStacking(LiveStackingOptionPatch {
+                    use_cnt: Some(chb.is_active()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.live_st.chb_save_period.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let patch = OptionPatch::LiveStacking(LiveStackingOptionPatch { save_enabled: Some(chb.is_active()), ..Default::default() });
+                let patch = OptionPatch::LiveStacking(LiveStackingOptionPatch {
+                    save_enabled: Some(chb.is_active()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.live_st.spb_save_period.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
-                let patch = OptionPatch::LiveStacking(LiveStackingOptionPatch { save_minutes: Some(sb.value() as usize), ..Default::default() });
+                let patch = OptionPatch::LiveStacking(LiveStackingOptionPatch {
+                    save_minutes: Some(sb.value() as usize),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.live_st.chb_save_orig.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let patch = OptionPatch::LiveStacking(LiveStackingOptionPatch { save_orig: Some(chb.is_active()), ..Default::default() });
+                let patch = OptionPatch::LiveStacking(LiveStackingOptionPatch {
+                    save_orig: Some(chb.is_active()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.live_st.fch_path.connect_file_set(
             clone!(@weak self as self_ => move |fch| {
-                let patch = OptionPatch::LiveStacking(LiveStackingOptionPatch { out_dir: Some(fch.filename().unwrap_or_default()), ..Default::default() });
+                let patch = OptionPatch::LiveStacking(LiveStackingOptionPatch {
+                    out_dir: Some(fch.filename().unwrap_or_default()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );

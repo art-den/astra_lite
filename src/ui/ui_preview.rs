@@ -555,7 +555,10 @@ impl PreviewUi {
         self.widgets.ctrl.cb_src.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
                 let source = PreviewSource::from_active_id(cb.active_id().as_deref());
-                let patch = OptionPatch::Preview(PreviewOptionPatch { source: Some(source), ..Default::default() });
+                let patch = OptionPatch::Preview(PreviewOptionPatch {
+                    source: Some(source),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
@@ -572,7 +575,10 @@ impl PreviewUi {
         self.widgets.ctrl.cb_scale.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
                 let scale = PreviewScale::from_active_id(cb.active_id().as_deref());
-                let patch = OptionPatch::Preview(PreviewOptionPatch { scale: Some(scale), ..Default::default() });
+                let patch = OptionPatch::Preview(PreviewOptionPatch {
+                    scale: Some(scale),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
@@ -580,35 +586,50 @@ impl PreviewUi {
         self.widgets.ctrl.cb_color.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
                 let color = PreviewColorMode::from_active_id(cb.active_id().as_deref());
-                let patch = OptionPatch::Preview(PreviewOptionPatch { color: Some(color), ..Default::default() });
+                let patch = OptionPatch::Preview(PreviewOptionPatch {
+                    color: Some(color),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.ctrl.scl_dark.connect_value_changed(
             clone!(@weak self as self_ => move |scl| {
-                let patch = OptionPatch::Preview(PreviewOptionPatch { dark_lvl: Some(scl.value()), ..Default::default() });
+                let patch = OptionPatch::Preview(PreviewOptionPatch {
+                    dark_lvl: Some(scl.value()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.ctrl.scl_highlight.connect_value_changed(
             clone!(@weak self as self_ => move |scl| {
-                let patch = OptionPatch::Preview(PreviewOptionPatch { light_lvl: Some(scl.value()), ..Default::default() });
+                let patch = OptionPatch::Preview(PreviewOptionPatch {
+                    light_lvl: Some(scl.value()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.ctrl.scl_gamma.connect_value_changed(
             clone!(@weak self as self_ => move |scl| {
-                let patch = OptionPatch::Preview(PreviewOptionPatch { gamma: Some(scl.value()), ..Default::default() });
+                let patch = OptionPatch::Preview(PreviewOptionPatch {
+                    gamma: Some(scl.value()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.ctrl.chb_rem_grad.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let patch = OptionPatch::Preview(PreviewOptionPatch { remove_grad: Some(chb.is_active()), ..Default::default() });
+                let patch = OptionPatch::Preview(PreviewOptionPatch {
+                    remove_grad: Some(chb.is_active()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
@@ -626,34 +647,49 @@ impl PreviewUi {
 
         self.widgets.ctrl.chb_wb_auto.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let patch = OptionPatch::Preview(PreviewOptionPatch { wb_auto: Some(chb.is_active()), ..Default::default() });
+                let patch = OptionPatch::Preview(PreviewOptionPatch {
+                    wb_auto: Some(chb.is_active()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.ctrl.scl_wb_red.connect_value_changed(
             clone!(@weak self as self_ => move |scl| {
-                let patch = OptionPatch::Preview(PreviewOptionPatch { wb_red: Some(scl.value()), ..Default::default() });
+                let patch = OptionPatch::Preview(PreviewOptionPatch {
+                    wb_red: Some(scl.value()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.ctrl.scl_wb_green.connect_value_changed(
             clone!(@weak self as self_ => move |scl| {
-                let patch = OptionPatch::Preview(PreviewOptionPatch { wb_green: Some(scl.value()), ..Default::default() });
+                let patch = OptionPatch::Preview(PreviewOptionPatch {
+                    wb_green: Some(scl.value()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.ctrl.scl_wb_blue.connect_value_changed(
             clone!(@weak self as self_ => move |scl| {
-                let patch = OptionPatch::Preview(PreviewOptionPatch { wb_blue: Some(scl.value()), ..Default::default() });
+                let patch = OptionPatch::Preview(PreviewOptionPatch {
+                    wb_blue: Some(scl.value()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.ctrl.chb_stars.connect_active_notify(clone!(@weak self as self_ => move |chb| {
-            let patch = OptionPatch::Preview(PreviewOptionPatch { stars: Some(chb.is_active()), ..Default::default() });
+            let patch = OptionPatch::Preview(PreviewOptionPatch {
+                stars: Some(chb.is_active()),
+                ..Default::default()
+            });
             self_.engine.exec_command(Command::ChangeOptions(patch));
         }));
     }

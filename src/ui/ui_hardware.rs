@@ -399,14 +399,20 @@ impl HardwareUi {
                 let Ok(options) = self_.engine.options.try_read() else { return; };
                 if f64::abs(options.telescope.focal_len - value) < 0.1 { return; }
                 drop(options);
-                let patch = OptionPatch::Telescope(TelescopeOptionPatch { focal_len: Some(value), ..Default::default() });
+                let patch = OptionPatch::Telescope(TelescopeOptionPatch {
+                    focal_len: Some(value),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.telescope.spb_barlow.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
-                let patch = OptionPatch::Telescope(TelescopeOptionPatch { barlow: Some(sb.value()), ..Default::default() });
+                let patch = OptionPatch::Telescope(TelescopeOptionPatch {
+                    barlow: Some(sb.value()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
@@ -417,28 +423,39 @@ impl HardwareUi {
                 let Ok(options) = self_.engine.options.try_read() else { return; };
                 if f64::abs(options.guiding.foc_len - value) < 0.1 { return; }
                 drop(options);
-                let patch = OptionPatch::Guiding(GuidingOptionPatch { foc_len: Some(value), ..Default::default() });
+                let patch = OptionPatch::Guiding(GuidingOptionPatch {
+                    foc_len: Some(value),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.indi_drv.chb_remote.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let patch = OptionPatch::Indi(IndiOptionPatch { remote: Some(chb.is_active()), ..Default::default() });
+                let patch = OptionPatch::Indi(IndiOptionPatch {
+                    remote: Some(chb.is_active()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.indi_drv.e_remote_addr.connect_changed(
             clone!(@weak self as self_ => move |e| {
-                let patch = OptionPatch::Indi(IndiOptionPatch { address: Some(e.text().into()), ..Default::default() });
+                let patch = OptionPatch::Indi(IndiOptionPatch {
+                    address: Some(e.text().into()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.aa_drv.e_addr.connect_changed(
             clone!(@weak self as self_ => move |e| {
-                let patch = OptionPatch::AscomAlpaca(AscomAlpacaOptionPatch { address: Some(e.text().into()) });
+                let patch = OptionPatch::AscomAlpaca(AscomAlpacaOptionPatch {
+                    address: Some(e.text().into()),
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
@@ -494,7 +511,10 @@ impl HardwareUi {
 
         self.widgets.telescope.chb_corr_foc_len.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let patch = OptionPatch::Telescope(TelescopeOptionPatch { from_platesolve: Some(chb.is_active()), ..Default::default() });
+                let patch = OptionPatch::Telescope(TelescopeOptionPatch {
+                    from_platesolve: Some(chb.is_active()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
@@ -502,7 +522,10 @@ impl HardwareUi {
         self.widgets.site.e_lat.connect_changed(
             clone!(@weak self as self_ => move |e| {
                 if let Some(latitude) = sexagesimal_to_value(&e.text()) {
-                    let patch = OptionPatch::Site(SiteOptionPatch { latitude: Some(latitude), ..Default::default() });
+                    let patch = OptionPatch::Site(SiteOptionPatch {
+                        latitude: Some(latitude),
+                        ..Default::default()
+                    });
                     self_.engine.exec_command(Command::ChangeOptions(patch));
                 }
             })
@@ -511,7 +534,10 @@ impl HardwareUi {
         self.widgets.site.e_long.connect_changed(
             clone!(@weak self as self_ => move |e| {
                 if let Some(longitude) = sexagesimal_to_value(&e.text()) {
-                    let patch = OptionPatch::Site(SiteOptionPatch { longitude: Some(longitude), ..Default::default() });
+                    let patch = OptionPatch::Site(SiteOptionPatch {
+                        longitude: Some(longitude),
+                        ..Default::default()
+                    });
                     self_.engine.exec_command(Command::ChangeOptions(patch));
                 }
             })

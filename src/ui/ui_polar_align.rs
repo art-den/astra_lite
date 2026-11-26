@@ -186,7 +186,10 @@ impl PolarAlignUi {
 
         self.widgets.spb_angle.connect_value_changed(
             clone!(@weak self as self_ => move |spb| {
-                let patch = OptionPatch::PolarAlign(PolarAlignOptionPatch { angle: Some(spb.value()), ..Default::default() });
+                let patch = OptionPatch::PolarAlign(PolarAlignOptionPatch {
+                    angle: Some(spb.value()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
@@ -195,7 +198,10 @@ impl PolarAlignUi {
             clone!(@weak self as self_ => move |cbx| {
                 let direction = PolarAlignDir::from_active_id(cbx.active_id().as_deref())
                     .unwrap_or(PolarAlignDir::West);
-                let patch = OptionPatch::PolarAlign(PolarAlignOptionPatch { direction: Some(direction), ..Default::default() });
+                let patch = OptionPatch::PolarAlign(PolarAlignOptionPatch {
+                    direction: Some(direction),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
@@ -204,14 +210,20 @@ impl PolarAlignUi {
             clone!(@weak self as self_ => move |cbx| {
                 if self_.filling_speed_list.get() { return; }
                 let speed = cbx.active_id().map(|s| s.to_string());
-                let patch = OptionPatch::PolarAlign(PolarAlignOptionPatch { speed: Some(speed), ..Default::default() });
+                let patch = OptionPatch::PolarAlign(PolarAlignOptionPatch {
+                    speed: Some(speed),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.chb_auto_refresh.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let patch = OptionPatch::PolarAlign(PolarAlignOptionPatch { auto_refresh: Some(chb.is_active()), ..Default::default() });
+                let patch = OptionPatch::PolarAlign(PolarAlignOptionPatch {
+                    auto_refresh: Some(chb.is_active()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
