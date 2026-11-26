@@ -719,26 +719,15 @@ impl Engine {
         events:  &EventHandlers,
     ) {
         let mut opts = options.write().unwrap();
-        let before_cam        = opts.cam.clone();
-        let before_preview    = opts.preview.clone();
-        let before_focal_len  = opts.telescope.focal_len;
-        let before_barlow     = opts.telescope.barlow;
-        let before_guider_len = opts.guiding.foc_len;
 
-        let changed = patch.apply(&mut opts);
+        // The patch collects follow-up events at the fields' assignment sites
+        let mut followups = Vec::new();
+        let changed = patch.apply(&mut opts, &mut followups);
         if let Err(e) = opts.validate() {
             // Keep the applied mutation (as the old synchronous path did), send no events
             log::error!("Option change failed validation: {e}");
             return;
         }
-        // Snapshot follow-ups while holding the lock, send events without it
-        let followups = option_change_events(
-            &before_cam, &opts.cam,
-            &before_preview, &opts.preview,
-            before_focal_len, opts.telescope.focal_len,
-            before_barlow, opts.telescope.barlow,
-            before_guider_len, opts.guiding.foc_len,
-        );
         drop(opts);
 
         if changed {
@@ -1086,63 +1075,6 @@ impl Engine {
     }
 }
 
-/// Follow-up events for option fields the rest of the app reacts to:
-/// the engine pushes them to hardware, UI panels refresh themselves.
-fn option_change_events(
-    before_cam:        &CamOptions,
-    after_cam:         &CamOptions,
-    before_preview:    &PreviewOptions,
-    after_preview:     &PreviewOptions,
-    before_focal_len:  f64,
-    after_focal_len:   f64,
-    before_barlow:     f64,
-    after_barlow:      f64,
-    before_guider_len: f64,
-    after_guider_len:  f64,
-) -> Vec<Event> {
-    let mut events = Vec::new();
-    if before_cam.live_view != after_cam.live_view {
-        events.push(Event::CameraLiveViewChanged);
-    }
-    let (b_ctrl, a_ctrl) = (&before_cam.ctrl, &after_cam.ctrl);
-    if b_ctrl.enable_cooler != a_ctrl.enable_cooler || b_ctrl.temperature != a_ctrl.temperature {
-        events.push(Event::CameraCoolingOptionsChanged);
-    }
-    if b_ctrl.heater_str != a_ctrl.heater_str {
-        events.push(Event::CameraHeaterOptionsChanged);
-    }
-    if b_ctrl.enable_fan != a_ctrl.enable_fan {
-        events.push(Event::CameraFanOptionsChanged);
-    }
-    let (b_fr, a_fr) = (&before_cam.frame, &after_cam.frame);
-    if b_fr.frame_type != a_fr.frame_type {
-        events.push(Event::CameraFrameTypeChanged);
-    }
-    // The patch's `exposure` field routes into exp_main/exp_bias/exp_flat
-    // (see `FrameOptions::set_exposure`), so compare the three stored values
-    if b_fr.exp_main != a_fr.exp_main || b_fr.exp_bias != a_fr.exp_bias || b_fr.exp_flat != a_fr.exp_flat {
-        events.push(Event::CameraExposureChanged);
-    }
-    if b_fr.gain != a_fr.gain || b_fr.offset != a_fr.offset
-        || b_fr.binning != a_fr.binning || b_fr.crop != a_fr.crop
-    {
-        events.push(Event::CameraFrameOptionsChanged);
-    }
-    if before_preview != after_preview {
-        events.push(Event::PreviewOptionsChanged);
-    }
-    if before_focal_len != after_focal_len {
-        events.push(Event::TelescopeFocalLenChanged(after_focal_len));
-    }
-    if before_barlow != after_barlow {
-        events.push(Event::TelescopeBarlowChanged);
-    }
-    if before_guider_len != after_guider_len {
-        events.push(Event::GuiderFocalLenChanged(after_guider_len));
-    }
-    events
-}
-
 ///////////////////////////////////////////////////////////////////////////////
 
 #[cfg(test)]
@@ -1261,97 +1193,6 @@ mod tests {
 
         engine.exec_command(Command::ContinueAbortedMode);
         assert!(wait_until(|| err_cnt.load(Ordering::SeqCst) == 1));
-    }
-
-    fn change_events(before: &Options, after: &Options) -> Vec<Event> {
-        option_change_events(
-            &before.cam, &after.cam,
-            &before.preview, &after.preview,
-            before.telescope.focal_len, after.telescope.focal_len,
-            before.telescope.barlow, after.telescope.barlow,
-            before.guiding.foc_len, after.guiding.foc_len,
-        )
-    }
-
-    #[test]
-    fn option_change_events_mapping() {
-        let base = Options::default();
-        assert!(change_events(&base, &base).is_empty());
-
-        let mut a = Options::default();
-        a.cam.ctrl.temperature = -10.0;
-        assert!(matches!(change_events(&base, &a)[..], [Event::CameraCoolingOptionsChanged]));
-
-        let mut a = Options::default();
-        a.cam.ctrl.enable_cooler = true;
-        assert!(matches!(change_events(&base, &a)[..], [Event::CameraCoolingOptionsChanged]));
-
-        let mut a = Options::default();
-        a.cam.ctrl.heater_str = Some("H1".into());
-        assert!(matches!(change_events(&base, &a)[..], [Event::CameraHeaterOptionsChanged]));
-
-        let mut a = Options::default();
-        a.cam.ctrl.enable_fan = true;
-        assert!(matches!(change_events(&base, &a)[..], [Event::CameraFanOptionsChanged]));
-
-        let mut a = Options::default();
-        a.cam.frame.frame_type = FrameType::Biases;
-        assert!(matches!(change_events(&base, &a)[..], [Event::CameraFrameTypeChanged]));
-
-        let mut a = Options::default();
-        a.cam.frame.exp_main = 5.0;
-        assert!(matches!(change_events(&base, &a)[..], [Event::CameraExposureChanged]));
-
-        let mut a = Options::default();
-        a.cam.frame.gain = 2.0;
-        assert!(matches!(change_events(&base, &a)[..], [Event::CameraFrameOptionsChanged]));
-
-        let mut a = Options::default();
-        a.cam.frame.crop = Crop::P50;
-        assert!(matches!(change_events(&base, &a)[..], [Event::CameraFrameOptionsChanged]));
-
-        let mut a = Options::default();
-        a.cam.live_view = true;
-        assert!(matches!(change_events(&base, &a)[..], [Event::CameraLiveViewChanged]));
-
-        let mut a = Options::default();
-        a.preview.gamma = 2.5;
-        assert!(matches!(change_events(&base, &a)[..], [Event::PreviewOptionsChanged]));
-
-        let mut a = Options::default();
-        a.telescope.focal_len = 1234.5;
-        assert!(matches!(change_events(&base, &a)[..], [Event::TelescopeFocalLenChanged(v)] if v == 1234.5));
-
-        let mut a = Options::default();
-        a.telescope.barlow = 1.5;
-        assert!(matches!(change_events(&base, &a)[..], [Event::TelescopeBarlowChanged]));
-
-        let mut a = Options::default();
-        a.guiding.foc_len = 300.0;
-        assert!(matches!(change_events(&base, &a)[..], [Event::GuiderFocalLenChanged(v)] if v == 300.0));
-    }
-
-    #[test]
-    fn option_change_events_ignores_unmapped_fields() {
-        let base = Options::default();
-
-        // Camera fields with no follow-ups
-        let mut a = Options::default();
-        a.cam.ctrl.conv_gain_str = Some("g".into());
-        assert!(change_events(&base, &a).is_empty());
-
-        let mut a = Options::default();
-        a.cam.ctrl.low_noise = true;
-        assert!(change_events(&base, &a).is_empty());
-
-        let mut a = Options::default();
-        a.cam.frame.auto_exp = !base.cam.frame.auto_exp;
-        assert!(change_events(&base, &a).is_empty());
-
-        // Unrelated section
-        let mut a = Options::default();
-        a.mount.inv_ns = true;
-        assert!(change_events(&base, &a).is_empty());
     }
 
     #[test]

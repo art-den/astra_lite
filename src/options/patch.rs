@@ -9,6 +9,7 @@ use super::{
     Binning, Crop, Gain, GuidingMode, PreviewColorMode, PreviewScale, PreviewSource,
     StarRecognSensitivity,
 };
+use crate::core::events::Event;
 use crate::hal::FrameType;
 use crate::options::{
     AscomAlpacaOptions, CalibrOptions, CamCtrlOptions, CamOptions, ExtGuiderOptions,
@@ -34,6 +35,26 @@ macro_rules! opt_field {
             if $target.$field != *v {
                 $target.$field = v.clone();
                 $changed = true;
+            }
+        }
+    };
+    // Also marks a group flag; the caller pushes the group's event once
+    ($self:expr, $target:expr, $changed:expr, $group:expr, $field:ident) => {
+        if let Some(v) = &$self.$field {
+            if $target.$field != *v {
+                $target.$field = v.clone();
+                $changed = true;
+                $group = true;
+            }
+        }
+    };
+    // Pushes a follow-up event right at the assignment site
+    ($self:expr, $target:expr, $changed:expr, $events:expr, $field:ident, $event:expr) => {
+        if let Some(v) = &$self.$field {
+            if $target.$field != *v {
+                $target.$field = v.clone();
+                $changed = true;
+                $events.push($event);
             }
         }
     };
@@ -87,12 +108,16 @@ pub struct CamCtrlOptionPatch {
 }
 
 impl CamCtrlOptionPatch {
-    pub fn apply(&self, target: &mut CamCtrlOptions) -> bool {
+    pub fn apply(&self, target: &mut CamCtrlOptions, events: &mut Vec<Event>) -> bool {
         let mut changed = false;
-        opt_field!(self, target, changed, enable_cooler);
-        opt_field!(self, target, changed, enable_fan);
-        opt_field!(self, target, changed, heater_str);
-        opt_field!(self, target, changed, temperature);
+        let mut cooling_changed = false;
+        opt_field!(self, target, changed, cooling_changed, enable_cooler);
+        opt_field!(self, target, changed, cooling_changed, temperature);
+        if cooling_changed {
+            events.push(Event::CameraCoolingOptionsChanged);
+        }
+        opt_field!(self, target, changed, events, heater_str, Event::CameraHeaterOptionsChanged);
+        opt_field!(self, target, changed, events, enable_fan, Event::CameraFanOptionsChanged);
         opt_field!(self, target, changed, low_noise);
         opt_field!(self, target, changed, high_fullwell);
         opt_field!(self, target, changed, conv_gain_str);
@@ -120,23 +145,34 @@ pub struct FrameOptionPatch {
 }
 
 impl FrameOptionPatch {
-    pub fn apply(&self, target: &mut FrameOptions) -> bool {
+    pub fn apply(&self, target: &mut FrameOptions, events: &mut Vec<Event>) -> bool {
         let mut changed = false;
+        // The patch's `exposure` field routes into exp_main/exp_bias/exp_flat
+        // (see `FrameOptions::set_exposure`), so all four feed one event
+        let mut exposure_changed = false;
+        let mut frame_options_changed = false;
         opt_field!(self, target, changed, auto_exp);
-        opt_field!(self, target, changed, exp_main);
-        opt_field!(self, target, changed, exp_bias);
-        opt_field!(self, target, changed, exp_flat);
-        opt_field!(self, target, changed, gain);
-        opt_field!(self, target, changed, offset);
+        opt_field!(self, target, changed, exposure_changed, exp_main);
+        opt_field!(self, target, changed, exposure_changed, exp_bias);
+        opt_field!(self, target, changed, exposure_changed, exp_flat);
+        opt_field!(self, target, changed, frame_options_changed, gain);
+        opt_field!(self, target, changed, frame_options_changed, offset);
         if let Some(v) = self.exposure
         && target.exposure() != v {
             target.set_exposure(v);
             changed = true;
+            exposure_changed = true;
         }
 
-        opt_field!(self, target, changed, frame_type);
-        opt_field!(self, target, changed, binning);
-        opt_field!(self, target, changed, crop);
+        opt_field!(self, target, changed, events, frame_type, Event::CameraFrameTypeChanged);
+        opt_field!(self, target, changed, frame_options_changed, binning);
+        opt_field!(self, target, changed, frame_options_changed, crop);
+        if exposure_changed {
+            events.push(Event::CameraExposureChanged);
+        }
+        if frame_options_changed {
+            events.push(Event::CameraFrameOptionsChanged);
+        }
         changed
     }
 }
@@ -151,14 +187,14 @@ pub struct CamOptionPatch {
 }
 
 impl CamOptionPatch {
-    pub fn apply(&self, target: &mut CamOptions) -> bool {
+    pub fn apply(&self, target: &mut CamOptions, events: &mut Vec<Event>) -> bool {
         let mut changed = false;
-        opt_field!(self, target, changed, live_view);
+        opt_field!(self, target, changed, events, live_view, Event::CameraLiveViewChanged);
         if let Some(ctrl) = &self.ctrl {
-            changed |= ctrl.apply(&mut target.ctrl);
+            changed |= ctrl.apply(&mut target.ctrl, events);
         }
         if let Some(frame) = &self.frame {
-            changed |= frame.apply(&mut target.frame);
+            changed |= frame.apply(&mut target.frame, events);
         }
         changed
     }
@@ -283,7 +319,7 @@ pub struct PreviewOptionPatch {
 }
 
 impl PreviewOptionPatch {
-    pub fn apply(&self, target: &mut PreviewOptions) -> bool {
+    pub fn apply(&self, target: &mut PreviewOptions, events: &mut Vec<Event>) -> bool {
         let mut changed = false;
         opt_field!(self, target, changed, scale);
         opt_field!(self, target, changed, dark_lvl);
@@ -297,6 +333,9 @@ impl PreviewOptionPatch {
         opt_field!(self, target, changed, wb_blue);
         opt_field!(self, target, changed, stars);
         opt_field!(self, target, changed, color);
+        if changed {
+            events.push(Event::PreviewOptionsChanged);
+        }
         changed
     }
 }
@@ -391,10 +430,16 @@ pub struct TelescopeOptionPatch {
 }
 
 impl TelescopeOptionPatch {
-    pub fn apply(&self, target: &mut TelescopeOptions) -> bool {
+    pub fn apply(&self, target: &mut TelescopeOptions, events: &mut Vec<Event>) -> bool {
         let mut changed = false;
-        opt_field!(self, target, changed, focal_len);
-        opt_field!(self, target, changed, barlow);
+        // Event carries the new value, so assign explicitly (macro hygiene hides `v`)
+        if let Some(v) = self.focal_len
+        && target.focal_len != v {
+            target.focal_len = v;
+            changed = true;
+            events.push(Event::TelescopeFocalLenChanged(v));
+        }
+        opt_field!(self, target, changed, events, barlow, Event::TelescopeBarlowChanged);
         opt_field!(self, target, changed, from_platesolve);
         changed
     }
@@ -465,10 +510,16 @@ pub struct GuidingOptionPatch {
 }
 
 impl GuidingOptionPatch {
-    pub fn apply(&self, target: &mut GuidingOptions) -> bool {
+    pub fn apply(&self, target: &mut GuidingOptions, events: &mut Vec<Event>) -> bool {
         let mut changed = false;
         opt_field!(self, target, changed, mode);
-        opt_field!(self, target, changed, foc_len);
+        // Event carries the new value, so assign explicitly (macro hygiene hides `v`)
+        if let Some(v) = self.foc_len
+        && target.foc_len != v {
+            target.foc_len = v;
+            changed = true;
+            events.push(Event::GuiderFocalLenChanged(v));
+        }
         opt_field!(self, target, changed, dith_period);
         if let Some(main_cam) = &self.main_cam {
             changed |= main_cam.apply(&mut target.main_cam);
@@ -530,22 +581,23 @@ pub enum OptionPatch {
 }
 
 impl OptionPatch {
-    pub fn apply(&self, options: &mut crate::options::Options) -> bool {
+    /// Applies the patch and collects follow-up events at the fields' assignment sites
+    pub fn apply(&self, options: &mut crate::options::Options, events: &mut Vec<Event>) -> bool {
         match self {
             Self::AscomAlpaca(p) => p.apply(&mut options.ascom_alpaca),
             Self::Indi(p)        => p.apply(&mut options.indi),
-            Self::Cam(p)         => p.apply(&mut options.cam),
+            Self::Cam(p)         => p.apply(&mut options.cam, events),
             Self::Calibr(p)      => p.apply(&mut options.calibr),
             Self::RawFrames(p)   => p.apply(&mut options.raw_frames),
             Self::LiveStacking(p) => p.apply(&mut options.live),
             Self::Quality(p)     => p.apply(&mut options.quality),
-            Self::Preview(p)     => p.apply(&mut options.preview),
+            Self::Preview(p)     => p.apply(&mut options.preview, events),
             Self::Focuser(p)     => p.apply(&mut options.focuser),
             Self::PlateSolver(p) => p.apply(&mut options.plate_solver),
             Self::Mount(p)       => p.apply(&mut options.mount),
-            Self::Telescope(p)   => p.apply(&mut options.telescope),
+            Self::Telescope(p)   => p.apply(&mut options.telescope, events),
             Self::Site(p)        => p.apply(&mut options.site),
-            Self::Guiding(p)     => p.apply(&mut options.guiding),
+            Self::Guiding(p)     => p.apply(&mut options.guiding, events),
             Self::PolarAlign(p)  => p.apply(&mut options.polar_align),
         }
     }
@@ -556,11 +608,17 @@ mod tests {
     use super::*;
     use crate::options::Options;
 
+    fn apply_collect(patch: &OptionPatch, options: &mut Options) -> Vec<Event> {
+        let mut events = Vec::new();
+        patch.apply(options, &mut events);
+        events
+    }
+
     #[test]
     fn apply_single_field() {
         let mut options = Options::default();
         let patch = OptionPatch::Mount(MountOptionPatch { inv_ns: Some(true), ..Default::default() });
-        assert!(patch.apply(&mut options));
+        assert!(patch.apply(&mut options, &mut Vec::new()));
         assert!(options.mount.inv_ns);
         assert!(!options.mount.inv_we);
     }
@@ -570,7 +628,7 @@ mod tests {
         let mut options = Options::default();
         let orig = options.mount.clone();
         let patch = OptionPatch::Mount(MountOptionPatch { inv_we: Some(true), ..Default::default() });
-        patch.apply(&mut options);
+        patch.apply(&mut options, &mut Vec::new());
         assert_eq!(options.mount.inv_ns, orig.inv_ns);
         assert!(options.mount.inv_we);
     }
@@ -592,7 +650,7 @@ mod tests {
         assert_eq!(p.speed, Some(None));
         let mut options = Options::default();
         options.polar_align.speed = Some("1x".to_string());
-        assert!(patch.apply(&mut options));
+        assert!(patch.apply(&mut options, &mut Vec::new()));
         assert_eq!(options.polar_align.speed, None);
     }
 
@@ -608,7 +666,7 @@ mod tests {
     fn apply_false_on_equal_values() {
         let mut options = Options::default();
         let patch = OptionPatch::Mount(MountOptionPatch { inv_ns: Some(options.mount.inv_ns), ..Default::default() });
-        assert!(!patch.apply(&mut options));
+        assert!(!patch.apply(&mut options, &mut Vec::new()));
     }
 
     #[test]
@@ -618,7 +676,7 @@ mod tests {
             frame: Some(FrameOptionPatch { gain: Some(2.5), ..Default::default() }),
             ..Default::default()
         });
-        assert!(patch.apply(&mut options));
+        assert!(patch.apply(&mut options, &mut Vec::new()));
         assert_eq!(options.cam.frame.gain, 2.5);
     }
 
@@ -630,10 +688,10 @@ mod tests {
             frame: Some(FrameOptionPatch { exposure: Some(0.7), ..Default::default() }),
             ..Default::default()
         });
-        assert!(patch.apply(&mut options));
+        assert!(patch.apply(&mut options, &mut Vec::new()));
         assert_eq!(options.cam.frame.exp_flat, 0.7);
         assert_eq!(options.cam.frame.exp_main, FrameOptions::default().exp_main);
-        assert!(!patch.apply(&mut options));
+        assert!(!patch.apply(&mut options, &mut Vec::new()));
     }
 
     #[test]
@@ -648,7 +706,117 @@ mod tests {
         let mut options = Options::default();
         options.mount.speed = Some("1x".to_string());
         let patch = OptionPatch::Mount(MountOptionPatch { speed: Some(None), ..Default::default() });
-        assert!(patch.apply(&mut options));
+        assert!(patch.apply(&mut options, &mut Vec::new()));
         assert_eq!(options.mount.speed, None);
+    }
+
+    #[test]
+    fn followup_events_mapping() {
+        let mut options = Options::default();
+
+        let patch = OptionPatch::Cam(CamOptionPatch {
+            ctrl: Some(CamCtrlOptionPatch { temperature: Some(-10.0), ..Default::default() }),
+            ..Default::default()
+        });
+        assert!(matches!(apply_collect(&patch, &mut options)[..], [Event::CameraCoolingOptionsChanged]));
+
+        let patch = OptionPatch::Cam(CamOptionPatch {
+            ctrl: Some(CamCtrlOptionPatch { enable_cooler: Some(true), ..Default::default() }),
+            ..Default::default()
+        });
+        assert!(matches!(apply_collect(&patch, &mut options)[..], [Event::CameraCoolingOptionsChanged]));
+
+        // Both cooling fields in one patch -> one event
+        let patch = OptionPatch::Cam(CamOptionPatch {
+            ctrl: Some(CamCtrlOptionPatch {
+                enable_cooler: Some(false),
+                temperature:   Some(-20.0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        assert!(matches!(apply_collect(&patch, &mut options)[..], [Event::CameraCoolingOptionsChanged]));
+
+        let patch = OptionPatch::Cam(CamOptionPatch {
+            ctrl: Some(CamCtrlOptionPatch { heater_str: Some(Some("H1".into())), ..Default::default() }),
+            ..Default::default()
+        });
+        assert!(matches!(apply_collect(&patch, &mut options)[..], [Event::CameraHeaterOptionsChanged]));
+
+        let patch = OptionPatch::Cam(CamOptionPatch {
+            ctrl: Some(CamCtrlOptionPatch { enable_fan: Some(true), ..Default::default() }),
+            ..Default::default()
+        });
+        assert!(matches!(apply_collect(&patch, &mut options)[..], [Event::CameraFanOptionsChanged]));
+
+        let patch = OptionPatch::Cam(CamOptionPatch {
+            frame: Some(FrameOptionPatch { frame_type: Some(FrameType::Biases), ..Default::default() }),
+            ..Default::default()
+        });
+        assert!(matches!(apply_collect(&patch, &mut options)[..], [Event::CameraFrameTypeChanged]));
+
+        let patch = OptionPatch::Cam(CamOptionPatch {
+            frame: Some(FrameOptionPatch { exp_main: Some(5.0), ..Default::default() }),
+            ..Default::default()
+        });
+        assert!(matches!(apply_collect(&patch, &mut options)[..], [Event::CameraExposureChanged]));
+
+        // The routed `exposure` field fires the same event
+        let patch = OptionPatch::Cam(CamOptionPatch {
+            frame: Some(FrameOptionPatch { exposure: Some(7.5), ..Default::default() }),
+            ..Default::default()
+        });
+        assert!(matches!(apply_collect(&patch, &mut options)[..], [Event::CameraExposureChanged]));
+
+        // Several frame option fields in one patch -> one event
+        let patch = OptionPatch::Cam(CamOptionPatch {
+            frame: Some(FrameOptionPatch {
+                gain: Some(2.0),
+                crop: Some(Crop::P50),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        assert!(matches!(apply_collect(&patch, &mut options)[..], [Event::CameraFrameOptionsChanged]));
+
+        let patch = OptionPatch::Cam(CamOptionPatch { live_view: Some(true), ..Default::default() });
+        assert!(matches!(apply_collect(&patch, &mut options)[..], [Event::CameraLiveViewChanged]));
+
+        let patch = OptionPatch::Preview(PreviewOptionPatch { gamma: Some(2.5), ..Default::default() });
+        assert!(matches!(apply_collect(&patch, &mut options)[..], [Event::PreviewOptionsChanged]));
+
+        let patch = OptionPatch::Telescope(TelescopeOptionPatch { focal_len: Some(1234.5), ..Default::default() });
+        assert!(matches!(apply_collect(&patch, &mut options)[..], [Event::TelescopeFocalLenChanged(v)] if v == 1234.5));
+
+        let patch = OptionPatch::Telescope(TelescopeOptionPatch { barlow: Some(1.5), ..Default::default() });
+        assert!(matches!(apply_collect(&patch, &mut options)[..], [Event::TelescopeBarlowChanged]));
+
+        let patch = OptionPatch::Guiding(GuidingOptionPatch { foc_len: Some(300.0), ..Default::default() });
+        assert!(matches!(apply_collect(&patch, &mut options)[..], [Event::GuiderFocalLenChanged(v)] if v == 300.0));
+    }
+
+    #[test]
+    fn no_followup_events_for_unmapped_or_equal_values() {
+        let mut options = Options::default();
+
+        // Camera fields with no follow-ups
+        let patch = OptionPatch::Cam(CamOptionPatch {
+            ctrl: Some(CamCtrlOptionPatch {
+                conv_gain_str: Some(Some("g".into())),
+                low_noise:     Some(true),
+                ..Default::default()
+            }),
+            frame: Some(FrameOptionPatch { auto_exp: Some(!options.cam.frame.auto_exp), ..Default::default() }),
+            ..Default::default()
+        });
+        assert!(apply_collect(&patch, &mut options).is_empty());
+
+        // Unrelated section
+        let patch = OptionPatch::Mount(MountOptionPatch { inv_ns: Some(true), ..Default::default() });
+        assert!(apply_collect(&patch, &mut options).is_empty());
+
+        // Equal value: no event
+        let patch = OptionPatch::Cam(CamOptionPatch { live_view: Some(false), ..Default::default() });
+        assert!(apply_collect(&patch, &mut options).is_empty());
     }
 }
