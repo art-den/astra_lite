@@ -1,15 +1,15 @@
-use std::{rc::Rc, sync::{Arc, RwLock}};
+use std::{rc::Rc, sync::Arc};
 use gtk::{prelude::*, pango, glib::{self, clone}};
 
-use crate::{options::*};
+use crate::{core::commands::Command, core::engine::Engine, options::*};
 
 use super::module::*;
 
 
-pub fn init_ui(options: &Arc<RwLock<Options>>) -> Rc<dyn UiModule> {
+pub fn init_ui(engine: &Arc<Engine>) -> Rc<dyn UiModule> {
     let obj = Rc::new(DebugUi {
         widgets: Widgets::new(),
-        options: Arc::clone(options),
+        engine: Arc::clone(engine),
     });
     obj.connect_widgets_events();
     obj
@@ -122,7 +122,7 @@ impl Widgets {
 
 struct DebugUi {
     widgets: Widgets,
-    options: Arc<RwLock<Options>>,
+    engine:  Arc<Engine>,
 }
 
 impl Drop for DebugUi {
@@ -158,15 +158,25 @@ impl DebugUi {
     fn connect_widgets_events(self: &Rc<Self>) {
         self.widgets.spb_sim_alt_err.connect_value_changed(
             clone!(@weak self as self_ => move |spb| {
-                let Ok(mut options) = self_.options.try_write() else { return; };
-                options.polar_align.sim_alt_err = spb.value();
+                let patch = OptionPatch::PolarAlign(PolarAlignOptionPatch {
+                    sim_alt_err: Some(spb.value()),
+                    ..Default::default()
+                });
+                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
+                    log::error!("Failed to change polar_align options: {e}");
+                }
             })
         );
 
         self.widgets.spb_sim_az_err.connect_value_changed(
             clone!(@weak self as self_ => move |spb| {
-                let Ok(mut options) = self_.options.try_write() else { return; };
-                options.polar_align.sim_az_err = spb.value();
+                let patch = OptionPatch::PolarAlign(PolarAlignOptionPatch {
+                    sim_az_err: Some(spb.value()),
+                    ..Default::default()
+                });
+                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
+                    log::error!("Failed to change polar_align options: {e}");
+                }
             })
         );
     }

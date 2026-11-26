@@ -2,7 +2,7 @@ use std::{cell::Cell, rc::Rc, sync::Arc};
 use gtk::{glib::{self, clone}, pango, prelude::*};
 use macros::FromBuilder;
 use crate::{
-    core::{commands::ModeCommand, engine::{Engine, ModeKind}, events::*, mode_polar_align::{PolarAlignCommand, PolarAlignMode, PolarAlignmentEvent}},
+    core::{commands::{Command, ModeCommand}, engine::{Engine, ModeKind}, events::*, mode_polar_align::{PolarAlignCommand, PolarAlignMode, PolarAlignmentEvent}},
     hal::{DeviceType, events::HalEvent},
     options::*,
     sky_math::math::*,
@@ -183,31 +183,41 @@ impl PolarAlignUi {
 
         self.widgets.spb_angle.connect_value_changed(
             clone!(@weak self as self_ => move |spb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.polar_align.angle = spb.value();
+                let patch = OptionPatch::PolarAlign(PolarAlignOptionPatch { angle: Some(spb.value()), ..Default::default() });
+                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
+                    log::error!("Failed to change polar_align options: {e}");
+                }
             })
         );
 
         self.widgets.cbx_dir.connect_active_id_notify(
             clone!(@weak self as self_ => move |cbx| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.polar_align.direction = PolarAlignDir::from_active_id(cbx.active_id().as_deref())
+                let direction = PolarAlignDir::from_active_id(cbx.active_id().as_deref())
                     .unwrap_or(PolarAlignDir::West);
+                let patch = OptionPatch::PolarAlign(PolarAlignOptionPatch { direction: Some(direction), ..Default::default() });
+                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
+                    log::error!("Failed to change polar_align options: {e}");
+                }
             })
         );
 
         self.widgets.cbx_speed.connect_active_id_notify(
             clone!(@weak self as self_ => move |cbx| {
                 if self_.filling_speed_list.get() { return; }
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.polar_align.speed = cbx.active_id().map(|s| s.to_string());
+                let speed = cbx.active_id().map(|s| s.to_string());
+                let patch = OptionPatch::PolarAlign(PolarAlignOptionPatch { speed: Some(speed), ..Default::default() });
+                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
+                    log::error!("Failed to change polar_align options: {e}");
+                }
             })
         );
 
         self.widgets.chb_auto_refresh.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                if let Ok(mut options) = self_.engine.options.try_write() {
-                    options.polar_align.auto_refresh = chb.is_active();
+                let patch = OptionPatch::PolarAlign(PolarAlignOptionPatch { auto_refresh: Some(chb.is_active()), ..Default::default() });
+                if self_.engine.exec_command(Command::ChangeOptions(patch)).is_err() {
+                    log::error!("Failed to change polar_align options");
+                    return;
                 }
                 self_.correct_widgets_props();
             })

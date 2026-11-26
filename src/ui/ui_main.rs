@@ -78,7 +78,7 @@ pub fn init_ui(
     let plate_solve   = super::ui_plate_solve  ::init_ui(&main_ui.widgets.window, &main_ui, engine);
     let polar_align   = super::ui_polar_align  ::init_ui(&main_ui.widgets.window, &main_ui, engine);
     let map           = super::ui_skymap       ::init_ui(&main_ui.widgets.window, &main_ui, engine);
-    let debug         = super::ui_debug        ::init_ui(&engine.options);
+    let debug         = super::ui_debug        ::init_ui(engine);
 
     let mut modules = main_ui.modules.borrow_mut();
     modules.add(hardware);
@@ -583,9 +583,8 @@ impl MainUi {
                 self.widgets.da_progress.queue_draw();
                 self.show_mode_caption();
             },
-            Event::NeedRefreshOptionsView => {
-                self.show_all_options();
-            }
+            // Signal for future remote clients; GTK panels refresh themselves.
+            Event::NeedRefreshOptionsView => {}
             _ => {},
         }
     }

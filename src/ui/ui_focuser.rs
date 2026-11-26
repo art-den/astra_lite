@@ -3,7 +3,7 @@ use gtk::{glib, gdk, prelude::*, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
-    core::{engine::Engine, events::*, mode_focusing::*},
+    core::{commands::Command, engine::Engine, events::*, mode_focusing::*},
     hal::{DeviceType, FocuserState, HalState, events::HalEvent},
     options::*,
     ui::plots::*,
@@ -335,13 +335,18 @@ impl FocuserUi {
         }));
 
         self.widgets.spb_exp.connect_value_changed(clone!(@weak self as self_ => move |sb| {
-            let Ok(mut options) = self_.engine.options.try_write() else { return; };
-            options.focuser.exposure = sb.value();
+            let patch = OptionPatch::Focuser(FocuserOptionPatch { exposure: Some(sb.value()), ..Default::default() });
+            if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
+                log::error!("Failed to change focuser options: {e}");
+            }
         }));
 
         self.widgets.cbx_gain.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
-            let Ok(mut options) = self_.engine.options.try_write() else { return; };
-            options.focuser.gain = Gain::from_active_id(cb.active_id().as_deref());
+            let gain = Gain::from_active_id(cb.active_id().as_deref());
+            let patch = OptionPatch::Focuser(FocuserOptionPatch { gain: Some(gain), ..Default::default() });
+            if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
+                log::error!("Failed to change focuser options: {e}");
+            }
         }));
 
         self.widgets.btn_dec_large.connect_clicked(clone!(@weak self as self_ => move |_| {
@@ -361,54 +366,74 @@ impl FocuserUi {
         }));
 
         self.widgets.chb_temp.connect_active_notify(clone!(@weak self as self_ => move |chb| {
-            if let Ok(mut options) = self_.engine.options.try_write() {
-                options.focuser.on_temp_change = chb.is_active();
+            let patch = OptionPatch::Focuser(FocuserOptionPatch { on_temp_change: Some(chb.is_active()), ..Default::default() });
+            if self_.engine.exec_command(Command::ChangeOptions(patch)).is_err() {
+                log::error!("Failed to change focuser options");
+                return;
             }
             self_.correct_widgets_props();
         }));
 
         self.widgets.spb_temp.connect_value_changed(clone!(@weak self as self_ => move |sb| {
-            let Ok(mut options) = self_.engine.options.try_write() else { return; };
-            options.focuser.max_temp_change = sb.value();
+            let patch = OptionPatch::Focuser(FocuserOptionPatch { max_temp_change: Some(sb.value()), ..Default::default() });
+            if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
+                log::error!("Failed to change focuser options: {e}");
+            }
         }));
 
         self.widgets.chb_fwhm.connect_active_notify(clone!(@weak self as self_ => move |chb| {
-            if let Ok(mut options) = self_.engine.options.try_write() {
-                options.focuser.on_fwhm_change = chb.is_active();
+            let patch = OptionPatch::Focuser(FocuserOptionPatch { on_fwhm_change: Some(chb.is_active()), ..Default::default() });
+            if self_.engine.exec_command(Command::ChangeOptions(patch)).is_err() {
+                log::error!("Failed to change focuser options");
+                return;
             }
             self_.correct_widgets_props();
         }));
 
         self.widgets.cb_fwhm.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
-            let Ok(mut options) = self_.engine.options.try_write() else { return; };
-            options.focuser.max_fwhm_change = cb.active_id().and_then(|v| v.parse().ok()).unwrap_or(20);
+            let max_fwhm_change = cb.active_id().and_then(|v| v.parse().ok()).unwrap_or(20);
+            let patch = OptionPatch::Focuser(FocuserOptionPatch { max_fwhm_change: Some(max_fwhm_change), ..Default::default() });
+            if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
+                log::error!("Failed to change focuser options: {e}");
+            }
         }));
 
         self.widgets.chb_period.connect_active_notify(clone!(@weak self as self_ => move |chb| {
-            if let Ok(mut options) = self_.engine.options.try_write() {
-                options.focuser.periodically = chb.is_active();
+            let patch = OptionPatch::Focuser(FocuserOptionPatch { periodically: Some(chb.is_active()), ..Default::default() });
+            if self_.engine.exec_command(Command::ChangeOptions(patch)).is_err() {
+                log::error!("Failed to change focuser options");
+                return;
             }
             self_.correct_widgets_props();
         }));
 
         self.widgets.cb_period.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
-            let Ok(mut options) = self_.engine.options.try_write() else { return; };
-            options.focuser.period_minutes = cb.active_id().and_then(|v| v.parse().ok()).unwrap_or(120);
+            let period_minutes = cb.active_id().and_then(|v| v.parse().ok()).unwrap_or(120);
+            let patch = OptionPatch::Focuser(FocuserOptionPatch { period_minutes: Some(period_minutes), ..Default::default() });
+            if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
+                log::error!("Failed to change focuser options: {e}");
+            }
         }));
 
         self.widgets.spb_measures.connect_value_changed(clone!(@weak self as self_ => move |sb| {
-            let Ok(mut options) = self_.engine.options.try_write() else { return; };
-            options.focuser.measures = sb.value() as u32;
+            let patch = OptionPatch::Focuser(FocuserOptionPatch { measures: Some(sb.value() as u32), ..Default::default() });
+            if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
+                log::error!("Failed to change focuser options: {e}");
+            }
         }));
 
         self.widgets.spb_auto_step.connect_value_changed(clone!(@weak self as self_ => move |sb| {
-            let Ok(mut options) = self_.engine.options.try_write() else { return; };
-            options.focuser.step = sb.value();
+            let patch = OptionPatch::Focuser(FocuserOptionPatch { step: Some(sb.value()), ..Default::default() });
+            if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
+                log::error!("Failed to change focuser options: {e}");
+            }
         }));
 
         self.widgets.spb_extra_steps.connect_value_changed(clone!(@weak self as self_ => move |sb| {
-            let Ok(mut options) = self_.engine.options.try_write() else { return; };
-            options.focuser.anti_backlash_steps = sb.value() as usize;
+            let patch = OptionPatch::Focuser(FocuserOptionPatch { anti_backlash_steps: Some(sb.value() as usize), ..Default::default() });
+            if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
+                log::error!("Failed to change focuser options: {e}");
+            }
         }));
 
         self.widgets.da_auto.connect_draw(

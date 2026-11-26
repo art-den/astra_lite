@@ -1,7 +1,7 @@
 use serde::{Serialize, Deserialize};
 
 /// Stars Recognition Sensitivity
-#[derive(Default, Serialize, Deserialize, Debug, Clone, Copy)]
+#[derive(Default, Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub enum StarRecognSensitivity {
     Low,
     #[default]

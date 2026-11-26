@@ -3,7 +3,7 @@ use gtk::{glib, prelude::*, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
-    core::{engine::Engine, events::*},
+    core::{commands::Command, engine::Engine, events::*},
     hal::{DeviceType, HalState, TelescopeState, events::HalEvent},
     options::*,
     ui::ui_main::MainUi,
@@ -322,22 +322,29 @@ impl MountUi {
 
         self.widgets.chb_inv_ns.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.mount.inv_ns = chb.is_active();
+                let patch = OptionPatch::Mount(MountOptionPatch { inv_ns: Some(chb.is_active()), ..Default::default() });
+                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
+                    log::error!("Failed to change mount options: {e}");
+                }
             })
         );
 
         self.widgets.chb_inv_we.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.mount.inv_we = chb.is_active();
+                let patch = OptionPatch::Mount(MountOptionPatch { inv_we: Some(chb.is_active()), ..Default::default() });
+                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
+                    log::error!("Failed to change mount options: {e}");
+                }
             })
         );
 
         self.widgets.cb_speed.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.mount.speed = cb.active_id().map(|s| s.to_string());
+                let speed = cb.active_id().map(|s| s.to_string());
+                let patch = OptionPatch::Mount(MountOptionPatch { speed: Some(speed), ..Default::default() });
+                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
+                    log::error!("Failed to change mount options: {e}");
+                }
             })
         );
     }

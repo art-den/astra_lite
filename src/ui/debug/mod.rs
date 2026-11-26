@@ -165,6 +165,7 @@ fn debug_ascom_camera(app: &gtk::Application, engine: &Engine) {
     // Reproduce the user's flow: a single shot over the activated driver
     // (a real click cannot be simulated on Windows, gdk_test_simulate_button() is X11-only)
     if btn_take_shot.is_sensitive() {
+        // --debug scenario: direct options write (not migrated to commands yet)
         engine.options.write().unwrap().cam.frame.set_exposure(1.0);
         match engine.start_single_shot() {
             Ok(_) => log::info!("DBG single shot started"),
@@ -232,6 +233,7 @@ fn debug_ascom_switch(app: &gtk::Application, engine: &Engine) {
         log::info!("DBG set_binning(1,1) again = {:?}", cam.set_binning(1, 1));
 
         // Step 5: full single shot like the user's Take Shot click
+        // --debug scenario: direct options write (not migrated to commands yet)
         engine.options.write().unwrap().cam.frame.set_exposure(1.0);
         test_switch_tab(app, "lb_tab_common");
         match engine.start_single_shot() {
@@ -284,6 +286,7 @@ fn debug_ascom_bin2(app: &gtk::Application, engine: &Engine) {
 
     // Full take_shot pipeline like the user's Take Shot click
     {
+        // --debug scenario: direct options write (not migrated to commands yet)
         let mut options = engine.options.write().unwrap();
         options.cam.frame.binning = Binning::Bin2;
         options.cam.frame.set_exposure(1.0);

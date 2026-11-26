@@ -3,7 +3,7 @@ use gtk::{prelude::*, glib, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
-    core::{engine::*, events::*}, guiding::external_guider::*, hal::events::HalEvent, options::*
+    core::{commands::Command, engine::*, events::*}, guiding::external_guider::*, hal::events::HalEvent, options::*
 };
 
 use super::{gtk_utils::*, module::*, ui_main::*, utils::*};
@@ -208,10 +208,8 @@ impl GuidingUi {
 
         let connect_rbtn = |rbtn: &gtk::RadioButton| {
             rbtn.connect_active_notify(clone!(@weak self as self_ => move |rbtn| {
-                if rbtn.is_active()
-                && let Ok(mut options) = self_.engine.options.try_write()
-                {
-                    options.guiding.mode =
+                if rbtn.is_active() {
+                    let mode =
                         if self_.widgets.rbtn_guide_main_cam.is_active() {
                             GuidingMode::MainCamera
                         } else if self_.widgets.rbtn_guide_ext.is_active() {
@@ -219,6 +217,11 @@ impl GuidingUi {
                         } else {
                             GuidingMode::Disabled
                         };
+                    let patch = OptionPatch::Guiding(GuidingOptionPatch { mode: Some(mode), ..Default::default() });
+                    if self_.engine.exec_command(Command::ChangeOptions(patch)).is_err() {
+                        log::error!("Failed to change guiding options");
+                        return;
+                    }
                 }
                 self_.correct_widgets_props();
             }));
@@ -229,33 +232,47 @@ impl GuidingUi {
         connect_rbtn(&self.widgets.rbtn_guide_ext);
 
         self.widgets.cb_dith_period.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
-            let Ok(mut options) = self_.engine.options.try_write() else { return; };
-            options.guiding.dith_period = cb.active_id().and_then(|v| v.parse().ok()).unwrap_or(0);
+            let dith_period = cb.active_id().and_then(|v| v.parse().ok()).unwrap_or(0);
+            let patch = OptionPatch::Guiding(GuidingOptionPatch { dith_period: Some(dith_period), ..Default::default() });
+            if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
+                log::error!("Failed to change guiding options: {e}");
+            }
         }));
 
         self.widgets.spb_dith_dist.connect_value_changed(clone!(@weak self as self_ => move |sb| {
-            let Ok(mut options) = self_.engine.options.try_write() else { return; };
-            options.guiding.main_cam.dith_dist = sb.value() as i32;
+            let patch = OptionPatch::Guiding(GuidingOptionPatch { main_cam: Some(MainCamGuidingOptionPatch { dith_dist: Some(sb.value() as i32), ..Default::default() }), ..Default::default() });
+            if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
+                log::error!("Failed to change guiding options: {e}");
+            }
         }));
 
         self.widgets.spb_guid_max_err.connect_value_changed(clone!(@weak self as self_ => move |sb| {
-            let Ok(mut options) = self_.engine.options.try_write() else { return; };
-            options.guiding.main_cam.max_error = sb.value();
+            let patch = OptionPatch::Guiding(GuidingOptionPatch { main_cam: Some(MainCamGuidingOptionPatch { max_error: Some(sb.value()), ..Default::default() }), ..Default::default() });
+            if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
+                log::error!("Failed to change guiding options: {e}");
+            }
         }));
 
         self.widgets.spb_ext_dith_dist.connect_value_changed(clone!(@weak self as self_ => move |sb| {
-            let Ok(mut options) = self_.engine.options.try_write() else { return; };
-            options.guiding.ext_guider.dith_dist = sb.value() as i32;
+            let patch = OptionPatch::Guiding(GuidingOptionPatch { ext_guider: Some(ExtGuiderOptionPatch { dith_dist: Some(sb.value() as i32) }), ..Default::default() });
+            if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
+                log::error!("Failed to change guiding options: {e}");
+            }
         }));
 
         self.widgets.spb_mnt_cal_exp.connect_value_changed(clone!(@weak self as self_ => move |sb| {
-            let Ok(mut options) = self_.engine.options.try_write() else { return; };
-            options.guiding.main_cam.calibr_exposure = sb.value();
+            let patch = OptionPatch::Guiding(GuidingOptionPatch { main_cam: Some(MainCamGuidingOptionPatch { calibr_exposure: Some(sb.value()), ..Default::default() }), ..Default::default() });
+            if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
+                log::error!("Failed to change guiding options: {e}");
+            }
         }));
 
         self.widgets.cbx_mnt_cal_gain.connect_active_id_notify(clone!(@weak self as self_ => move |cb| {
-            let Ok(mut options) = self_.engine.options.try_write() else { return; };
-            options.guiding.main_cam.calibr_gain = Gain::from_active_id(cb.active_id().as_deref());
+            let gain = Gain::from_active_id(cb.active_id().as_deref());
+            let patch = OptionPatch::Guiding(GuidingOptionPatch { main_cam: Some(MainCamGuidingOptionPatch { calibr_gain: Some(gain), ..Default::default() }), ..Default::default() });
+            if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
+                log::error!("Failed to change guiding options: {e}");
+            }
         }));
     }
 

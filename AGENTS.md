@@ -39,7 +39,7 @@ Note for those editing this file: The file should contain only general informati
 - `src/plate_solve` - Common API for plate solving: spawns an external solver process (`solve-field`, or `starsolver` if it is placed next to the app binary).
 - `src/sky_math` - Sky math: coordinates, Solar system.
 - `src/ui` - GTK interface: device panels, preview, sky map, dialogs. UI layout is in `.ui` files, widget structs are filled by `#[derive(FromBuilder)]`: its field names must match the object IDs in the `.ui` file, which is checked at runtime, not at compile time.
-- Panel settings are saved to `engine.options` immediately by widget signal subscriptions (non-blocking `try_write`); code that mutates widgets programmatically must hold the `options` read lock to avoid spurious writes.
+- User option changes from UI go through `Engine::exec_command(Command::ChangeOptions(OptionPatch))` (see `src/options/patch.rs`); it rejects the change if the options lock is busy. Code that mutates widgets programmatically must hold the `options` read lock to avoid spurious writes.
 - `src/ui/debug` - UI automation debug mode (`--debug` flag): simulated clicks, screenshots.
 - `src/ui/resources` - GTK ui-files, images
 - `src/ui/sky_map` - Sky map widget

@@ -2,7 +2,7 @@ use serde::{Serialize, Deserialize};
 
 use super::{Binning, Gain};
 
-#[derive(Serialize, Deserialize, Default, Debug, Clone, Copy)]
+#[derive(Serialize, Deserialize, Default, Debug, Clone, Copy, PartialEq)]
 pub enum PlateSolverType {
     #[default]
     Astrometry,

@@ -598,6 +598,31 @@ impl Engine {
         mode.active.command(&cmd)
     }
 
+    /// App-level command facade for UI clients. A busy options lock rejects
+    /// the change with an error (reentrant widget signals must not be applied).
+    pub fn exec_command(
+        &self,
+        cmd:  Command,
+    ) -> eyre::Result<CommandReply> {
+        match cmd {
+            Command::ChangeOptions(patch) => {
+                let mut options = match self.options.try_write() {
+                    Ok(o) => o,
+                    // Busy (incl. reentrant call from widget redraw under read-guard):
+                    // the change is rejected, same as today's silent try_write skip.
+                    Err(_) => return Err(eyre::eyre!("Options are busy, option change rejected"))
+                };
+                let changed = patch.apply(&mut options);
+                options.validate()?;
+                drop(options);
+                if changed {
+                    self.events.send(Event::NeedRefreshOptionsView);
+                }
+                Ok(CommandReply::OptionsChanged { changed })
+            }
+        }
+    }
+
     fn start_new_mode(
         &self,
         mut new_mode:        impl Mode + Send + Sync + 'static,
@@ -936,3 +961,60 @@ impl Engine {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::commands::{Command, CommandReply};
+    use crate::options::{MountOptionPatch, OptionPatch};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn exec_command_changes_options() {
+        let engine = Engine::new();
+        let cmd = Command::ChangeOptions(OptionPatch::Mount(MountOptionPatch {
+            inv_ns: Some(true),
+            ..Default::default()
+        }));
+        let reply = engine.exec_command(cmd).unwrap();
+        assert!(matches!(reply, CommandReply::OptionsChanged { changed: true }));
+        assert!(engine.options.read().unwrap().mount.inv_ns);
+    }
+
+    #[test]
+    fn exec_command_sends_event_only_on_change() {
+        let engine = Engine::new();
+        let counter = std::sync::Arc::new(AtomicUsize::new(0));
+        let counter2 = std::sync::Arc::clone(&counter);
+        let _id = engine.events.connect(move |event| {
+            if matches!(event, Event::NeedRefreshOptionsView) {
+                counter2.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+
+        // No-op patch: no event.
+        let cmd = Command::ChangeOptions(OptionPatch::Mount(MountOptionPatch::default()));
+        engine.exec_command(cmd).unwrap();
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
+
+        // Real change: exactly one event.
+        let cmd = Command::ChangeOptions(OptionPatch::Mount(MountOptionPatch {
+            inv_ns: Some(true),
+            ..Default::default()
+        }));
+        engine.exec_command(cmd).unwrap();
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn exec_command_rejected_when_options_busy() {
+        let engine = Engine::new();
+        let _guard = engine.options.read().unwrap();
+        let cmd = Command::ChangeOptions(OptionPatch::Mount(MountOptionPatch {
+            inv_ns: Some(true),
+            ..Default::default()
+        }));
+        assert!(engine.exec_command(cmd).is_err());
+        assert!(!engine.options.read().unwrap().mount.inv_ns);
+    }
+}

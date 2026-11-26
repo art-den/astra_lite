@@ -46,6 +46,9 @@ pub use polar_align::*;
 pub mod filter_wheel;
 pub use filter_wheel::*;
 
+pub mod patch;
+pub use patch::*;
+
 use std::collections::HashMap;
 
 use serde::{Serialize, Deserialize};
@@ -87,6 +90,11 @@ pub struct Options {
 }
 
 impl Options {
+    /// Extension point for option validation (no side effects, unlike `check()`).
+    pub fn validate(&self) -> eyre::Result<()> {
+        Ok(())
+    }
+
     pub fn check(&mut self) -> eyre::Result<()> {
         self.calibr.check()?;
         self.raw_frames.check()?;

@@ -4,7 +4,7 @@ use itertools::Itertools;
 use macros::FromBuilder;
 use serde::{Deserialize, Serialize};
 use crate::{
-    core::{engine::*, events::*, mode_darks_lib::*}, hal::Camera, image::info::seconds_to_total_time_str, options::*, utils::io_utils::*
+    core::{commands::Command, engine::*, events::*, mode_darks_lib::*}, hal::Camera, image::info::seconds_to_total_time_str, options::*, utils::io_utils::*
 };
 
 use super::{gtk_utils::*, module::*};
@@ -954,9 +954,10 @@ impl DarksLibraryUI {
 
         self.widgets.common.fch_dark_library.connect_file_set(
             clone!(@weak self as self_ => move |fch| {
-                let Ok(mut options) = self_.engine.options.try_write() else { return; };
-                options.calibr.dark_library_path = fch.filename().unwrap_or_default();
-                drop(options);
+                let patch = OptionPatch::Calibr(CalibrOptionPatch { dark_library_path: Some(fch.filename().unwrap_or_default()), ..Default::default() });
+                if let Err(e) = self_.engine.exec_command(Command::ChangeOptions(patch)) {
+                    log::error!("Failed to change calibr options: {e}");
+                }
             })
         );
 
