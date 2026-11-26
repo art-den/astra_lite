@@ -5,21 +5,20 @@ use gtk::{prelude::*, glib, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
-    core::{engine::Engine, events::Event},
+    core::{commands::{select_device_cmd, Command, DeviceCommand, DeviceKind}, engine::Engine, events::Event},
     hal::{DeviceType, HalState, events::HalEvent},
     options::Options,
-    ui::{gtk_utils, module::*, utils::{DelayedActions, ExclusiveCaller, fill_devices_list_into_combobox}}
+    ui::{module::*, utils::{DelayedActions, ExclusiveCaller, fill_devices_list_into_combobox}}
 };
 
 pub fn init_ui(
-    window: &gtk::ApplicationWindow,
+    _window: &gtk::ApplicationWindow,
     engine: &Arc<Engine>,
 ) -> Rc<dyn UiModule> {
     let widgets = Widgets::from_builder_str(include_str!(r"resources/flt_wheel.ui"));
     let obj = Rc::new(FltWheelUi {
         widgets,
         excl_caller:     ExclusiveCaller::new(),
-        window:          window.clone(),
         delayed_actions: DelayedActions::new(250),
         engine:          Arc::clone(engine),
     });
@@ -36,7 +35,6 @@ pub fn init_ui(
 struct FltWheelUi {
     widgets:         Widgets,
     excl_caller:     ExclusiveCaller,
-    window:          gtk::ApplicationWindow,
     delayed_actions: DelayedActions<DelayedAction>,
     engine:          Arc<Engine>,
 }
@@ -76,11 +74,10 @@ impl UiModule for FltWheelUi {
 
     fn show_options(&self, _options: &Options) {}
 
-    fn get_options(&self, options: &mut Options) {
-        options.filter_wheel.device = self.widgets.cb_device
-            .active_id()
-            .unwrap_or_default()
-            .to_string();
+    fn get_options(&self, _options: &mut Options) {
+        if let Some(device_id) = self.widgets.cb_device.active_id() {
+            self.engine.exec_command(select_device_cmd(DeviceKind::FilterWheel, &device_id));
+        }
     }
 
     fn on_show_options_first_time(&self) {
@@ -144,20 +141,15 @@ impl FltWheelUi {
     fn connect_widgets_events(self: &Rc<Self>) {
         self.widgets.cb_device.connect_active_notify(clone!(@weak self as self_ => move |cb| {
             let Some(new_device_name) = cb.active_id() else { return; };
-            // `change_filter_wheel_impl` saves device to options itself
             self_.excl_caller.exec(|| {
-                self_.engine.cur_devices.change_filter_wheel(&new_device_name);
+                self_.engine.exec_command(select_device_cmd(DeviceKind::FilterWheel, &new_device_name));
             });
         }));
 
         self.widgets.cb_filter.connect_active_notify(clone!(@weak self as self_ => move |cb| {
             let Some(active) = cb.active() else { return; };
             self_.excl_caller.exec(|| {
-                gtk_utils::exec_and_show_error(Some(&self_.window), || {
-                    let filter_wheel = self_.engine.cur_devices.filter_wheel_or_err()?;
-                    filter_wheel.set_active(active as _)?;
-                    Ok(())
-                });
+                self_.engine.exec_command(Command::Device(DeviceCommand::FilterWheelSelect { index: active as usize }));
             });
         }));
     }
@@ -172,6 +164,7 @@ impl FltWheelUi {
         }
         let new_cb_active = Some(active_id as u32);
         if self.widgets.cb_filter.active() != new_cb_active {
+            // Phantom `FilterWheelSelect` from this programmatic change is deduped by the executor
             self.widgets.cb_filter.set_active(new_cb_active);
         }
     }
@@ -206,8 +199,7 @@ impl FltWheelUi {
             &self.widgets.cb_device,
             if !cur_filter_wheel.is_empty() { Some(cur_filter_wheel.as_str()) } else { None },
             |id| {
-                let mut options = self.engine.options.write().unwrap();
-                options.filter_wheel.device = id.to_string();
+                self.engine.exec_command(select_device_cmd(DeviceKind::FilterWheel, id));
             }
         );
     }

@@ -3,7 +3,7 @@ use gtk::{glib, gdk, prelude::*, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
-    core::{commands::{Command, ModeStart}, engine::Engine, events::*, mode_focusing::*},
+    core::{commands::{Command, DeviceCommand, DeviceKind, ModeStart, select_device_cmd}, engine::Engine, events::*, mode_focusing::*},
     hal::{DeviceType, FocuserState, HalState, events::HalEvent},
     options::*,
     ui::plots::*,
@@ -323,17 +323,13 @@ impl FocuserUi {
         self.widgets.cb_list.connect_active_notify(clone!(@weak self as self_ => move |cb| {
             let Some(new_device_name) = cb.active_id() else { return; };
             self_.excl.exec(|| {
-                self_.engine.cur_devices.change_focuser(&new_device_name);
+                self_.engine.exec_command(select_device_cmd(DeviceKind::Focuser, &new_device_name));
             });
         }));
 
         self.widgets.spb_val.connect_value_changed(clone!(@weak self as self_ => move |sb| {
             self_.excl.exec(|| {
-                let Some(focuser) = self_.engine.cur_devices.focuser() else { return; };
-                exec_and_show_error(Some(&self_.window), || {
-                    focuser.set_abs_position(sb.value())?;
-                    Ok(())
-                });
+                self_.engine.exec_command(Command::Device(DeviceCommand::FocuserSetPosition { value: sb.value() }));
             });
         }));
 
@@ -502,8 +498,7 @@ impl FocuserUi {
             &self.widgets.cb_list,
             if !cur_focuser.is_empty() { Some(cur_focuser.as_str()) } else { None },
             |id| {
-                let mut options = self.engine.options.write().unwrap();
-                options.focuser.device = id.to_string();
+                self.engine.exec_command(select_device_cmd(DeviceKind::Focuser, id));
             }
         );
     }
@@ -692,21 +687,13 @@ impl FocuserUi {
     }
 
     fn update_focuser_value(&self, offset: i32) {
+        let target = self.widgets.spb_val.value() + offset as f64;
+        // Wrap in excl so the value_changed signal is swallowed (the executor
+        // clamps the real target to the device range)
         self.excl.exec(|| {
-            exec_and_show_error(Some(&self.window), || {
-                let Some(focuser) = self.engine.cur_devices.focuser() else { return Ok(()); };
-                let mut value = focuser.abs_position()?;
-                let range = focuser.abs_position_range()?;
-                value += offset as f64;
-                let clamped_value = value.clamp(*range.start(), *range.end());
-                if clamped_value == value {
-                    return Ok(());
-                }
-                focuser.set_abs_position(value)?;
-                self.widgets.spb_val.set_value(value);
-                Ok(())
-            });
+            self.widgets.spb_val.set_value(target);
         });
+        self.engine.exec_command(Command::Device(DeviceCommand::FocuserMoveRelative { offset }));
     }
 
     fn show_info(&self) {

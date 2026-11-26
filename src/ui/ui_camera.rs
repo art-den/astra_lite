@@ -2,7 +2,7 @@ use std::{rc::Rc, sync::Arc, cell::RefCell};
 use gtk::{cairo, glib::{self, clone}, prelude::*};
 use macros::FromBuilder;
 use crate::{
-    core::{commands::{Command, ModeStart}, cur_devices::CurDevices, engine::*, events::*, frame_processing::*, utils::{FileNameArg, FileNameUtils}}, hal::{DeviceType, FrameType, HalState, events::HalEvent}, image::{info::*, raw::CalibrMethods}, options::*,
+    core::{commands::{select_device_cmd, Command, DeviceKind, ModeStart}, cur_devices::CurDevices, engine::*, events::*, frame_processing::*, utils::{FileNameArg, FileNameUtils}}, hal::{DeviceType, FrameType, HalState, events::HalEvent}, image::{info::*, raw::CalibrMethods}, options::*,
 };
 use super::{gtk_utils::*, module::*, ui_main::*, ui_start_dialog::StartDialog, utils::*};
 
@@ -609,7 +609,7 @@ impl CameraUi {
             clone!(@weak self as self_ => move |cb| {
                 let Some(cur_id) = cb.active_id() else { return; };
                 self_.excl.exec(|| {
-                    self_.engine.cur_devices.change_camera(&cur_id);
+                    self_.engine.exec_command(select_device_cmd(DeviceKind::Camera, &cur_id));
                 });
             })
         );
@@ -1071,7 +1071,9 @@ impl CameraUi {
 
     fn get_common_options(&self, options: &mut Options) {
         options.cam.live_view = self.widgets.common.chb_live_view.is_active();
-        options.cam.device_id = self.widgets.common.cb_cam_list.active_id().unwrap_or_default().to_string();
+        if let Some(device_id) = self.widgets.common.cb_cam_list.active_id() {
+            self.engine.exec_command(select_device_cmd(DeviceKind::Camera, &device_id));
+        }
     }
 
     fn get_ctrl_options(&self, options: &mut Options) {
@@ -1316,8 +1318,7 @@ impl CameraUi {
             &self.widgets.common.cb_cam_list,
             if !cur_cam_device.is_empty() { Some(&cur_cam_device) } else { None },
             |id| {
-                let Ok(mut options) = self.engine.options.try_write() else { return; };
-                options.cam.device_id = id.to_string()
+                self.engine.exec_command(select_device_cmd(DeviceKind::Camera, id));
             }
         );
     }

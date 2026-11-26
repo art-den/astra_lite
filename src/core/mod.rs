@@ -6,6 +6,7 @@ pub mod consts;
 pub mod mode_darks_lib;
 pub mod mode_goto;
 pub mod commands;
+pub mod device_ctrl;
 pub mod mode_polar_align;
 pub mod utils;
 pub mod cam_ctrl;

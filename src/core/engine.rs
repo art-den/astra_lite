@@ -635,8 +635,9 @@ impl Engine {
     /// side effects, incl. HAL device calls, run on that thread).
     /// Phantom `ChangeOptions` commands from reentrant widget signals are
     /// harmless: the widget value equals the option value, so applying them is
-    /// a no-op (`changed = false`). Mode lifecycle commands come only from
-    /// explicit user actions.
+    /// a no-op (`changed = false`). Phantom `Device` commands are deduped by
+    /// the executor via device-state comparison. Mode lifecycle commands come
+    /// only from explicit user actions.
     /// Commands are discarded once `Engine::stop`/drop has begun.
     pub fn exec_command(
         &self,
@@ -680,6 +681,7 @@ impl Engine {
                         Self::report_command_error(&engine, "Continue aborted mode", e);
                     }
                 }
+                Command::Device(cmd) => Self::exec_device_command(&engine, cmd),
             }
         }
     }
@@ -708,7 +710,7 @@ impl Engine {
     }
 
     /// Log an error of a queued command and report it to the UI as `Event::Error`
-    fn report_command_error(engine: &Engine, context: &str, error: eyre::Report) {
+    pub(crate) fn report_command_error(engine: &Engine, context: &str, error: eyre::Report) {
         log::error!("Error {}: {:#}", context, error);
         engine.events.send(Event::Error(format!("{}: {}", context, error_to_user_string(&error))));
     }
@@ -1165,6 +1167,41 @@ mod tests {
         engine.exec_command(Command::StartMode(ModeStart::SingleShot));
         assert!(wait_until(|| err_cnt.load(Ordering::SeqCst) == 1));
         assert_eq!(engine.modes().active.kind(), ModeKind::Waiting);
+    }
+
+    #[test]
+    fn exec_command_device_without_device_sends_error() {
+        use crate::core::commands::{DeviceCommand, DeviceKind};
+        for cmd in [
+            Command::Device(DeviceCommand::MountTrack(true)),
+            Command::Device(DeviceCommand::FocuserSetPosition { value: 1.0 }),
+            Command::Device(DeviceCommand::FilterWheelSelect { index: 0 }),
+            Command::Device(DeviceCommand::MountPark),
+        ] {
+            let engine = Engine::new();
+            let err_cnt = std::sync::Arc::new(AtomicUsize::new(0));
+            let err_cnt2 = std::sync::Arc::clone(&err_cnt);
+            let _id = engine.events.connect(move |event| {
+                if matches!(event, Event::Error(_)) {
+                    err_cnt2.fetch_add(1, Ordering::SeqCst);
+                }
+            });
+            engine.exec_command(cmd);
+            assert!(wait_until(|| err_cnt.load(Ordering::SeqCst) == 1));
+            assert_eq!(err_cnt.load(Ordering::SeqCst), 1);
+        }
+        // SelectDevice with a nonexistent id must not panic or error
+        let engine = Engine::new();
+        engine.exec_command(Command::Device(DeviceCommand::SelectDevice {
+            kind: DeviceKind::Mount,
+            device_id: "nonexistent".to_string(),
+            force: false,
+        }));
+        engine.exec_command(Command::ChangeOptions(OptionPatch::Mount(MountOptionPatch {
+            inv_ns: Some(true),
+            ..Default::default()
+        })));
+        assert!(wait_until(|| engine.options.read().unwrap().mount.inv_ns));
     }
 
     #[test]

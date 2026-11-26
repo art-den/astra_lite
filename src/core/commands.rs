@@ -3,6 +3,7 @@ use serde::{Serialize, Deserialize};
 use crate::core::mode_darks_lib::{DarkLibMode, MasterFileCreationProgramItem};
 use crate::core::mode_goto::GotoConfig;
 use crate::core::mode_polar_align::{PolarAlignCommand, PolarAlignState};
+use crate::hal::TelescopeMoveDir;
 use crate::sky_math::math::EqCoord;
 
 /// A command for the active mode.
@@ -48,6 +49,38 @@ pub enum ModeStart {
     PolarAlign,
 }
 
+/// Plain data (serializable), cf. `Command` rule.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum DeviceKind { Camera, Mount, Focuser, FilterWheel }
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum DeviceCommand {
+    MountTrack(bool),
+    MountPark,
+    MountUnpark,
+    /// Press of a nav button: applies inversions/slew speed from options, then moves
+    MountMoveStart { dir: TelescopeMoveDir },
+    /// Release of a nav button or press of the Stop button
+    MountMoveStop,
+    FocuserSetPosition { value: f64 },
+    /// Relative move; clamping to the device range is done by the executor
+    FocuserMoveRelative { offset: i32 },
+    FilterWheelSelect { index: usize },
+    /// Device selection from a combo box (replaces direct `change_*`, direct
+    /// `options.<dev>.device` writes, and get_options re-syncs).
+    /// `force` mirrors apply_* vs change_* (UI currently uses only force:false).
+    SelectDevice { kind: DeviceKind, device_id: String, force: bool },
+}
+
+/// Shorthand for the `SelectDevice` command with `force: false` (UI combo selects)
+pub fn select_device_cmd(kind: DeviceKind, device_id: &str) -> Command {
+    Command::Device(DeviceCommand::SelectDevice {
+        kind,
+        device_id: device_id.to_string(),
+        force: false,
+    })
+}
+
 /// App-level command facade for UI clients (GTK now, web later).
 /// Commands are queued and executed asynchronously by the engine command
 /// thread; the caller gets no reply (the executor handles errors).
@@ -58,6 +91,7 @@ pub enum Command {
     StartMode(ModeStart),
     AbortActiveMode,
     ContinueAbortedMode,
+    Device(DeviceCommand),
 }
 
 #[cfg(test)]
@@ -88,6 +122,19 @@ mod tests {
             }),
             Command::AbortActiveMode,
             Command::ContinueAbortedMode,
+            Command::Device(DeviceCommand::MountTrack(true)),
+            Command::Device(DeviceCommand::MountPark),
+            Command::Device(DeviceCommand::MountUnpark),
+            Command::Device(DeviceCommand::MountMoveStart { dir: TelescopeMoveDir::NorthWest }),
+            Command::Device(DeviceCommand::MountMoveStop),
+            Command::Device(DeviceCommand::FocuserSetPosition { value: 123.0 }),
+            Command::Device(DeviceCommand::FocuserMoveRelative { offset: -10 }),
+            Command::Device(DeviceCommand::FilterWheelSelect { index: 2 }),
+            Command::Device(DeviceCommand::SelectDevice {
+                kind: DeviceKind::Mount,
+                device_id: "mount-1".to_string(),
+                force: false,
+            }),
         ];
         for cmd in cmds {
             let json    = serde_json::to_string(&cmd).unwrap();

@@ -3,7 +3,7 @@ use gtk::{glib, prelude::*, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
-    core::{commands::Command, engine::Engine, events::*},
+    core::{commands::{select_device_cmd, Command, DeviceCommand, DeviceKind}, engine::Engine, events::*},
     hal::{DeviceType, HalState, TelescopeState, events::HalEvent},
     options::*,
     ui::ui_main::MainUi,
@@ -287,18 +287,14 @@ impl MountUi {
         self.widgets.cb_list.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| { self_.excl.exec(|| {
                 let Some(new_device_name) = cb.active_id() else { return; };
-                self_.engine.cur_devices.change_telescope(&new_device_name);
+                self_.engine.exec_command(select_device_cmd(DeviceKind::Mount, &new_device_name));
             });})
         );
 
         self.widgets.chb_tracking.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 self_.excl.exec(|| {
-                    let Some(telescope) = self_.engine.cur_devices.telescope() else { return; };
-                    exec_and_show_error(Some(&self_.window), || {
-                        telescope.track(chb.is_active())?;
-                        Ok(())
-                    });
+                    self_.engine.exec_command(Command::Device(DeviceCommand::MountTrack(chb.is_active())));
                 });
             })
         );
@@ -306,15 +302,12 @@ impl MountUi {
         self.widgets.chb_parked.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
                 self_.excl.exec(|| {
-                    let Some(telescope) = self_.engine.cur_devices.telescope() else { return; };
-                    exec_and_show_error(Some(&self_.window), || {
-                        if chb.is_active() {
-                            telescope.park()?;
-                        } else {
-                            telescope.unpark()?;
-                        }
-                        Ok(())
-                    });
+                    let cmd = if chb.is_active() {
+                        DeviceCommand::MountPark
+                    } else {
+                        DeviceCommand::MountUnpark
+                    };
+                    self_.engine.exec_command(Command::Device(cmd));
                     self_.correct_widgets_props();
                 });
             })
@@ -373,47 +366,38 @@ impl MountUi {
     }
 
     fn handler_nav_mount_btn_pressed(&self, button: &gtk::Button) {
-        let Some(telescope) = self.engine.cur_devices.telescope() else { return; };
-        exec_and_show_error(Some(&self.window), || {
-            if button != &self.widgets.btn_stop {
-                let inv_ns = self.widgets.chb_inv_ns.is_active();
-                let inv_we = self.widgets.chb_inv_we.is_active();
-                telescope.revert_motion(inv_ns, inv_we)?;
-                if let Some(speed) = self.widgets.cb_speed.active_id() {
-                    telescope.set_slew_speed(&speed)?;
-                }
-            }
-            if button == &self.widgets.btn_left_top {
-                telescope.move_(crate::hal::TelescopeMoveDir::NorthWest)?;
+        let cmd = if button == &self.widgets.btn_stop {
+            DeviceCommand::MountMoveStop
+        } else {
+            let dir = if button == &self.widgets.btn_left_top {
+                crate::hal::TelescopeMoveDir::NorthWest
             } else if button == &self.widgets.btn_top {
-                telescope.move_(crate::hal::TelescopeMoveDir::North)?;
+                crate::hal::TelescopeMoveDir::North
             } else if button == &self.widgets.btn_right_top {
-                telescope.move_(crate::hal::TelescopeMoveDir::NorthEast)?;
+                crate::hal::TelescopeMoveDir::NorthEast
             } else if button == &self.widgets.btn_left {
-                telescope.move_(crate::hal::TelescopeMoveDir::West)?;
+                crate::hal::TelescopeMoveDir::West
             } else if button == &self.widgets.btn_right {
-                telescope.move_(crate::hal::TelescopeMoveDir::East)?;
+                crate::hal::TelescopeMoveDir::East
             } else if button == &self.widgets.btn_left_bottom {
-                telescope.move_(crate::hal::TelescopeMoveDir::SouthWest)?;
+                crate::hal::TelescopeMoveDir::SouthWest
             } else if button == &self.widgets.btn_bottom {
-                telescope.move_(crate::hal::TelescopeMoveDir::South)?;
+                crate::hal::TelescopeMoveDir::South
             } else if button == &self.widgets.btn_right_bottom {
-                telescope.move_(crate::hal::TelescopeMoveDir::SouthEast)?;
-            } else if button == &self.widgets.btn_stop {
-                telescope.abort_motion()?;
-            }
-            Ok(())
-        });
+                crate::hal::TelescopeMoveDir::SouthEast
+            } else {
+                return;
+            };
+            DeviceCommand::MountMoveStart { dir }
+        };
+        self.engine.exec_command(Command::Device(cmd));
     }
 
     fn handler_nav_mount_btn_released(&self, button: &gtk::Button) {
-        let Some(telescope) = self.engine.cur_devices.telescope() else { return; };
-        exec_and_show_error(Some(&self.window), || {
-            if button != &self.widgets.btn_stop {
-                telescope.abort_motion()?;
-            }
-            Ok(())
-        });
+        if button == &self.widgets.btn_stop {
+            return;
+        }
+        self.engine.exec_command(Command::Device(DeviceCommand::MountMoveStop));
     }
 
     fn fill_devices_list(&self) {
@@ -435,8 +419,7 @@ impl MountUi {
             &self.widgets.cb_list,
             if !cur_mount.is_empty() { Some(cur_mount.as_str()) } else { None },
             |id| {
-                let Ok(mut options) = self.engine.options.try_write() else { return; };
-                options.mount.device = id.to_string();
+                self.engine.exec_command(select_device_cmd(DeviceKind::Mount, id));
             }
         );
     }
