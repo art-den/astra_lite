@@ -616,21 +616,27 @@ impl CameraUi {
 
         self.widgets.common.chb_live_view.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let patch = OptionPatch::Cam(CamOptionPatch { live_view: Some(chb.is_active()), ..Default::default() });
+                let patch = OptionPatch::CamLiveView(chb.is_active());
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.ctrl.chb_cooler.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let patch = OptionPatch::Cam(CamOptionPatch { ctrl: Some(CamCtrlOptionPatch { enable_cooler: Some(chb.is_active()), ..Default::default() }), ..Default::default() });
+                let patch = OptionPatch::CamCtrl(CamCtrlOptionPatch {
+                    enable_cooler: Some(chb.is_active()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.ctrl.spb_temp.connect_value_changed(
             clone!(@weak self as self_ => move |spb| {
-                let patch = OptionPatch::Cam(CamOptionPatch { ctrl: Some(CamCtrlOptionPatch { temperature: Some(spb.value()), ..Default::default() }), ..Default::default() });
+                let patch = OptionPatch::CamCtrl(CamCtrlOptionPatch {
+                    temperature: Some(spb.value()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
@@ -638,14 +644,20 @@ impl CameraUi {
         self.widgets.ctrl.cb_heater.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
                 let heater_str = cb.active_id().map(|id| id.to_string());
-                let patch = OptionPatch::Cam(CamOptionPatch { ctrl: Some(CamCtrlOptionPatch { heater_str: Some(heater_str), ..Default::default() }), ..Default::default() });
+                let patch = OptionPatch::CamCtrl(CamCtrlOptionPatch {
+                    heater_str: Some(heater_str),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.ctrl.chb_fan.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let patch = OptionPatch::Cam(CamOptionPatch { ctrl: Some(CamCtrlOptionPatch { enable_fan: Some(chb.is_active()), ..Default::default() }), ..Default::default() });
+                let patch = OptionPatch::CamCtrl(CamCtrlOptionPatch {
+                    enable_fan: Some(chb.is_active()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
@@ -653,21 +665,30 @@ impl CameraUi {
         self.widgets.ctrl.cb_conv_gain.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
                 let conv_gain_str = cb.active_id().map(|id| id.to_string());
-                let patch = OptionPatch::Cam(CamOptionPatch { ctrl: Some(CamCtrlOptionPatch { conv_gain_str: Some(conv_gain_str), ..Default::default() }), ..Default::default() });
+                let patch = OptionPatch::CamCtrl(CamCtrlOptionPatch {
+                    conv_gain_str: Some(conv_gain_str),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.ctrl.chb_low_noise.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let patch = OptionPatch::Cam(CamOptionPatch { ctrl: Some(CamCtrlOptionPatch { low_noise: Some(chb.is_active()), ..Default::default() }), ..Default::default() });
+                let patch = OptionPatch::CamCtrl(CamCtrlOptionPatch {
+                    low_noise: Some(chb.is_active()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.ctrl.chb_high_fw.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let patch = OptionPatch::Cam(CamOptionPatch { ctrl: Some(CamCtrlOptionPatch { high_fullwell: Some(chb.is_active()), ..Default::default() }), ..Default::default() });
+                let patch = OptionPatch::CamCtrl(CamCtrlOptionPatch {
+                    high_fullwell: Some(chb.is_active()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
@@ -675,28 +696,40 @@ impl CameraUi {
         self.widgets.frame.cb_mode.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
                 let frame_type = FrameType::from_active_id(cb.active_id().as_deref());
-                let patch = OptionPatch::Cam(CamOptionPatch { frame: Some(FrameOptionPatch { frame_type: Some(frame_type), ..Default::default() }), ..Default::default() });
+                let patch = OptionPatch::CamFrame(FrameOptionPatch {
+                    frame_type: Some(frame_type),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.frame.chb_auto_exp.connect_active_notify(
             clone!(@weak self as self_ => move |chb| {
-                let patch = OptionPatch::Cam(CamOptionPatch { frame: Some(FrameOptionPatch { auto_exp: Some(chb.is_active()), ..Default::default() }), ..Default::default() });
+                let patch = OptionPatch::CamFrame(FrameOptionPatch {
+                    auto_exp: Some(chb.is_active()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.frame.spb_exp.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
-                let patch = OptionPatch::Cam(CamOptionPatch { frame: Some(FrameOptionPatch { exposure: Some(sb.value()), ..Default::default() }), ..Default::default() });
+                let patch = OptionPatch::CamFrame(FrameOptionPatch {
+                    exposure: Some(sb.value()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
 
         self.widgets.frame.spb_gain.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
-                let patch = OptionPatch::Cam(CamOptionPatch { frame: Some(FrameOptionPatch { gain: Some(sb.value()), ..Default::default() }), ..Default::default() });
+                let patch = OptionPatch::CamFrame(FrameOptionPatch {
+                    gain: Some(sb.value()),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
@@ -704,7 +737,10 @@ impl CameraUi {
         self.widgets.frame.spb_offset.connect_value_changed(
             clone!(@weak self as self_ => move |sb| {
                 let offset = sb.value() as i32;
-                let patch = OptionPatch::Cam(CamOptionPatch { frame: Some(FrameOptionPatch { offset: Some(offset), ..Default::default() }), ..Default::default() });
+                let patch = OptionPatch::CamFrame(FrameOptionPatch {
+                    offset: Some(offset),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
@@ -712,7 +748,10 @@ impl CameraUi {
         self.widgets.frame.cb_bin.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
                 let binning = Binning::from_active_id(cb.active_id().as_deref());
-                let patch = OptionPatch::Cam(CamOptionPatch { frame: Some(FrameOptionPatch { binning: Some(binning), ..Default::default() }), ..Default::default() });
+                let patch = OptionPatch::CamFrame(FrameOptionPatch {
+                    binning: Some(binning),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );
@@ -720,7 +759,10 @@ impl CameraUi {
         self.widgets.frame.cb_crop.connect_active_id_notify(
             clone!(@weak self as self_ => move |cb| {
                 let crop = Crop::from_active_id(cb.active_id().as_deref());
-                let patch = OptionPatch::Cam(CamOptionPatch { frame: Some(FrameOptionPatch { crop: Some(crop), ..Default::default() }), ..Default::default() });
+                let patch = OptionPatch::CamFrame(FrameOptionPatch {
+                    crop: Some(crop),
+                    ..Default::default()
+                });
                 self_.engine.exec_command(Command::ChangeOptions(patch));
             })
         );

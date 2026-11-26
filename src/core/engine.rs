@@ -1081,7 +1081,7 @@ impl Engine {
 mod tests {
     use super::*;
     use crate::core::commands::{Command, ModeStart};
-    use crate::options::{MountOptionPatch, OptionPatch};
+    use crate::options::{CamCtrlOptionPatch, MountOptionPatch, OptionPatch};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// Waits until `cond` becomes true (commands are applied asynchronously)
@@ -1206,8 +1206,8 @@ mod tests {
             }
         });
 
-        engine.exec_command(Command::ChangeOptions(OptionPatch::Cam(CamOptionPatch {
-            ctrl: Some(CamCtrlOptionPatch { temperature: Some(-5.0), ..Default::default() }),
+        engine.exec_command(Command::ChangeOptions(OptionPatch::CamCtrl(CamCtrlOptionPatch {
+            temperature: Some(-5.0),
             ..Default::default()
         })));
 

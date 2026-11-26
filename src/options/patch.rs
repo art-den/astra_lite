@@ -12,7 +12,7 @@ use super::{
 use crate::core::events::Event;
 use crate::hal::FrameType;
 use crate::options::{
-    AscomAlpacaOptions, CalibrOptions, CamCtrlOptions, CamOptions, ExtGuiderOptions,
+    AscomAlpacaOptions, CalibrOptions, CamCtrlOptions, ExtGuiderOptions,
     FocuserOptions, FrameOptions, GuidingOptions, IndiOptions, LiveStackingOptions,
     MainCamGuidingOptions, MountOptions, PreviewOptions, PlateSolverOptions,
     PlateSolverType, PolarAlignDir, PolarAlignOptions, QualityOptions, RawFrameOptions,
@@ -172,29 +172,6 @@ impl FrameOptionPatch {
         }
         if frame_options_changed {
             events.push(Event::CameraFrameOptionsChanged);
-        }
-        changed
-    }
-}
-
-#[serde_with::skip_serializing_none]
-#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct CamOptionPatch {
-    pub live_view: Option<bool>,
-    pub ctrl:      Option<CamCtrlOptionPatch>,
-    pub frame:     Option<FrameOptionPatch>,
-}
-
-impl CamOptionPatch {
-    pub fn apply(&self, target: &mut CamOptions, events: &mut Vec<Event>) -> bool {
-        let mut changed = false;
-        opt_field!(self, target, changed, events, live_view, Event::CameraLiveViewChanged);
-        if let Some(ctrl) = &self.ctrl {
-            changed |= ctrl.apply(&mut target.ctrl, events);
-        }
-        if let Some(frame) = &self.frame {
-            changed |= frame.apply(&mut target.frame, events);
         }
         changed
     }
@@ -564,7 +541,9 @@ impl PolarAlignOptionPatch {
 pub enum OptionPatch {
     AscomAlpaca(AscomAlpacaOptionPatch),
     Indi(IndiOptionPatch),
-    Cam(CamOptionPatch),
+    CamLiveView(bool),
+    CamCtrl(CamCtrlOptionPatch),
+    CamFrame(FrameOptionPatch),
     Calibr(CalibrOptionPatch),
     RawFrames(RawFrameOptionPatch),
     #[serde(rename = "live")]
@@ -586,7 +565,17 @@ impl OptionPatch {
         match self {
             Self::AscomAlpaca(p) => p.apply(&mut options.ascom_alpaca),
             Self::Indi(p)        => p.apply(&mut options.indi),
-            Self::Cam(p)         => p.apply(&mut options.cam, events),
+            Self::CamLiveView(v) => {
+                if options.cam.live_view != *v {
+                    options.cam.live_view = *v;
+                    events.push(Event::CameraLiveViewChanged);
+                    true
+                } else {
+                    false
+                }
+            }
+            Self::CamCtrl(p)     => p.apply(&mut options.cam.ctrl, events),
+            Self::CamFrame(p)    => p.apply(&mut options.cam.frame, events),
             Self::Calibr(p)      => p.apply(&mut options.calibr),
             Self::RawFrames(p)   => p.apply(&mut options.raw_frames),
             Self::LiveStacking(p) => p.apply(&mut options.live),
@@ -672,10 +661,7 @@ mod tests {
     #[test]
     fn nested_cam_frame() {
         let mut options = Options::default();
-        let patch = OptionPatch::Cam(CamOptionPatch {
-            frame: Some(FrameOptionPatch { gain: Some(2.5), ..Default::default() }),
-            ..Default::default()
-        });
+        let patch = OptionPatch::CamFrame(FrameOptionPatch { gain: Some(2.5), ..Default::default() });
         assert!(patch.apply(&mut options, &mut Vec::new()));
         assert_eq!(options.cam.frame.gain, 2.5);
     }
@@ -684,10 +670,7 @@ mod tests {
     fn exposure_routes_by_frame_type() {
         let mut options = Options::default();
         options.cam.frame.frame_type = FrameType::Flats;
-        let patch = OptionPatch::Cam(CamOptionPatch {
-            frame: Some(FrameOptionPatch { exposure: Some(0.7), ..Default::default() }),
-            ..Default::default()
-        });
+        let patch = OptionPatch::CamFrame(FrameOptionPatch { exposure: Some(0.7), ..Default::default() });
         assert!(patch.apply(&mut options, &mut Vec::new()));
         assert_eq!(options.cam.frame.exp_flat, 0.7);
         assert_eq!(options.cam.frame.exp_main, FrameOptions::default().exp_main);
@@ -714,72 +697,45 @@ mod tests {
     fn followup_events_mapping() {
         let mut options = Options::default();
 
-        let patch = OptionPatch::Cam(CamOptionPatch {
-            ctrl: Some(CamCtrlOptionPatch { temperature: Some(-10.0), ..Default::default() }),
-            ..Default::default()
-        });
+        let patch = OptionPatch::CamCtrl(CamCtrlOptionPatch { temperature: Some(-10.0), ..Default::default() });
         assert!(matches!(apply_collect(&patch, &mut options)[..], [Event::CameraCoolingOptionsChanged]));
 
-        let patch = OptionPatch::Cam(CamOptionPatch {
-            ctrl: Some(CamCtrlOptionPatch { enable_cooler: Some(true), ..Default::default() }),
-            ..Default::default()
-        });
+        let patch = OptionPatch::CamCtrl(CamCtrlOptionPatch { enable_cooler: Some(true), ..Default::default() });
         assert!(matches!(apply_collect(&patch, &mut options)[..], [Event::CameraCoolingOptionsChanged]));
 
         // Both cooling fields in one patch -> one event
-        let patch = OptionPatch::Cam(CamOptionPatch {
-            ctrl: Some(CamCtrlOptionPatch {
-                enable_cooler: Some(false),
-                temperature:   Some(-20.0),
-                ..Default::default()
-            }),
+        let patch = OptionPatch::CamCtrl(CamCtrlOptionPatch {
+            enable_cooler: Some(false),
+            temperature:   Some(-20.0),
             ..Default::default()
         });
         assert!(matches!(apply_collect(&patch, &mut options)[..], [Event::CameraCoolingOptionsChanged]));
 
-        let patch = OptionPatch::Cam(CamOptionPatch {
-            ctrl: Some(CamCtrlOptionPatch { heater_str: Some(Some("H1".into())), ..Default::default() }),
-            ..Default::default()
-        });
+        let patch = OptionPatch::CamCtrl(CamCtrlOptionPatch { heater_str: Some(Some("H1".into())), ..Default::default() });
         assert!(matches!(apply_collect(&patch, &mut options)[..], [Event::CameraHeaterOptionsChanged]));
 
-        let patch = OptionPatch::Cam(CamOptionPatch {
-            ctrl: Some(CamCtrlOptionPatch { enable_fan: Some(true), ..Default::default() }),
-            ..Default::default()
-        });
+        let patch = OptionPatch::CamCtrl(CamCtrlOptionPatch { enable_fan: Some(true), ..Default::default() });
         assert!(matches!(apply_collect(&patch, &mut options)[..], [Event::CameraFanOptionsChanged]));
 
-        let patch = OptionPatch::Cam(CamOptionPatch {
-            frame: Some(FrameOptionPatch { frame_type: Some(FrameType::Biases), ..Default::default() }),
-            ..Default::default()
-        });
+        let patch = OptionPatch::CamFrame(FrameOptionPatch { frame_type: Some(FrameType::Biases), ..Default::default() });
         assert!(matches!(apply_collect(&patch, &mut options)[..], [Event::CameraFrameTypeChanged]));
 
-        let patch = OptionPatch::Cam(CamOptionPatch {
-            frame: Some(FrameOptionPatch { exp_main: Some(5.0), ..Default::default() }),
-            ..Default::default()
-        });
+        let patch = OptionPatch::CamFrame(FrameOptionPatch { exp_main: Some(5.0), ..Default::default() });
         assert!(matches!(apply_collect(&patch, &mut options)[..], [Event::CameraExposureChanged]));
 
         // The routed `exposure` field fires the same event
-        let patch = OptionPatch::Cam(CamOptionPatch {
-            frame: Some(FrameOptionPatch { exposure: Some(7.5), ..Default::default() }),
-            ..Default::default()
-        });
+        let patch = OptionPatch::CamFrame(FrameOptionPatch { exposure: Some(7.5), ..Default::default() });
         assert!(matches!(apply_collect(&patch, &mut options)[..], [Event::CameraExposureChanged]));
 
         // Several frame option fields in one patch -> one event
-        let patch = OptionPatch::Cam(CamOptionPatch {
-            frame: Some(FrameOptionPatch {
-                gain: Some(2.0),
-                crop: Some(Crop::P50),
-                ..Default::default()
-            }),
+        let patch = OptionPatch::CamFrame(FrameOptionPatch {
+            gain: Some(2.0),
+            crop: Some(Crop::P50),
             ..Default::default()
         });
         assert!(matches!(apply_collect(&patch, &mut options)[..], [Event::CameraFrameOptionsChanged]));
 
-        let patch = OptionPatch::Cam(CamOptionPatch { live_view: Some(true), ..Default::default() });
+        let patch = OptionPatch::CamLiveView(true);
         assert!(matches!(apply_collect(&patch, &mut options)[..], [Event::CameraLiveViewChanged]));
 
         let patch = OptionPatch::Preview(PreviewOptionPatch { gamma: Some(2.5), ..Default::default() });
@@ -800,15 +756,13 @@ mod tests {
         let mut options = Options::default();
 
         // Camera fields with no follow-ups
-        let patch = OptionPatch::Cam(CamOptionPatch {
-            ctrl: Some(CamCtrlOptionPatch {
-                conv_gain_str: Some(Some("g".into())),
-                low_noise:     Some(true),
-                ..Default::default()
-            }),
-            frame: Some(FrameOptionPatch { auto_exp: Some(!options.cam.frame.auto_exp), ..Default::default() }),
+        let patch = OptionPatch::CamCtrl(CamCtrlOptionPatch {
+            conv_gain_str: Some(Some("g".into())),
+            low_noise:     Some(true),
             ..Default::default()
         });
+        assert!(apply_collect(&patch, &mut options).is_empty());
+        let patch = OptionPatch::CamFrame(FrameOptionPatch { auto_exp: Some(!options.cam.frame.auto_exp), ..Default::default() });
         assert!(apply_collect(&patch, &mut options).is_empty());
 
         // Unrelated section
@@ -816,7 +770,7 @@ mod tests {
         assert!(apply_collect(&patch, &mut options).is_empty());
 
         // Equal value: no event
-        let patch = OptionPatch::Cam(CamOptionPatch { live_view: Some(false), ..Default::default() });
+        let patch = OptionPatch::CamLiveView(false);
         assert!(apply_collect(&patch, &mut options).is_empty());
     }
 }
