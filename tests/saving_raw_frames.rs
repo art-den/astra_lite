@@ -538,7 +538,7 @@ fn saving_raw_frames_with_abort_and_resume() {
         if state.finished_count >= ABORT_AFTER_FRAMES {
             drop(state);
             println!("Aborting after {} frames…", ABORT_AFTER_FRAMES);
-            engine.abort_active_mode();
+            common::abort_mode(&engine);
             break;
         }
 
@@ -566,7 +566,7 @@ fn saving_raw_frames_with_abort_and_resume() {
     }
 
     println!("Resuming capture…");
-    engine.continue_aborted_mode().expect("resuming previous mode");
+    common::continue_mode(&engine);
 
     loop {
         std::thread::sleep(Duration::from_secs(1));

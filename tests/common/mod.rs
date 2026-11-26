@@ -135,6 +135,29 @@ impl Drop for EngineTeardown {
     }
 }
 
+const WAIT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Polls until `pred` is satisfied for the active mode kind. Panics on timeout.
+pub fn wait_for_mode(
+    engine: &Engine,
+    what:   &str,
+    timeout: Duration,
+    pred:   impl Fn(astra_lite::core::engine::ModeKind) -> bool,
+) {
+    let start = Instant::now();
+    loop {
+        if pred(engine.modes().active.kind()) {
+            return;
+        }
+        assert!(
+            start.elapsed() < timeout,
+            "{} not reached within {} s",
+            what, timeout.as_secs()
+        );
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
 /// Queues a mode-start command through the public `Engine::exec_command` API
 /// and waits until the mode becomes active (so tests can proceed as if the
 /// start was synchronous). Panics on timeout.
@@ -142,19 +165,28 @@ pub fn start_mode(engine: &Engine, mode_start: astra_lite::core::commands::ModeS
     use astra_lite::core::commands::Command;
     use astra_lite::core::engine::ModeKind;
 
-    const START_TIMEOUT: Duration = Duration::from_secs(10);
-
     engine.exec_command(Command::StartMode(mode_start));
-    let start = Instant::now();
-    loop {
-        if engine.modes().active.kind() != ModeKind::Waiting {
-            return;
-        }
-        assert!(
-            start.elapsed() < START_TIMEOUT,
-            "mode did not start within {} s",
-            START_TIMEOUT.as_secs()
-        );
-        thread::sleep(Duration::from_millis(100));
-    }
+    wait_for_mode(engine, "mode did not start", WAIT_TIMEOUT, |kind| kind != ModeKind::Waiting);
+}
+
+/// Queues an abort command through the public `Engine::exec_command` API and
+/// waits until the active mode is WaitingMode (so tests can proceed as if the
+/// abort was synchronous). Panics on timeout.
+pub fn abort_mode(engine: &Engine) {
+    use astra_lite::core::commands::Command;
+    use astra_lite::core::engine::ModeKind;
+
+    engine.exec_command(Command::AbortActiveMode);
+    wait_for_mode(engine, "mode did not abort", WAIT_TIMEOUT, |kind| kind == ModeKind::Waiting);
+}
+
+/// Queues a continue command through the public `Engine::exec_command` API and
+/// waits until the aborted mode becomes active again (so tests can proceed as
+/// if the resume was synchronous). Panics on timeout.
+pub fn continue_mode(engine: &Engine) {
+    use astra_lite::core::commands::Command;
+    use astra_lite::core::engine::ModeKind;
+
+    engine.exec_command(Command::ContinueAbortedMode);
+    wait_for_mode(engine, "aborted mode did not resume", WAIT_TIMEOUT, |kind| kind != ModeKind::Waiting);
 }

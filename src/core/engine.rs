@@ -990,7 +990,7 @@ impl Engine {
         self.events.send(Event::ModeChanged);
     }
 
-    pub fn continue_aborted_mode(&self) -> eyre::Result<()> {
+    fn continue_aborted_mode(&self) -> eyre::Result<()> {
         let mut mode = self.modes.write().unwrap();
         let Some(aborted_mode) = mode.aborted.take() else {
             eyre::bail!("Aborted state is empty");

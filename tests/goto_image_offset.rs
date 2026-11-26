@@ -40,19 +40,6 @@ const NO_EVENT_TIMEOUT: Duration = Duration::from_secs(240);
 /// Total budget for the step 4 flow: 3 plate solves + 3 gotos + 3 shots.
 const PLATESOLVE_FLOW_TIMEOUT: Duration = Duration::from_secs(600);
 
-/// Waits until the core returns to WaitingMode (the previous mode has finished).
-fn wait_for_waiting_mode(engine: &Engine, timeout: Duration) {
-    let start = Instant::now();
-    while engine.modes().active.kind() != ModeKind::Waiting {
-        assert!(
-            start.elapsed() < timeout,
-            "Timed out ({} s) waiting for WaitingMode",
-            timeout.as_secs()
-        );
-        std::thread::sleep(Duration::from_millis(500));
-    }
-}
-
 /// Creates the engine, connects to the hardware HAL and selects the first
 /// connected camera and telescope.
 fn setup_engine() -> Arc<Engine> {
@@ -214,7 +201,7 @@ fn run_goto_image_flow(engine: &Arc<Engine>, match_plate_solver_binning: bool) {
     };
     println!("Step 1: goto RA = {} h, Dec = {} deg", TARGET_RA, TARGET_DEC);
     common::start_mode(engine, ModeStart::GotoCoord { eq_coord: coord1, config: GotoConfig::OnlyGoto });
-    wait_for_waiting_mode(engine, Duration::from_secs(120));
+    common::wait_for_mode(engine, "waiting for WaitingMode", Duration::from_secs(120), |kind| kind == ModeKind::Waiting);
     assert_no_error(&shared, "step 1 (goto)");
     println!("Step 1: done");
 
@@ -222,7 +209,7 @@ fn run_goto_image_flow(engine: &Arc<Engine>, match_plate_solver_binning: bool) {
 
     println!("Step 2: single shot, {} s", EXPOSURE_SECS);
     common::start_mode(engine, ModeStart::SingleShot);
-    wait_for_waiting_mode(engine, Duration::from_secs(60));
+    common::wait_for_mode(engine, "waiting for WaitingMode", Duration::from_secs(60), |kind| kind == ModeKind::Waiting);
     assert_no_error(&shared, "step 2 (single shot)");
 
     assert!(
@@ -253,7 +240,7 @@ fn run_goto_image_flow(engine: &Arc<Engine>, match_plate_solver_binning: bool) {
     };
     println!("Step 3: goto with RA shifted by {} arcmin", SHIFT_RA_ARCMIN);
     common::start_mode(engine, ModeStart::GotoCoord { eq_coord: coord2, config: GotoConfig::OnlyGoto });
-    wait_for_waiting_mode(engine, Duration::from_secs(120));
+    common::wait_for_mode(engine, "waiting for WaitingMode", Duration::from_secs(120), |kind| kind == ModeKind::Waiting);
     assert_no_error(&shared, "step 3 (goto with shift)");
     println!("Step 3: done");
 
@@ -320,8 +307,7 @@ fn run_goto_image_flow(engine: &Arc<Engine>, match_plate_solver_binning: bool) {
 
     // The Checking state loops forever; abort the mode before asserting, so
     // the camera is stopped even if the assertion below panics.
-    engine.abort_active_mode();
-    wait_for_waiting_mode(engine, Duration::from_secs(30));
+    common::abort_mode(engine);
 
     let offset = checking.offset.clone();
     assert!(

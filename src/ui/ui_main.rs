@@ -441,8 +441,7 @@ impl MainUi {
             dialog.connect_response(clone!(@weak self as self_ =>
                 move |dlg, response| {
                 if response == gtk::ResponseType::Yes {
-                    // Sync on purpose: the engine is about to be stopped, queued commands would be discarded
-                    self_.engine.abort_active_mode();
+                    self_.engine.exec_command(Command::AbortActiveMode);
                     self_.close_win_flag.set(true);
                 }
                 dlg.close();
