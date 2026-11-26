@@ -60,6 +60,7 @@ Note for those editing this file: The file should contain only general informati
 
 ## Build and test
 
+- `cargo fmt` is not used in this project; do not run it.
 - `cargo check` / `cargo build` builds the default members (the app + `crates/starsolver`).
 - Unit tests need no hardware: `cargo test --lib -p astra_lite`.
 - Integration tests in `tests/` drive the whole device stack through a local server: `indiserver` with simulator drivers on Linux, ASCOM Alpaca drivers on Windows (a few use ASCOM Classic COM drivers, one needs no hardware at all). They are slow and serialized by a cross-process lock (`tests/common`).
