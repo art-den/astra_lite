@@ -2,7 +2,7 @@ use std::{rc::Rc, sync::Arc, cell::RefCell};
 use gtk::{cairo, glib::{self, clone}, prelude::*};
 use macros::FromBuilder;
 use crate::{
-    core::{commands::Command, cur_devices::CurDevices, engine::*, events::*, frame_processing::*, utils::{FileNameArg, FileNameUtils}}, hal::{DeviceType, FrameType, HalState, events::HalEvent}, image::{info::*, raw::CalibrMethods}, options::*,
+    core::{commands::{Command, ModeStart}, cur_devices::CurDevices, engine::*, events::*, frame_processing::*, utils::{FileNameArg, FileNameUtils}}, hal::{DeviceType, FrameType, HalState, events::HalEvent}, image::{info::*, raw::CalibrMethods}, options::*,
 };
 use super::{gtk_utils::*, module::*, ui_main::*, ui_start_dialog::StartDialog, utils::*};
 
@@ -382,6 +382,7 @@ impl UiModule for CameraUi {
     fn on_app_closing(&self) {
         _ = self.engine.stop_img_process_thread();
 
+        // Sync on purpose: the engine is about to be stopped, queued commands would be discarded
         self.engine.abort_active_mode();
 
         // Stores current options for current camera
@@ -1305,22 +1306,16 @@ impl CameraUi {
 
     fn start_live_view(&self) {
         self.main_ui.get_all_options();
-        exec_and_show_error(Some(&self.window), || {
-            self.engine.start_live_view()?;
-            Ok(())
-        });
+        self.engine.exec_command(Command::StartMode(ModeStart::LiveView));
     }
 
     fn handler_action_take_shot(&self) {
         self.main_ui.get_all_options();
-        exec_and_show_error(Some(&self.window), || {
-            self.engine.start_single_shot()?;
-            Ok(())
-        });
+        self.engine.exec_command(Command::StartMode(ModeStart::SingleShot));
     }
 
     fn handler_action_stop_shot(&self) {
-        self.engine.abort_active_mode();
+        self.engine.exec_command(Command::AbortActiveMode);
     }
 
     fn show_cur_temperature_value(
@@ -1356,7 +1351,7 @@ impl CameraUi {
             self.main_ui.get_all_options();
             self.start_live_view();
         } else {
-            self.engine.abort_active_mode();
+            self.engine.exec_command(Command::AbortActiveMode);
         }
     }
 
@@ -1387,22 +1382,23 @@ impl CameraUi {
             &info_pairs
         );
         dialog.exec(clone!(@strong self as self_ => move || {
-            self_.engine.start_live_stacking()?;
+            self_.engine.exec_command(Command::StartMode(ModeStart::LiveStacking));
             Ok(())
         }));
     }
 
     fn handler_action_stop_live_stacking(&self) {
-        self.engine.abort_active_mode();
+        self.engine.exec_command(Command::AbortActiveMode);
     }
 
     fn handler_action_continue_live_stacking(&self) {
         self.main_ui.get_all_options();
-        exec_and_show_error(Some(&self.window), || {
+        let ok = exec_and_show_error(Some(&self.window), || {
             self.engine.check_before_saving_raw_or_live_stacking()?;
-            self.engine.continue_aborted_mode()?;
             Ok(())
         });
+        if !ok { return; }
+        self.engine.exec_command(Command::ContinueAbortedMode);
     }
 
     fn update_shot_state(&self) {
@@ -1555,22 +1551,23 @@ impl CameraUi {
             &info_pairs
         );
         dialog.exec(clone!(@strong self as self_ => move || {
-            self_.engine.start_saving_raw_frames()?;
+            self_.engine.exec_command(Command::StartMode(ModeStart::SavingRawFrames));
             Ok(())
         }));
     }
 
     fn handler_action_continue_save_raw_frames(&self) {
         self.main_ui.get_all_options();
-        exec_and_show_error(Some(&self.window), || {
+        let ok = exec_and_show_error(Some(&self.window), || {
             self.engine.check_before_saving_raw_or_live_stacking()?;
-            self.engine.continue_aborted_mode()?;
             Ok(())
         });
+        if !ok { return; }
+        self.engine.exec_command(Command::ContinueAbortedMode);
     }
 
     fn handler_action_stop_save_raw_frames(&self) {
-        self.engine.abort_active_mode();
+        self.engine.exec_command(Command::AbortActiveMode);
     }
 
     fn show_total_raw_time_impl(&self, options: &Options) {

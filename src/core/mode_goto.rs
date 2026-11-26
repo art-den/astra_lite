@@ -1,4 +1,5 @@
 use std::sync::{Arc, RwLock};
+use serde::{Serialize, Deserialize};
 use crate::{
     core::{cam_ctrl::take_shot, consts::*, events::*, frame_processing::*, preview::Preview}, hal::{Camera, FrameType, Telescope}, image::{image::Image, info::LightFrameInfo, stars::{StarItems, Stars}, stars_offset::Point}, options::*, plate_solve::*, sky_math::math::*, utils::log_utils::log_if_error,
 };
@@ -34,7 +35,7 @@ pub enum GotoDestination {
     Coord(EqCoord)
 }
 
-#[derive(PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub enum GotoConfig {
     OnlyGoto,
     GotoPlateSolveAndCorrect,

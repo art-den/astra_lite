@@ -2,7 +2,7 @@ use std::{cell::Cell, rc::Rc, sync::Arc};
 use gtk::{glib::{self, clone}, pango, prelude::*};
 use macros::FromBuilder;
 use crate::{
-    core::{commands::{Command, ModeCommand}, engine::{Engine, ModeKind}, events::*, mode_polar_align::{PolarAlignCommand, PolarAlignMode, PolarAlignmentEvent}},
+    core::{commands::{Command, ModeCommand, ModeStart}, engine::{Engine, ModeKind}, events::*, mode_polar_align::{PolarAlignCommand, PolarAlignMode, PolarAlignmentEvent}},
     hal::{DeviceType, events::HalEvent},
     options::*,
     sky_math::math::*,
@@ -325,10 +325,7 @@ impl PolarAlignUi {
 
         // Start mode
 
-        exec_and_show_error(Some(&self.window), || {
-            self.engine.start_polar_alignment()?;
-            Ok(())
-        });
+        self.engine.exec_command(Command::StartMode(ModeStart::PolarAlign));
     }
 
     fn handler_action_restart_polar_align(&self) {
@@ -340,7 +337,7 @@ impl PolarAlignUi {
     }
 
     fn handler_action_stop_polar_align(&self) {
-        self.engine.abort_active_mode();
+        self.engine.exec_command(Command::AbortActiveMode);
     }
 
     fn handler_action_manual_refresh(&self) {

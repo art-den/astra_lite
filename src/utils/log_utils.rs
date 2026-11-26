@@ -50,6 +50,11 @@ pub fn start_logger(log_path: &Path) -> eyre::Result<()> {
     Ok(())
 }
 
+/// Error text for the user: full chain in debug builds, top-level message otherwise
+pub fn error_to_user_string(err: &eyre::Report) -> String {
+    if cfg!(debug_assertions) { format!("{:?}", err) } else { err.to_string() }
+}
+
 /// If `res` is `Err`, logs the error with `context`.
 pub fn log_if_error<T, E: std::fmt::Debug>(res: &Result<T, E>, context: &str) {
     if let Err(err) = res {

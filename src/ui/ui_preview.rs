@@ -447,6 +447,7 @@ impl UiModule for PreviewUi {
 
     fn on_app_closing(&self) {
         _ = self.engine.stop_img_process_thread();
+        // Sync on purpose: the engine is about to be stopped, queued commands would be discarded
         self.engine.abort_active_mode();
 
         self.get_ui_options_from_widgets();

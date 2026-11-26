@@ -1,5 +1,7 @@
 use std::{collections::VecDeque, sync::{Arc, Mutex}};
 
+use serde::{Serialize, Deserialize};
+
 use crate::{
     core::{ mode_camera::{CameraMode, TakingPicturesMode}, mode_waiting::WaitingMode, raw_calibration::RawCalibration}, hal::Camera, options::*
 };
@@ -14,13 +16,14 @@ enum State {
     WaitingForDarkCreation,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub enum DarkLibMode {
     DefectPixels,
     MasterDark,
     MasterBias,
 }
 
-#[derive(Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct MasterFileCreationProgramItem {
     pub count:       usize,
     pub temperature: Option<f64>,

@@ -183,11 +183,7 @@ pub fn exec_and_show_error(
 ) -> bool {
     let exec_res = fun();
     if let Err(err) = exec_res {
-        let message = if cfg!(debug_assertions) {
-            format!("{:?}", err)
-        } else {
-            err.to_string()
-        };
+        let message = crate::utils::log_utils::error_to_user_string(&err);
         log::error!("Error in exec_and_show_error: {:?}", err);
         show_error_message(window, "Error", &message);
         return false;

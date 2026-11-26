@@ -40,6 +40,7 @@ Note for those editing this file: The file should contain only general informati
 - `src/sky_math` - Sky math: coordinates, Solar system.
 - `src/ui` - GTK interface: device panels, preview, sky map, dialogs. UI layout is in `.ui` files, widget structs are filled by `#[derive(FromBuilder)]`: its field names must match the object IDs in the `.ui` file, which is checked at runtime, not at compile time.
 - User option changes from UI go through `Engine::exec_command(Command::ChangeOptions(OptionPatch))` (see `src/options/patch.rs`): the command is queued and applied by the engine command thread (fire and forget). Follow-up events are sent by the command executor (see `option_change_events` in `src/core/engine.rs`). Phantom commands from reentrant widget signals are no-ops (widget value equals the option value). Code that mutates widgets programmatically holds the `options` read lock to get a consistent snapshot of the options.
+- Work mode start/stop/resume from UI also go through `Engine::exec_command` (`Command::StartMode`/`AbortActiveMode`/`ContinueAbortedMode`, see `src/core/commands.rs`); command errors arrive as `Event::Error`. After `Engine::stop` queued commands are discarded, so shutdown paths call `abort_active_mode()` synchronously.
 - `src/ui/debug` - UI automation debug mode (`--debug` flag): simulated clicks, screenshots.
 - `src/ui/resources` - GTK ui-files, images
 - `src/ui/sky_map` - Sky map widget

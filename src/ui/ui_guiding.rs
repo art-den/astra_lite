@@ -3,7 +3,7 @@ use gtk::{prelude::*, glib, glib::clone};
 use macros::FromBuilder;
 
 use crate::{
-    core::{commands::Command, engine::*, events::*}, guiding::external_guider::*, hal::events::HalEvent, options::*
+    core::{commands::{Command, ModeStart}, engine::*, events::*}, guiding::external_guider::*, hal::events::HalEvent, options::*
 };
 
 use super::{gtk_utils::*, module::*, ui_main::*, utils::*};
@@ -295,14 +295,11 @@ impl GuidingUi {
     fn handler_action_start_dither_calibr(&self) {
         self.main_ui.get_all_options();
 
-        exec_and_show_error(Some(&self.window), || {
-            self.engine.start_mount_calibr()?;
-            Ok(())
-        });
+        self.engine.exec_command(Command::StartMode(ModeStart::MountCalibr));
     }
 
     fn handler_action_stop_dither_calibr(&self) {
-        self.engine.abort_active_mode();
+        self.engine.exec_command(Command::AbortActiveMode);
     }
 
     fn process_ext_guider_event(&self, evt: &ExtGuiderEvent) {

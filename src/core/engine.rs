@@ -1,11 +1,11 @@
 use std::{
     any::Any, fmt::Display, path::Path,
-    sync::{Arc, Mutex, RwLock, RwLockReadGuard, atomic::AtomicBool, mpsc},
+    sync::{Arc, Mutex, RwLock, RwLockReadGuard, Weak, atomic::AtomicBool, mpsc},
     thread::JoinHandle,
 };
 
 use crate::{
-    core::{cam_ctrl::*, cur_devices::CurDevices, live_stacking::LiveStacking, preview::{Preview, ResultImageInfo}, raw_calibration::{CalibrParams, RawCalibration}, utils::FileNameUtils}, guiding::external_guider::*, hal::{events::HalEvent, *}, image::io::FromFileCameraShot, options::*, sky_math::math::EqCoord, utils::{log_utils::log_if_error, timer::*},
+    core::{cam_ctrl::*, cur_devices::CurDevices, live_stacking::LiveStacking, preview::{Preview, ResultImageInfo}, raw_calibration::{CalibrParams, RawCalibration}, utils::FileNameUtils}, guiding::external_guider::*, hal::{events::HalEvent, *}, image::io::FromFileCameraShot, options::*, sky_math::math::EqCoord, utils::{log_utils::{error_to_user_string, log_if_error}, timer::*},
 };
 
 use super::{
@@ -115,11 +115,15 @@ pub struct Engine {
     img_proc_stop_flag: Mutex<Arc<AtomicBool>>, // stop flag for last command
     frame_processing:   Arc<FrameProcessing>,
     cmd_tx:             mpsc::Sender<Command>,
-    cmd_thread:         Option<JoinHandle<()>>,
+    cmd_thread:         Mutex<Option<JoinHandle<()>>>,
+    /// Set on `stop`/`drop`: stops the command worker and rejects new commands
+    cmd_closing:        AtomicBool,
 }
 
 impl Drop for Engine {
     fn drop(&mut self) {
+        self.cmd_closing.store(true, std::sync::atomic::Ordering::SeqCst);
+
         // Same ASCOM teardown as Hal::disconnect_all(): panic = "abort" bypasses
         // stop(), and an out-of-proc driver keeps `Connected` unless disconnected.
         // INDI needs no teardown here: the OS releases sockets at process exit.
@@ -131,8 +135,13 @@ impl Drop for Engine {
             let (dummy_tx, _dummy_rx) = mpsc::channel::<Command>();
             drop(std::mem::replace(&mut self.cmd_tx, dummy_tx));
         }
-        if let Some(handle) = self.cmd_thread.take() {
-            let _ = handle.join();
+        if let Some(handle) = self.cmd_thread.lock().unwrap().take() {
+            // If the last engine Arc was released on the command thread (all
+            // other owners dropped it while a command was running), Drop runs
+            // here: joining itself would abort the process
+            if handle.thread().id() != std::thread::current().id() {
+                let _ = handle.join();
+            }
         }
 
         log::info!("Engine dropped");
@@ -150,14 +159,6 @@ impl Engine {
         let cur_devices = CurDevices::new(&options, &hal, &events);
 
         let (cmd_tx, cmd_rx) = mpsc::channel();
-        let cmd_thread = {
-            let options = Arc::clone(&options);
-            let events  = Arc::clone(&events);
-            std::thread::Builder::new()
-                .name("engine_cmd".into())
-                .spawn(move || Self::command_worker(cmd_rx, &options, &events))
-                .expect("spawn engine_cmd thread")
-        };
 
         let this = Arc::new(Self {
             options:            Arc::clone(&options),
@@ -173,8 +174,17 @@ impl Engine {
             frame_processing,
             events,
             cmd_tx,
-            cmd_thread: Some(cmd_thread),
+            cmd_thread: Mutex::new(None),
+            cmd_closing: AtomicBool::new(false),
         });
+
+        // The worker needs an engine handle, so it can only start after `Arc` exists
+        let weak = Arc::downgrade(&this);
+        let handle = std::thread::Builder::new()
+            .name("engine_cmd".into())
+            .spawn(move || Self::command_worker(cmd_rx, weak))
+            .expect("spawn engine_cmd thread");
+        *this.cmd_thread.lock().unwrap() = Some(handle);
 
         this.set_ext_guider_events_handler();
         this.connect_events();
@@ -183,6 +193,9 @@ impl Engine {
     }
 
     pub fn stop(self: &Arc<Self>) {
+        // A queued mode must not start while/after the engine is torn down
+        self.cmd_closing.store(true, std::sync::atomic::Ordering::SeqCst);
+
         self.timer.clear();
         self.ext_guider.disconnect_events_handler();
         self.ext_guider.phd2_conn().disconnect_all_event_handlers();
@@ -251,11 +264,7 @@ impl Engine {
         context: &str,
     ) {
         let Err(err) = result else { return; };
-        if cfg!(debug_assertions) {
-            self.process_error_str(&format!("{:?}", err), context);
-        } else {
-            self.process_error_str(&err, context);
-        }
+        self.process_error_str(&error_to_user_string(&err), context);
     }
 
     fn process_error_str(self: &Arc<Self>, error_text: &impl Display, context: &str) {
@@ -624,28 +633,84 @@ impl Engine {
     /// Queues an app-level command for the engine command thread (fire and
     /// forget: the executor logs errors and sends follow-up events, so their
     /// side effects, incl. HAL device calls, run on that thread).
-    /// Phantom commands from reentrant widget signals are harmless here:
-    /// the widget value equals the option value, so applying them is a no-op
-    /// (`changed = false`).
+    /// Phantom `ChangeOptions` commands from reentrant widget signals are
+    /// harmless: the widget value equals the option value, so applying them is
+    /// a no-op (`changed = false`). Mode lifecycle commands come only from
+    /// explicit user actions.
+    /// Commands are discarded once `Engine::stop`/drop has begun.
     pub fn exec_command(
         &self,
         cmd:  Command,
     ) {
+        if self.cmd_closing.load(std::sync::atomic::Ordering::SeqCst) {
+            log::warn!("Engine is closing, command not queued: {:?}", cmd);
+            return;
+        }
         if let Err(e) = self.cmd_tx.send(cmd) {
             log::error!("Engine command channel is closed: {e}");
         }
     }
 
+    /// Runs the command queue on the `engine_cmd` thread.
+    /// Command errors are reported as log + `Event::Error`: a failed command
+    /// must not abort the running mode, so `process_error` is not used here
     fn command_worker(
-        rx:      mpsc::Receiver<Command>,
-        options: &RwLock<Options>,
-        events:  &EventHandlers,
+        rx:     mpsc::Receiver<Command>,
+        engine: Weak<Engine>,
     ) {
         while let Ok(cmd) = rx.recv() {
+            // While idle the worker holds no strong engine reference; if the
+            // last Arc is released during a command, `Engine::drop` runs on
+            // this thread (see the self-join guard in `Drop`)
+            let Some(engine) = engine.upgrade() else {
+                log::debug!("Engine destroyed, {} queued command(s) discarded", 1 + rx.try_iter().count());
+                break;
+            };
+            if engine.cmd_closing.load(std::sync::atomic::Ordering::SeqCst) {
+                log::warn!("Engine is closing, {} queued command(s) discarded", 1 + rx.try_iter().count());
+                break;
+            }
             match cmd {
-                Command::ChangeOptions(patch) => Self::apply_change_options(&patch, options, events),
+                Command::ChangeOptions(patch) =>
+                    Self::apply_change_options(&patch, &engine.options, &engine.events),
+                Command::StartMode(mode_start) => Self::exec_start_mode(&engine, mode_start),
+                Command::AbortActiveMode => engine.abort_active_mode(),
+                Command::ContinueAbortedMode => {
+                    if let Err(e) = engine.continue_aborted_mode() {
+                        Self::report_command_error(&engine, "Continue aborted mode", e);
+                    }
+                }
             }
         }
+    }
+
+    fn exec_start_mode(engine: &Arc<Engine>, mode_start: ModeStart) {
+        log::debug!("Start mode command: {:?}", mode_start);
+        let result = match mode_start {
+            ModeStart::SingleShot            => engine.start_single_shot(),
+            ModeStart::LiveView              => engine.start_live_view(),
+            ModeStart::SavingRawFrames       => engine.start_saving_raw_frames(),
+            ModeStart::LiveStacking          => engine.start_live_stacking(),
+            ModeStart::Focusing              => engine.start_focusing(),
+            ModeStart::MountCalibr           => engine.start_mount_calibr(),
+            ModeStart::GotoImage             => engine.start_goto_image(),
+            ModeStart::CaptureAndPlatesolve  => engine.start_capture_and_platesolve(),
+            ModeStart::PolarAlign            => engine.start_polar_alignment(),
+            ModeStart::GotoCoord { eq_coord, config } =>
+                engine.start_goto_coord(&eq_coord, config),
+            ModeStart::CreatingDarkLibrary { dark_lib_mode, ref program } =>
+                engine.start_creating_dark_library(dark_lib_mode, program),
+        };
+        if let Err(e) = result {
+            // No `process_error` here: a failed start must not abort the running mode
+            Self::report_command_error(engine, "Start mode", e);
+        }
+    }
+
+    /// Log an error of a queued command and report it to the UI as `Event::Error`
+    fn report_command_error(engine: &Engine, context: &str, error: eyre::Report) {
+        log::error!("Error {}: {:#}", context, error);
+        engine.events.send(Event::Error(format!("{}: {}", context, error_to_user_string(&error))));
     }
 
     fn apply_change_options(
@@ -1083,7 +1148,7 @@ fn option_change_events(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::commands::Command;
+    use crate::core::commands::{Command, ModeStart};
     use crate::options::{MountOptionPatch, OptionPatch};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -1150,6 +1215,52 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(50));
         drop(guard);
         assert!(wait_until(|| engine.options.read().unwrap().mount.inv_ns));
+    }
+
+    #[test]
+    fn exec_command_start_mode_without_camera_sends_error() {
+        let engine = Engine::new();
+        let err_cnt = std::sync::Arc::new(AtomicUsize::new(0));
+        let err_cnt2 = std::sync::Arc::clone(&err_cnt);
+        let _id = engine.events.connect(move |event| {
+            if matches!(event, Event::Error(_)) {
+                err_cnt2.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+
+        // No camera connected: the start must fail with an error event,
+        // the active mode must stay Waiting
+        engine.exec_command(Command::StartMode(ModeStart::SingleShot));
+        assert!(wait_until(|| err_cnt.load(Ordering::SeqCst) == 1));
+        assert_eq!(engine.modes().active.kind(), ModeKind::Waiting);
+    }
+
+    #[test]
+    fn exec_command_abort_active_mode_is_processed_by_worker() {
+        let engine = Engine::new();
+        // Waiting mode: the abort is a no-op, the following (FIFO) option
+        // change proves the worker consumed the abort command
+        engine.exec_command(Command::AbortActiveMode);
+        engine.exec_command(Command::ChangeOptions(OptionPatch::Mount(MountOptionPatch {
+            inv_ns: Some(true),
+            ..Default::default()
+        })));
+        assert!(wait_until(|| engine.options.read().unwrap().mount.inv_ns));
+    }
+
+    #[test]
+    fn exec_command_continue_aborted_mode_empty_sends_error() {
+        let engine = Engine::new();
+        let err_cnt = std::sync::Arc::new(AtomicUsize::new(0));
+        let err_cnt2 = std::sync::Arc::clone(&err_cnt);
+        let _id = engine.events.connect(move |event| {
+            if matches!(event, Event::Error(_)) {
+                err_cnt2.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+
+        engine.exec_command(Command::ContinueAbortedMode);
+        assert!(wait_until(|| err_cnt.load(Ordering::SeqCst) == 1));
     }
 
     fn change_events(before: &Options, after: &Options) -> Vec<Event> {

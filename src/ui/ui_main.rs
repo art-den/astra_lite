@@ -11,7 +11,7 @@ use gtk::{prelude::*, glib, glib::clone, cairo};
 use macros::FromBuilder;
 use serde::{Serialize, Deserialize};
 use crate::{
-    core::{engine::*, events::*}, hal::events::HalEvent, options::*, utils::io_utils::*,
+    core::{commands::Command, engine::*, events::*}, hal::events::HalEvent, options::*, utils::io_utils::*,
 };
 use super::{gtk_utils::*, module::*, utils::*};
 
@@ -441,6 +441,7 @@ impl MainUi {
             dialog.connect_response(clone!(@weak self as self_ =>
                 move |dlg, response| {
                 if response == gtk::ResponseType::Yes {
+                    // Sync on purpose: the engine is about to be stopped, queued commands would be discarded
                     self_.engine.abort_active_mode();
                     self_.close_win_flag.set(true);
                 }
@@ -700,14 +701,11 @@ impl MainUi {
     }
 
     fn handler_action_stop(&self) {
-        self.engine.abort_active_mode();
+        self.engine.exec_command(Command::AbortActiveMode);
     }
 
     fn handler_action_continue(&self) {
-        exec_and_show_error(Some(&self.widgets.window), || {
-            self.engine.continue_aborted_mode()?;
-            Ok(())
-        });
+        self.engine.exec_command(Command::ContinueAbortedMode);
     }
 
     fn handler_btn_fullscreen(&self, btn: &gtk::ToggleButton) {

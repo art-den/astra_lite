@@ -2,7 +2,10 @@
 #![allow(unused)]
 
 pub mod utils;
-use crate::core::engine::{Engine, ModeKind};
+use crate::core::{
+    commands::{Command, ModeStart},
+    engine::{Engine, ModeKind},
+};
 use gtk::traits::{AdjustmentExt, ComboBoxExt, ScrolledWindowExt, SpinButtonExt, ToggleButtonExt, WidgetExt};
 pub use utils::*;
 
@@ -167,10 +170,8 @@ fn debug_ascom_camera(app: &gtk::Application, engine: &Engine) {
     if btn_take_shot.is_sensitive() {
         // --debug scenario: direct options write (not migrated to commands yet)
         engine.options.write().unwrap().cam.frame.set_exposure(1.0);
-        match engine.start_single_shot() {
-            Ok(_) => log::info!("DBG single shot started"),
-            Err(err) => log::error!("DBG start_single_shot failed: {err}"),
-        }
+        engine.exec_command(Command::StartMode(ModeStart::SingleShot));
+        log::info!("DBG single shot start command sent");
 
         for i in 0..20 {
             test_pause_ms(1000);
@@ -236,10 +237,8 @@ fn debug_ascom_switch(app: &gtk::Application, engine: &Engine) {
         // --debug scenario: direct options write (not migrated to commands yet)
         engine.options.write().unwrap().cam.frame.set_exposure(1.0);
         test_switch_tab(app, "lb_tab_common");
-        match engine.start_single_shot() {
-            Ok(_) => log::info!("DBG single shot started"),
-            Err(err) => log::error!("DBG start_single_shot failed: {err}"),
-        }
+        engine.exec_command(Command::StartMode(ModeStart::SingleShot));
+        log::info!("DBG single shot start command sent");
 
         for i in 0..15 {
             test_pause_ms(1000);
@@ -292,10 +291,8 @@ fn debug_ascom_bin2(app: &gtk::Application, engine: &Engine) {
         options.cam.frame.set_exposure(1.0);
     }
     test_switch_tab(app, "lb_tab_common");
-    match engine.start_single_shot() {
-        Ok(_) => log::info!("DBG bin2: single shot started"),
-        Err(err) => log::error!("DBG bin2: start_single_shot failed: {err}"),
-    }
+    engine.exec_command(Command::StartMode(ModeStart::SingleShot));
+    log::info!("DBG bin2: single shot start command sent");
 
     for i in 0..20 {
         test_pause_ms(1000);
