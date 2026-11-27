@@ -12,16 +12,16 @@ TARGET_DIR=$SCRIPT_DIR/target_cross
 
 TARGET=aarch64-unknown-linux-gnu
 cross build --release --target $TARGET --target-dir $TARGET_DIR
-cross-util run --target $TARGET -- "python3 $SCRIPT_DIR/scripts/create-deb-package.py --arch=arm64 --bin=$TARGET_DIR/$TARGET/release/astra_lite"
+cross-util run --target $TARGET -- "python3 $SCRIPT_DIR/scripts/create-deb-package.py --arch=arm64 --bin=$TARGET_DIR/$TARGET/release/astra_lite --starsolver-bin=$TARGET_DIR/$TARGET/release/starsolver"
 
 # armhf
 
 TARGET=armv7-unknown-linux-gnueabihf
 cross build --release --target $TARGET --target-dir $TARGET_DIR
-cross-util run --target $TARGET -- "python3 $SCRIPT_DIR/scripts/create-deb-package.py --arch=armhf --bin=$TARGET_DIR/$TARGET/release/astra_lite"
+cross-util run --target $TARGET -- "python3 $SCRIPT_DIR/scripts/create-deb-package.py --arch=armhf --bin=$TARGET_DIR/$TARGET/release/astra_lite --starsolver-bin=$TARGET_DIR/$TARGET/release/starsolver"
 
 # amd64
 
 TARGET=x86_64-unknown-linux-gnu
 cross build --release --target $TARGET --target-dir $TARGET_DIR
-cross-util run --target $TARGET -- "python3 $SCRIPT_DIR/scripts/create-deb-package.py --arch=amd64 --bin=$TARGET_DIR/$TARGET/release/astra_lite"
+cross-util run --target $TARGET -- "python3 $SCRIPT_DIR/scripts/create-deb-package.py --arch=amd64 --bin=$TARGET_DIR/$TARGET/release/astra_lite --starsolver-bin=$TARGET_DIR/$TARGET/release/starsolver"

@@ -9,6 +9,7 @@ parser = argparse.ArgumentParser(
                     description='Generate deb-file for AstraLite')
 parser.add_argument('--arch')
 parser.add_argument('--bin')
+parser.add_argument('--starsolver-bin')
 args = parser.parse_args()
 
 # File names and directories
@@ -24,6 +25,13 @@ else:
     bin_file = os.path.join(this_path, "..", "target", "release", bin)
 if not os.path.isfile(bin_file):
     sys.exit("Binary not found: %s. Build it first with `cargo build --release` or pass --bin." % bin_file)
+starsolver_bin = "starsolver"
+if args.starsolver_bin != None:
+    starsolver_bin_file = args.starsolver_bin
+else:
+    starsolver_bin_file = os.path.join(this_path, "..", "target", "release", starsolver_bin)
+if not os.path.isfile(starsolver_bin_file):
+    sys.exit("Binary not found: %s. Build it first with `cargo build --release` or pass --starsolver-bin." % starsolver_bin_file)
 dist_dir = os.path.join(this_path, "..", "dist")
 cargo_toml = os.path.join(this_path, "..", "Cargo.toml")
 os.makedirs(dist_dir, exist_ok=True)
@@ -62,6 +70,7 @@ os.makedirs(debian_folder, exist_ok=True)
 full_bin_dir = os.path.join(package_dir, bin_dir)
 os.makedirs(full_bin_dir, exist_ok=True)
 shutil.copy(bin_file, full_bin_dir)
+shutil.copy(starsolver_bin_file, full_bin_dir)
 shutil.copy(icon_file, full_bin_dir)
 shutil.copytree(mapdata_in_dir, os.path.join(full_bin_dir, "data"), dirs_exist_ok=True)
 
@@ -106,7 +115,8 @@ os.chdir(package_dir)
 shlibdeps_res = subprocess.check_output([
     'dpkg-shlibdeps',
     '-O',
-    os.path.join(bin_dir, bin)
+    os.path.join(bin_dir, bin),
+    os.path.join(bin_dir, starsolver_bin)
 ])
 dependices = shlibdeps_res.decode('utf-8', 'ignore').replace('shlibs:Depends=', '').strip()
 shutil.rmtree(dep_debian_folder, ignore_errors=True)

@@ -161,7 +161,7 @@ cargo install cross --git https://github.com/cross-rs/cross
 ### How to build
 Execute `build_cross.sh`. Once `build_cross.sh` has finished running, you will find the deb packages in the `dist` folder.
 
-Note: the deb package contains the app and the sky map data, `starsolver` is not packaged.
+Note: the deb package contains the app, `starsolver` and the sky map data.
 
 ## Data sources
 DSO:
