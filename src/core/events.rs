@@ -16,6 +16,8 @@ pub enum OverlayMessagePos {
 #[derive(Clone)]
 pub enum Event {
     Error(String),
+    /// Non-fatal device error: the UI must show it without aborting the active mode
+    ErrorMessage(String),
     ModeContinued,
     CameraDeviceChanged(String),
     MountDeviceChanged(String),

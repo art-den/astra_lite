@@ -975,8 +975,10 @@ impl DarksLibraryUI {
         let (sender, receiver) = async_channel::unbounded();
         self.engine.events.connect(move |evt| {
             // The receiver side may already be gone (module dropped on window close),
-            // so a failed send is simply dropped instead of panicking
-            _ = sender.send_blocking(evt);
+            // so a failed send is simply dropped. `try_send` (not `send_blocking`):
+            // events can be sent from the main thread inside a future poll, where
+            // `send_blocking` must not be used; the channel is unbounded
+            _ = sender.try_send(evt);
         });
         // Upgrade the weak ref inside the loop body (not via clone!@weak before
         // `async move`): otherwise the strong ref obtained at the first poll would

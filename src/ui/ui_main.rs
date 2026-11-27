@@ -59,6 +59,7 @@ pub fn init_ui(
         perf_string:    RefCell::new(String::new()),
         expanders:      RefCell::new(Vec::new()),
         closed:         Cell::new(false),
+        last_error_message: RefCell::new(String::new()),
         self_:          RefCell::new(None), // used to drop MainUi in window's delete_event
     });
 
@@ -234,6 +235,7 @@ pub struct MainUi {
     perf_string:    RefCell<String>,
     expanders:      RefCell<Vec<(String, gtk::Expander, bool)>>,
     closed:         Cell<bool>,
+    last_error_message: RefCell<String>,
     self_:          RefCell<Option<Rc<MainUi>>>
 }
 
@@ -387,16 +389,19 @@ impl MainUi {
 
         // HAL
 
+        // `try_send` (not `send_blocking`): the channel is unbounded, and event
+        // senders run on any thread, including the main thread inside a future
+        // poll, where `send_blocking` must not be used
         let sender = main_thread_sender.clone();
         self.engine.hal.connect_event_handler(move |event| {
-            _ = sender.send_blocking(MainThreadEvent::Hal(event));
+            _ = sender.try_send(MainThreadEvent::Hal(event));
         });
 
         // Core
 
         let sender = main_thread_sender.clone();
         self.engine.events.connect(move |event| {
-            _ = sender.send_blocking(MainThreadEvent::Core(event));
+            _ = sender.try_send(MainThreadEvent::Core(event));
         });
 
         // Upgrade the weak ref inside the loop body (not via clone!@weak before
@@ -568,9 +573,24 @@ impl MainUi {
 
         match core_event {
             Event::Error(err) => {
+                *self.last_error_message.borrow_mut() = String::new();
                 show_error_message(
                     Some(&self.widgets.window),
                     "Core error",
+                    err
+                );
+            }
+            Event::ErrorMessage(err) => {
+                // Suppress consecutive duplicates: a persistently failing device
+                // re-triggers state refreshes on many events and would stack modal dialogs
+                {
+                    let mut last = self.last_error_message.borrow_mut();
+                    if *last == *err { return; }
+                    *last = err.clone();
+                }
+                show_error_message(
+                    Some(&self.widgets.window),
+                    "Device error",
                     err
                 );
             }

@@ -3,6 +3,10 @@
 //! Each `*_panel_state` function computes the complete set of widget
 //! properties for one panel from server-side sources (engine, options,
 //! HAL). The GTK UI applies the result mechanically. No GTK types here.
+//!
+//! NOTE: these getters are not fully side-effect free: a failing HAL query
+//! reports `Event::ErrorMessage` through the engine (see `hal_or_report`).
+//! Once a web API exists, such errors should travel inside the state structs.
 
 use std::ops::RangeInclusive;
 use std::sync::Arc;
@@ -11,11 +15,13 @@ use serde::Serialize;
 
 use crate::core::commands::{ModeCommand, ModeCommandReply};
 use crate::core::engine::{Engine, ModeKind};
+use crate::core::events::Event;
 use crate::core::mode_polar_align::{PolarAlignCommand, PolarAlignState};
 use crate::core::utils::{FileNameArg, FileNameUtils};
 use crate::hal::{Camera, DeviceType, FrameType, Telescope};
 use crate::image::raw::CalibrMethods;
 use crate::options::{Binning, GuidingMode, PreviewSource};
+use crate::utils::log_utils::error_to_user_string;
 
 /// Serializable spinbutton range + parameters (mirrors `correct_spinbutton_by_range`).
 #[derive(Clone, Debug, PartialEq, Default, Serialize)]
@@ -39,6 +45,24 @@ pub struct IdLabel {
     pub label: String,
 }
 
+/// HAL query used to build panel state: on failure log + send `Event::ErrorMessage`
+/// (the UI shows it; unlike `Event::Error` it does not abort the active mode) and
+/// return `None` so the caller can fall back to a default.
+fn hal_or_report<T>(
+    engine: &Engine,
+    what:   &str,
+    query:  impl FnOnce() -> eyre::Result<T>
+) -> Option<T> {
+    match query() {
+        Ok(v) => Some(v),
+        Err(e) => {
+            log::error!("Panel state: {} failed: {:#}", what, e);
+            engine.events.send(Event::ErrorMessage(format!("{}: {}", what, error_to_user_string(&e))));
+            None
+        }
+    }
+}
+
 /// Device list for a device selection combobox
 fn device_id_labels(engine: &Engine, type_: DeviceType) -> Vec<IdLabel> {
     engine.hal.devices(type_)
@@ -49,9 +73,9 @@ fn device_id_labels(engine: &Engine, type_: DeviceType) -> Vec<IdLabel> {
 }
 
 /// Slew speed list for a mount speed combobox
-fn slew_speed_labels(telescope: Option<&(dyn Telescope + Send + Sync)>) -> Vec<IdLabel> {
-    telescope
-        .and_then(|t| t.slew_speed_list().ok())
+fn slew_speed_labels(engine: &Engine, telescope: Option<&(dyn Telescope + Send + Sync)>) -> Vec<IdLabel> {
+    let Some(t) = telescope else { return Vec::new(); };
+    hal_or_report(engine, "Mount slew speed list", || t.slew_speed_list())
         .unwrap_or_default()
         .into_iter()
         .map(|(id, label)| IdLabel { id, label })
@@ -299,7 +323,8 @@ pub fn camera_panel_state(engine: &Engine) -> CameraPanelState {
 
     // Heater + conversion gain lists
     let heater_list = if camera.is_heater_supported().unwrap_or(false) {
-        camera.heater_ctrl_list().unwrap_or_default()
+        hal_or_report(engine, "Heater control list", || camera.heater_ctrl_list())
+            .unwrap_or_default()
             .into_iter()
             .map(|(id, label)| IdLabel { id, label })
             .collect()
@@ -307,7 +332,8 @@ pub fn camera_panel_state(engine: &Engine) -> CameraPanelState {
         Vec::new()
     };
     let conv_gain_list = if camera.is_conversion_gain_supported().unwrap_or(false) {
-        camera.conversion_gain_list().unwrap_or_default()
+        hal_or_report(engine, "Conversion gain list", || camera.conversion_gain_list())
+            .unwrap_or_default()
             .into_iter()
             .map(|(id, label)| IdLabel { id, label })
             .collect()
@@ -490,7 +516,7 @@ pub fn mount_panel_state(engine: &Engine) -> MountPanelState {
     let telescope = engine.cur_devices.telescope();
 
     let mount_list = device_id_labels(engine, DeviceType::TELESCOPE);
-    let slew_speed_list = slew_speed_labels(telescope.as_deref());
+    let slew_speed_list = slew_speed_labels(engine, telescope.as_deref());
     let mnt_active = telescope.as_ref()
         .and_then(|t| t.is_active().ok())
         .unwrap_or(false);
@@ -546,7 +572,7 @@ pub fn flt_wheel_panel_state(engine: &Engine) -> FltWheelPanelState {
     let flt_wheel_list = device_id_labels(engine, DeviceType::FLT_WHEEL);
 
     let (filters, active_filter) = filter_wheel.as_ref()
-        .and_then(|fw| fw.list_and_active().ok())
+        .and_then(|fw| hal_or_report(engine, "Filter wheel list", || fw.list_and_active()))
         .map(|(list, active)| (list, Some(active)))
         .unwrap_or_default();
 
@@ -632,7 +658,7 @@ pub fn polar_align_panel_state(engine: &Arc<Engine>) -> PolarAlignPanelState {
 
     let auto_refresh = engine.options.read().unwrap().polar_align.auto_refresh;
 
-    let slew_speed_list = slew_speed_labels(mount.as_deref());
+    let slew_speed_list = slew_speed_labels(engine, mount.as_deref());
 
     // `exec_mode_command` takes `modes.write()` internally, so the modes guard
     // must be dropped before the call (see the `mode_kind` block above).
