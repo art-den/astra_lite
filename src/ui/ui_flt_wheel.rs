@@ -155,17 +155,19 @@ impl FltWheelUi {
     }
 
     fn update_filters_list_and_select_active(&self) {
-        let Some(filter_wheel) = self.engine.cur_devices.filter_wheel() else { return; };
-
-        let Ok((list, active_id)) = filter_wheel.list_and_active() else { return; };
+        let state = crate::api::ui_state::flt_wheel_panel_state(&self.engine);
+        // No answer from the wheel (or no wheel): keep the combobox unchanged
+        if state.filters.is_empty() && state.active_filter.is_none() { return; }
         self.widgets.cb_filter.remove_all();
-        for filter_name in list {
+        for filter_name in &state.filters {
             self.widgets.cb_filter.append(Some(filter_name.as_str()), filter_name.as_str());
         }
-        let new_cb_active = Some(active_id as u32);
-        if self.widgets.cb_filter.active() != new_cb_active {
-            // Phantom `FilterWheelSelect` from this programmatic change is deduped by the executor
-            self.widgets.cb_filter.set_active(new_cb_active);
+        if let Some(active) = state.active_filter {
+            let new_cb_active = Some(active as u32);
+            if self.widgets.cb_filter.active() != new_cb_active {
+                // Phantom `FilterWheelSelect` from this programmatic change is deduped by the executor
+                self.widgets.cb_filter.set_active(new_cb_active);
+            }
         }
     }
 
@@ -186,14 +188,11 @@ impl FltWheelUi {
     }
 
     fn update_devices_list(&self) {
-        let options = self.engine.options.read().unwrap();
-        let cur_filter_wheel = options.filter_wheel.device.clone();
-        drop(options);
-
-        let Ok(list) = self.engine.hal.devices(DeviceType::FLT_WHEEL) else { return; };
-        let list = list.iter()
-            .map(|dev| (dev.id.to_string(), dev.name.to_string()))
-            .collect::<Vec<_>>();
+        let state = crate::api::ui_state::flt_wheel_panel_state(&self.engine);
+        let cur_filter_wheel = self.engine.options.read().unwrap().filter_wheel.device.clone();
+        let list: Vec<_> = state.flt_wheel_list.iter()
+            .map(|i| (i.id.clone(), i.label.clone()))
+            .collect();
         fill_devices_list_into_combobox(
             &list,
             &self.widgets.cb_device,

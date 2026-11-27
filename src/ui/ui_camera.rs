@@ -1,8 +1,8 @@
-use std::{rc::Rc, sync::Arc, cell::RefCell};
+use std::{rc::Rc, sync::Arc};
 use gtk::{cairo, glib::{self, clone}, prelude::*};
 use macros::FromBuilder;
 use crate::{
-    core::{commands::{select_device_cmd, Command, DeviceKind, ModeStart}, cur_devices::CurDevices, engine::*, events::*, frame_processing::*, utils::{FileNameArg, FileNameUtils}}, hal::{DeviceType, FrameType, HalState, events::HalEvent}, image::{info::*, raw::CalibrMethods}, options::*,
+    core::{commands::{select_device_cmd, Command, DeviceKind, ModeStart}, cur_devices::CurDevices, engine::*, events::*, frame_processing::*}, hal::{FrameType, HalState, events::HalEvent}, image::info::*, options::*,
 };
 use super::{gtk_utils::*, module::*, ui_main::*, ui_start_dialog::StartDialog, utils::*};
 
@@ -29,7 +29,6 @@ pub fn init_ui(
         excl:            ExclusiveCaller::new(),
         engine:            Arc::clone(engine),
         delayed_actions: DelayedActions::new(500),
-        fn_utils:        RefCell::new(FileNameUtils::default()),
     });
 
     obj.init_cam_ctrl_widgets();
@@ -100,24 +99,6 @@ impl Gain {
             Self::P50  => "50%",
             Self::P75  => "75%",
             Self::Max  => "max",
-        }
-    }
-}
-
-impl Binning {
-    pub fn from_active_id(active_id: Option<&str>) -> Self {
-        match active_id {
-            Some("2") => Self::Bin2,
-            Some("4") => Self::Bin4,
-            _         => Self::Orig,
-        }
-    }
-
-    pub fn to_active_id(&self) -> Option<&'static str> {
-        match self {
-            Self::Orig => Some("1"),
-            Self::Bin2 => Some("2"),
-            Self::Bin4 => Some("4"),
         }
     }
 }
@@ -279,7 +260,6 @@ struct CameraUi {
     excl:            ExclusiveCaller,
     engine:          Arc<Engine>,
     delayed_actions: DelayedActions<DelayedAction>,
-    fn_utils:        RefCell<FileNameUtils>,
 }
 
 impl UiModule for CameraUi {
@@ -414,6 +394,9 @@ impl UiModule for CameraUi {
                         self.widgets.common.cb_cam_list.set_active_id(Some(new_camera_id));
                     });
                 }
+                // The state must be built before the options read guard is taken:
+                // camera_panel_state() locks options itself (std RwLock read is not reentrant)
+                let state = crate::api::ui_state::camera_panel_state(&self.engine);
                 let options = self.engine.options.read().unwrap();
 
                 // Show some options for specific camera
@@ -425,14 +408,13 @@ impl UiModule for CameraUi {
 
                 self.show_total_raw_time_impl(&options);
 
-                // Init fn_utils and show calibration files
+                // Show calibration files
 
-                self.init_fn_utils();
-                self.show_calibr_file_for_frame(&options);
+                self.show_calibr_label(&state);
 
-                self.update_resolution_list_impl(&options);
-                self.fill_heater_items_list_impl(&options);
-                self.fill_conv_gain_items_list_impl(&options);
+                self.update_resolution_list_impl(&state, &options);
+                self.fill_heater_items_list_impl(&state, &options);
+                self.fill_conv_gain_items_list_impl(&state, &options);
                 drop(options);
 
                 self.correct_widgets_props();
@@ -452,9 +434,10 @@ impl UiModule for CameraUi {
             }
             Event::NeedRefreshOptionsView => {
                 let options = self.engine.options.read().unwrap();
-                self.show_calibr_file_for_frame(&options);
                 self.show_total_raw_time_impl(&options);
                 drop(options);
+                let state = crate::api::ui_state::camera_panel_state(&self.engine);
+                self.show_calibr_label(&state);
                 self.correct_widgets_props();
             }
             _ => {},
@@ -1154,17 +1137,21 @@ impl CameraUi {
                 self.correct_widgets_props();
             }
             DelayedAction::UpdateResolutionList => {
-                self.update_resolution_list();
+                let state = crate::api::ui_state::camera_panel_state(&self.engine);
                 let options = self.engine.options.read().unwrap();
-                self.init_fn_utils();
-                self.show_calibr_file_for_frame(&options);
+                self.update_resolution_list_impl(&state, &options);
                 drop(options);
+                self.show_calibr_label(&state);
             }
             DelayedAction::FillHeaterItems => {
-                self.fill_heater_items_list();
+                let state = crate::api::ui_state::camera_panel_state(&self.engine);
+                let options = self.engine.options.read().unwrap();
+                self.fill_heater_items_list_impl(&state, &options);
             }
             DelayedAction::FillConvGainItems => {
-                self.fill_conv_gain_items_list();
+                let state = crate::api::ui_state::camera_panel_state(&self.engine);
+                let options = self.engine.options.read().unwrap();
+                self.fill_conv_gain_items_list_impl(&state, &options);
             }
         }
     }
@@ -1254,94 +1241,38 @@ impl CameraUi {
         widgets.quality.spb_max_temp_diff.set_sensitive(s.quality.spb_max_temp_diff_sensitive);
     }
 
-    fn init_fn_utils(&self) {
-        let Some(camera) = self.engine.cur_devices.camera() else { return; };
-        let mut fn_utils = self.fn_utils.borrow_mut();
-        fn_utils.init(&(camera.clone() as Arc<_>));
-    }
-
-    fn show_calibr_file_for_frame(&self, options: &Options) {
-        let mut result_str = String::new();
-        if matches!(options.cam.frame.frame_type, FrameType::Lights|FrameType::Flats) {
-            let to_calibrate = FileNameArg::Options(&options.cam);
-            let fn_utils = self.fn_utils.borrow();
-            let defect_pixel_file = fn_utils.defect_pixels_file_name(
-                &to_calibrate,
-                &options.calibr.dark_library_path
-            );
-            let (subtract_fname, subtract_method) = fn_utils.get_subtract_master_fname(
-                &to_calibrate,
-                &options.calibr.dark_library_path
-            );
-            if options.calibr.dark_frame_en && subtract_fname.is_file() {
-                if subtract_method.contains(CalibrMethods::BY_DARK) {
-                    result_str += "Dark";
-                } else if subtract_method.contains(CalibrMethods::BY_BIAS) {
-                    result_str += "Bias";
-                }
-            }
-
-            if options.cam.frame.frame_type == FrameType::Lights
-            && options.calibr.flat_frame_en
-            && options.calibr.flat_frame_fname.is_file() {
-                if !result_str.is_empty() { result_str += ", "; }
-                result_str += "Flat";
-            }
-
-            if options.calibr.dark_frame_en && defect_pixel_file.is_file() {
-                if !result_str.is_empty() { result_str += ", "; }
-                result_str += "Hot pixels";
-            }
-        }
-        if result_str.is_empty() {
-            result_str += "---";
-        }
-        self.widgets.frame.l_calibr.set_label(&result_str);
+    fn show_calibr_label(&self, s: &crate::api::ui_state::CameraPanelState) {
+        // The empty label means the state was built without a camera
+        let label = if s.frame.calibr_label.is_empty() { "---" } else { &s.frame.calibr_label };
+        self.widgets.frame.l_calibr.set_label(label);
     }
 
     fn update_devices_list(&self) {
-        let options = self.engine.options.read().unwrap();
-        let cur_cam_device = options.cam.device_id.clone();
-        drop(options);
-
-        let Ok(cameras) = self.engine.hal.devices(DeviceType::CAMERA) else {
-            return;
-        };
-
-        let cameras_ids_and_names: Vec<_> = cameras
-            .into_iter()
-            .map(|d| (d.id, d.name))
+        let state = crate::api::ui_state::camera_panel_state(&self.engine);
+        let cur_cam_device = self.engine.options.read().unwrap().cam.device_id.clone();
+        let cameras_ids_and_names: Vec<_> = state.common.cam_list.iter()
+            .map(|i| (i.id.clone(), i.label.clone()))
             .collect();
-
         fill_devices_list_into_combobox(
             &cameras_ids_and_names,
             &self.widgets.common.cb_cam_list,
-            if !cur_cam_device.is_empty() { Some(&cur_cam_device) } else { None },
+            if !cur_cam_device.is_empty() { Some(cur_cam_device.as_str()) } else { None },
             |id| {
                 self.engine.exec_command(select_device_cmd(DeviceKind::Camera, id));
             }
         );
     }
 
-    fn update_resolution_list_impl(&self, options: &Options) {
+    fn update_resolution_list_impl(
+        &self,
+        s: &crate::api::ui_state::CameraPanelState,
+        options: &Options,
+    ) {
         let cb_bin = &self.widgets.frame.cb_bin;
         let last_bin = cb_bin.active_id();
         cb_bin.remove_all();
-
-        let Some(camera) = self.engine.cur_devices.camera() else { return; };
-        let Ok((max_width, max_height)) = camera.ccd_size() else { return; };
-        let Ok((max_hor_bin, max_vert_bin)) = camera.max_binning() else { return; };
-        let max_bin = usize::min(max_hor_bin, max_vert_bin);
-        let bins = [ Binning::Orig, Binning::Bin2, Binning::Bin4 ];
-        for bin in bins {
-            let ratio = bin.get_ratio();
-            if ratio > max_bin { break; }
-            let text = if ratio == 1 {
-                format!("{} x {}", max_width, max_height)
-            } else {
-                format!("{} x {} (bin{})", max_width/ratio, max_height/ratio, ratio)
-            };
-            cb_bin.append(bin.to_active_id(), &text);
+        for item in &s.frame.bin_list {
+            cb_bin.append(Some(item.id.as_str()), &item.label);
         }
         if last_bin.is_some() {
             cb_bin.set_active_id(last_bin.as_deref());
@@ -1353,67 +1284,45 @@ impl CameraUi {
         }
     }
 
-    fn update_resolution_list(&self) {
-        let options = self.engine.options.read().unwrap();
-        self.update_resolution_list_impl(&options);
+    // remove_all -> append items -> restore last active, else saved value, else first item
+    fn fill_id_label_combo(
+        cb:         &gtk::ComboBoxText,
+        items:      &[crate::api::ui_state::IdLabel],
+        last_value: Option<&str>,
+        saved:      Option<&str>,
+    ) {
+        cb.remove_all();
+        for item in items {
+            cb.append(Some(item.id.as_str()), &item.label);
+        }
+        if last_value.is_some() {
+            cb.set_active_id(last_value);
+        } else {
+            cb.set_active_id(saved);
+        }
+        if cb.active_id().is_none() {
+            cb.set_active(Some(0));
+        }
     }
 
-    fn fill_heater_items_list(&self) {
-        let options = self.engine.options.read().unwrap();
-        self.fill_heater_items_list_impl(&options);
+    fn fill_heater_items_list_impl(
+        &self,
+        s: &crate::api::ui_state::CameraPanelState,
+        options: &Options,
+    ) {
+        let cb = &self.widgets.ctrl.cb_heater;
+        let last_value = cb.active_id();
+        Self::fill_id_label_combo(cb, &s.ctrl.heater_list, last_value.as_deref(), options.cam.ctrl.heater_str.as_deref());
     }
 
-    fn fill_heater_items_list_impl(&self, options: &Options) {
-        exec_and_show_error(Some(&self.window), || {
-            let cb = &self.widgets.ctrl.cb_heater;
-            let last_value = cb.active_id();
-            cb.remove_all();
-            let Some(camera) = self.engine.cur_devices.camera() else { return Ok(()); };
-
-            if !camera.is_heater_supported()? { return Ok(()); }
-            let items = camera.heater_ctrl_list()?;
-            for (id, label) in items {
-                cb.append(Some(id.as_str()), &label);
-            }
-            if last_value.is_some() {
-                cb.set_active_id(last_value.as_deref());
-            } else {
-                cb.set_active_id(options.cam.ctrl.heater_str.as_deref());
-            }
-            if cb.active_id().is_none() {
-                cb.set_active(Some(0));
-            }
-            Ok(())
-        });
-    }
-
-    fn fill_conv_gain_items_list(&self) {
-        let options = self.engine.options.read().unwrap();
-        self.fill_conv_gain_items_list_impl(&options);
-    }
-
-    fn fill_conv_gain_items_list_impl(&self, options: &Options) {
-        exec_and_show_error(Some(&self.window), ||{
-            let cb = &self.widgets.ctrl.cb_conv_gain;
-            let last_value = cb.active_id();
-            cb.remove_all();
-
-            let Some(camera) = self.engine.cur_devices.camera() else { return Ok(()); };
-            if !camera.is_conversion_gain_supported()? { return Ok(()) }
-            let Ok(items) = camera.conversion_gain_list() else { return Ok(()); };
-            for (id, label) in items {
-                cb.append(Some(id.as_str()), &label);
-            }
-            if last_value.is_some() {
-                cb.set_active_id(last_value.as_deref());
-            } else {
-                cb.set_active_id(options.cam.ctrl.conv_gain_str.as_deref());
-            }
-            if cb.active_id().is_none() {
-                cb.set_active(Some(0));
-            }
-            Ok(())
-        });
+    fn fill_conv_gain_items_list_impl(
+        &self,
+        s: &crate::api::ui_state::CameraPanelState,
+        options: &Options,
+    ) {
+        let cb = &self.widgets.ctrl.cb_conv_gain;
+        let last_value = cb.active_id();
+        Self::fill_id_label_combo(cb, &s.ctrl.conv_gain_list, last_value.as_deref(), options.cam.ctrl.conv_gain_str.as_deref());
     }
 
     fn start_live_view(&self) {

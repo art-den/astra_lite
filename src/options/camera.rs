@@ -52,6 +52,22 @@ impl Binning {
             Self::Bin4 => 4,
         }
     }
+
+    pub fn from_active_id(active_id: Option<&str>) -> Self {
+        match active_id {
+            Some("2") => Self::Bin2,
+            Some("4") => Self::Bin4,
+            _         => Self::Orig,
+        }
+    }
+
+    pub fn to_active_id(&self) -> Option<&'static str> {
+        match self {
+            Self::Orig => Some("1"),
+            Self::Bin2 => Some("2"),
+            Self::Bin4 => Some("4"),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq)]
@@ -193,4 +209,18 @@ pub struct SeparatedCamOptions {
     pub frame:  FrameOptions,
     pub ctrl:   CamCtrlOptions,
     pub calibr: CalibrOptions,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn binning_active_id_round_trip() {
+        for bin in [Binning::Orig, Binning::Bin2, Binning::Bin4] {
+            assert_eq!(Binning::from_active_id(bin.to_active_id()), bin);
+        }
+        assert_eq!(Binning::from_active_id(None), Binning::Orig);
+        assert_eq!(Binning::from_active_id(Some("bogus")), Binning::Orig);
+    }
 }

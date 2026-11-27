@@ -14,7 +14,7 @@ use super::{gtk_utils::*, module::*, utils::*};
 
 
 pub fn init_ui(
-    window:  &gtk::ApplicationWindow,
+    _window: &gtk::ApplicationWindow,
     main_ui: &Rc<MainUi>,
     engine:  &Arc<Engine>,
 ) -> Rc<dyn UiModule> {
@@ -25,7 +25,6 @@ pub fn init_ui(
         widgets,
         info_widgets,
         main_ui:         Rc::clone(main_ui),
-        window:          window.clone(),
         excl:            ExclusiveCaller::new(),
         engine:          Arc::clone(engine),
         delayed_actions: DelayedActions::new(500),
@@ -116,7 +115,6 @@ struct MountUi {
     widgets:         Widgets,
     info_widgets:    InfoWidgets,
     main_ui:         Rc<MainUi>,
-    window:          gtk::ApplicationWindow,
     excl:            ExclusiveCaller,
     engine:          Arc<Engine>,
     delayed_actions: DelayedActions<DelayedAction>,
@@ -401,19 +399,11 @@ impl MountUi {
     }
 
     fn fill_devices_list(&self) {
-        let options = self.engine.options.read().unwrap();
-        let cur_mount = options.mount.device.clone();
-        drop(options);
-
-        let Ok(mounts) = self.engine.hal.devices(DeviceType::TELESCOPE) else {
-            return;
-        };
-
-        let mounts_ids_and_names = mounts
-            .into_iter()
-            .map(|dev| (dev.id, dev.name))
-            .collect::<Vec<_>>();
-
+        let state = crate::api::ui_state::mount_panel_state(&self.engine);
+        let cur_mount = self.engine.options.read().unwrap().mount.device.clone();
+        let mounts_ids_and_names: Vec<_> = state.mount_list.iter()
+            .map(|i| (i.id.clone(), i.label.clone()))
+            .collect();
         fill_devices_list_into_combobox(
             &mounts_ids_and_names,
             &self.widgets.cb_list,
@@ -425,23 +415,18 @@ impl MountUi {
     }
 
     fn fill_mount_speed_list_widget(&self) {
-        let Some(telescope) = self.engine.cur_devices.telescope() else { return; };
-        let options = self.engine.options.read().unwrap();
-
-        exec_and_show_error(Some(&self.window), || {
-            let list = telescope.slew_speed_list()?;
-            self.widgets.cb_speed.remove_all();
-            self.widgets.cb_speed.append(None, "---");
-            for (id, text) in list {
-                self.widgets.cb_speed.append(Some(&id), text.as_str());
-            }
-            if options.mount.speed.is_some() {
-                self.widgets.cb_speed.set_active_id(options.mount.speed.as_deref());
-            } else {
-                self.widgets.cb_speed.set_active(Some(0));
-            }
-            Ok(())
-        });
+        let state = crate::api::ui_state::mount_panel_state(&self.engine);
+        let cur_speed = self.engine.options.read().unwrap().mount.speed.clone();
+        self.widgets.cb_speed.remove_all();
+        self.widgets.cb_speed.append(None, "---");
+        for item in &state.slew_speed_list {
+            self.widgets.cb_speed.append(Some(item.id.as_str()), item.label.as_str());
+        }
+        if let Some(speed) = cur_speed.as_deref() {
+            self.widgets.cb_speed.set_active_id(Some(speed));
+        } else {
+            self.widgets.cb_speed.set_active(Some(0));
+        }
     }
 
     fn show_mount_tracking_state(&self, tracking: bool) {

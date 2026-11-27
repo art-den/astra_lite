@@ -268,28 +268,22 @@ impl PolarAlignUi {
         // Programmatic list refill must not clobber the saved speed via the active_id_notify subscription.
         self.filling_speed_list.set(true);
 
-        if let Some(mount) = self.engine.cur_devices.telescope() {
-            let list = mount.slew_speed_list().unwrap_or_default();
-            self.widgets.cbx_speed.remove_all();
-            if !list.is_empty() {
-                self.widgets.cbx_speed.append(None, "---");
+        let state = crate::api::ui_state::polar_align_panel_state(&self.engine);
+        let cur_speed = self.engine.options.read().unwrap().polar_align.speed.clone();
+        let list = &state.slew_speed_list;
+        self.widgets.cbx_speed.remove_all();
+        if !list.is_empty() {
+            self.widgets.cbx_speed.append(None, "---");
+        }
+        for item in list {
+            self.widgets.cbx_speed.append(Some(item.id.as_str()), item.label.as_str());
+        }
+        if let Some(speed) = cur_speed.as_deref() {
+            self.widgets.cbx_speed.set_active_id(Some(speed));
+            if self.widgets.cbx_speed.active().is_none() {
+                self.widgets.cbx_speed.append(Some(speed), speed);
+                self.widgets.cbx_speed.set_active_id(Some(speed));
             }
-            for (id, text) in list {
-                self.widgets.cbx_speed.append(Some(&id), &text);
-            }
-            let options = self.engine.options.read().unwrap();
-            if options.polar_align.speed.is_some() {
-                self.widgets.cbx_speed.set_active_id(options.polar_align.speed.as_deref());
-                if self.widgets.cbx_speed.active().is_none() {
-                    self.widgets.cbx_speed.append(
-                        options.polar_align.speed.as_deref(),
-                        options.polar_align.speed.as_deref().unwrap_or_default()
-                    );
-                    self.widgets.cbx_speed.set_active_id(options.polar_align.speed.as_deref());
-                }
-            }
-        } else {
-            self.widgets.cbx_speed.remove_all();
         }
 
         self.filling_speed_list.set(false);

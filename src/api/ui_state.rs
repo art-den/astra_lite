@@ -12,8 +12,10 @@ use serde::Serialize;
 use crate::core::commands::{ModeCommand, ModeCommandReply};
 use crate::core::engine::{Engine, ModeKind};
 use crate::core::mode_polar_align::{PolarAlignCommand, PolarAlignState};
-use crate::hal::{Camera, FrameType};
-use crate::options::{GuidingMode, PreviewSource};
+use crate::core::utils::{FileNameArg, FileNameUtils};
+use crate::hal::{Camera, DeviceType, FrameType, Telescope};
+use crate::image::raw::CalibrMethods;
+use crate::options::{Binning, GuidingMode, PreviewSource};
 
 /// Serializable spinbutton range + parameters (mirrors `correct_spinbutton_by_range`).
 #[derive(Clone, Debug, PartialEq, Default, Serialize)]
@@ -28,6 +30,32 @@ impl SpinRange {
     fn from_range(range: RangeInclusive<f64>, digits: u32, step: Option<f64>) -> Self {
         Self { start: *range.start(), end: *range.end(), digits, step }
     }
+}
+
+/// (id, label) pair for a combobox item.
+#[derive(Clone, Debug, PartialEq, Default, Serialize)]
+pub struct IdLabel {
+    pub id:    String,
+    pub label: String,
+}
+
+/// Device list for a device selection combobox
+fn device_id_labels(engine: &Engine, type_: DeviceType) -> Vec<IdLabel> {
+    engine.hal.devices(type_)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|d| IdLabel { id: d.id, label: d.name })
+        .collect()
+}
+
+/// Slew speed list for a mount speed combobox
+fn slew_speed_labels(telescope: Option<&(dyn Telescope + Send + Sync)>) -> Vec<IdLabel> {
+    telescope
+        .and_then(|t| t.slew_speed_list().ok())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(id, label)| IdLabel { id, label })
+        .collect()
 }
 
 /// Camera exposure range for auxiliary panel spinners (plate solve, focuser, guiding).
@@ -45,6 +73,8 @@ pub struct CamCommonState {
     pub l_cam_list_sensitive:    bool,
     pub cb_cam_list_sensitive:   bool,
     pub chb_live_view_sensitive: bool,
+    // NOTE: cheap local HAL query; keep it here
+    pub cam_list:                Vec<IdLabel>,
 }
 
 #[derive(Clone, Debug, PartialEq, Default, Serialize)]
@@ -65,6 +95,10 @@ pub struct CamCtrlState {
     pub chb_cooler_sensitive:    bool,
     pub spb_temp_sensitive:      bool,
     pub spb_temp_range:          Option<SpinRange>,
+    // NOTE: HAL property queries, recomputed on every state build; consider a
+    // separate on-demand struct (only the ctrl panel uses them)
+    pub heater_list:             Vec<IdLabel>,
+    pub conv_gain_list:          Vec<IdLabel>,
 }
 
 #[derive(Clone, Debug, PartialEq, Default, Serialize)]
@@ -80,6 +114,9 @@ pub struct CamFrameState {
     pub spb_exp_range:          Option<SpinRange>,
     pub spb_gain_range:         Option<SpinRange>,
     pub spb_offset_range:       Option<SpinRange>,
+    // NOTE: cheap camera queries; keep it here
+    pub bin_list:               Vec<IdLabel>,
+    pub calibr_label:           String,
 }
 
 #[derive(Clone, Debug, PartialEq, Default, Serialize)]
@@ -144,6 +181,46 @@ pub struct CameraPanelState {
     pub actions:              CamActionsState,
 }
 
+/// Active calibration methods label ("Dark, Flat, Hot pixels", or "---" if none)
+fn compute_calibr_label(engine: &Engine, camera: &Arc<dyn Camera + Send + Sync>) -> String {
+    let options = engine.options.read().unwrap();
+    let mut result_str = String::new();
+    if matches!(options.cam.frame.frame_type, FrameType::Lights | FrameType::Flats) {
+        let to_calibrate = FileNameArg::Options(&options.cam);
+        let mut fn_utils = FileNameUtils::default();
+        fn_utils.init(&(Arc::clone(camera) as Arc<_>));
+        let defect_pixel_file = fn_utils.defect_pixels_file_name(
+            &to_calibrate,
+            &options.calibr.dark_library_path
+        );
+        let (subtract_fname, subtract_method) = fn_utils.get_subtract_master_fname(
+            &to_calibrate,
+            &options.calibr.dark_library_path
+        );
+        if options.calibr.dark_frame_en && subtract_fname.is_file() {
+            if subtract_method.contains(CalibrMethods::BY_DARK) {
+                result_str += "Dark";
+            } else if subtract_method.contains(CalibrMethods::BY_BIAS) {
+                result_str += "Bias";
+            }
+        }
+        if options.cam.frame.frame_type == FrameType::Lights
+        && options.calibr.flat_frame_en
+        && options.calibr.flat_frame_fname.is_file() {
+            if !result_str.is_empty() { result_str += ", "; }
+            result_str += "Flat";
+        }
+        if options.calibr.dark_frame_en && defect_pixel_file.is_file() {
+            if !result_str.is_empty() { result_str += ", "; }
+            result_str += "Hot pixels";
+        }
+    }
+    if result_str.is_empty() {
+        result_str += "---";
+    }
+    result_str
+}
+
 pub fn camera_panel_state(engine: &Engine) -> CameraPanelState {
     let Some(camera) = engine.cur_devices.camera() else {
         return CameraPanelState::default();
@@ -198,6 +275,46 @@ pub fn camera_panel_state(engine: &Engine) -> CameraPanelState {
         )
     };
 
+    let cam_list = device_id_labels(engine, DeviceType::CAMERA);
+
+    // Bin list
+    let bin_list = {
+        let mut list = Vec::new();
+        if let Ok((max_width, max_height)) = camera.ccd_size()
+            && let Ok((max_hor_bin, max_vert_bin)) = camera.max_binning() {
+            let max_bin = usize::min(max_hor_bin, max_vert_bin);
+            for bin in [Binning::Orig, Binning::Bin2, Binning::Bin4] {
+                let ratio = bin.get_ratio();
+                if ratio > max_bin { break; }
+                let label = if ratio == 1 {
+                    format!("{} x {}", max_width, max_height)
+                } else {
+                    format!("{} x {} (bin{})", max_width / ratio, max_height / ratio, ratio)
+                };
+                list.push(IdLabel { id: bin.to_active_id().unwrap_or_default().to_string(), label });
+            }
+        }
+        list
+    };
+
+    // Heater + conversion gain lists
+    let heater_list = if camera.is_heater_supported().unwrap_or(false) {
+        camera.heater_ctrl_list().unwrap_or_default()
+            .into_iter()
+            .map(|(id, label)| IdLabel { id, label })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let conv_gain_list = if camera.is_conversion_gain_supported().unwrap_or(false) {
+        camera.conversion_gain_list().unwrap_or_default()
+            .into_iter()
+            .map(|(id, label)| IdLabel { id, label })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     let modes = engine.modes();
     let mode_kind = modes.active.kind();
     let waiting = mode_kind == ModeKind::Waiting;
@@ -226,6 +343,8 @@ pub fn camera_panel_state(engine: &Engine) -> CameraPanelState {
         FrameType::Flats  => "Start save\nFLATS",
     };
 
+    let calibr_label = compute_calibr_label(engine, &camera);
+
     let cam_active = camera.is_active().unwrap_or(false);
 
     let can_change_cam_opts = !saving_frames && !live_active;
@@ -241,6 +360,7 @@ pub fn camera_panel_state(engine: &Engine) -> CameraPanelState {
             l_cam_list_sensitive:    waiting,
             cb_cam_list_sensitive:   waiting,
             chb_live_view_sensitive: (exposure_supported && liveview_active) || can_change_mode,
+            cam_list,
         },
         ctrl: CamCtrlState {
             grid_sensitive:          cam_active,
@@ -259,6 +379,8 @@ pub fn camera_panel_state(engine: &Engine) -> CameraPanelState {
             chb_cooler_sensitive:    temp_supported && can_change_cam_opts,
             spb_temp_sensitive:      cooler_active && temp_supported && can_change_cam_opts,
             spb_temp_range,
+            heater_list,
+            conv_gain_list,
         },
         frame: CamFrameState {
             grid_sensitive:         cam_active,
@@ -272,6 +394,8 @@ pub fn camera_panel_state(engine: &Engine) -> CameraPanelState {
             spb_exp_range,
             spb_gain_range,
             spb_offset_range,
+            bin_list,
+            calibr_label,
         },
         calibr: CamCalibrState {
             grid_sensitive:     cam_active,
@@ -355,10 +479,18 @@ pub struct MountPanelState {
     pub chb_inv_ns_sensitive:   bool,
     pub chb_inv_we_sensitive:   bool,
     pub nav_buttons_sensitive:  bool,
+    // NOTE: cheap local HAL query; keep it here
+    pub mount_list:             Vec<IdLabel>,
+    // NOTE: HAL property query, recomputed on every state build; consider a
+    // separate on-demand struct (only the ctrl panel uses it)
+    pub slew_speed_list:        Vec<IdLabel>,
 }
 
 pub fn mount_panel_state(engine: &Engine) -> MountPanelState {
     let telescope = engine.cur_devices.telescope();
+
+    let mount_list = device_id_labels(engine, DeviceType::TELESCOPE);
+    let slew_speed_list = slew_speed_labels(telescope.as_deref());
     let mnt_active = telescope.as_ref()
         .and_then(|t| t.is_active().ok())
         .unwrap_or(false);
@@ -385,6 +517,8 @@ pub fn mount_panel_state(engine: &Engine) -> MountPanelState {
         chb_inv_ns_sensitive:   move_enabled,
         chb_inv_we_sensitive:   move_enabled,
         nav_buttons_sensitive:  move_enabled,
+        mount_list,
+        slew_speed_list,
     }
 }
 
@@ -394,13 +528,34 @@ pub fn mount_panel_state(engine: &Engine) -> MountPanelState {
 #[derive(Clone, Debug, PartialEq, Default, Serialize)]
 pub struct FltWheelPanelState {
     pub cb_filter_sensitive: bool,
+    // NOTE: cheap local HAL query; keep it here
+    pub flt_wheel_list:     Vec<IdLabel>,
+    // NOTE: HAL property query, recomputed on every state build; consider a
+    // separate on-demand struct (only the filter panel uses it).
+    // Empty list + `None` active means "no answer from the wheel"
+    pub filters:            Vec<String>,
+    pub active_filter:      Option<usize>,
 }
 
 pub fn flt_wheel_panel_state(engine: &Engine) -> FltWheelPanelState {
-    let cb_filter_sensitive = engine.cur_devices.filter_wheel()
+    let filter_wheel = engine.cur_devices.filter_wheel();
+    let cb_filter_sensitive = filter_wheel.as_ref()
         .and_then(|fw| fw.is_active().ok())
         .unwrap_or(false);
-    FltWheelPanelState { cb_filter_sensitive }
+
+    let flt_wheel_list = device_id_labels(engine, DeviceType::FLT_WHEEL);
+
+    let (filters, active_filter) = filter_wheel.as_ref()
+        .and_then(|fw| fw.list_and_active().ok())
+        .map(|(list, active)| (list, Some(active)))
+        .unwrap_or_default();
+
+    FltWheelPanelState {
+        cb_filter_sensitive,
+        flt_wheel_list,
+        filters,
+        active_filter,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -452,13 +607,16 @@ pub struct PolarAlignActionsState {
 pub struct PolarAlignPanelState {
     pub chb_auto_refresh_sensitive: bool,
     pub actions:                    PolarAlignActionsState,
+    // NOTE: HAL property query, recomputed on every state build; consider a
+    // separate on-demand struct (only the speed combobox uses it)
+    pub slew_speed_list:            Vec<IdLabel>,
 }
 
 pub fn polar_align_panel_state(engine: &Arc<Engine>) -> PolarAlignPanelState {
     let camera = engine.cur_devices.camera();
     let mount = engine.cur_devices.telescope();
-    let cam_active = camera.and_then(|c| c.is_active().ok()).unwrap_or(false);
-    let mnt_active = mount.and_then(|c| c.is_active().ok()).unwrap_or(false);
+    let cam_active = camera.as_ref().and_then(|c| c.is_active().ok()).unwrap_or(false);
+    let mnt_active = mount.as_ref().and_then(|c| c.is_active().ok()).unwrap_or(false);
 
     let mode_kind = {
         let modes = engine.modes();
@@ -473,6 +631,8 @@ pub fn polar_align_panel_state(engine: &Arc<Engine>) -> PolarAlignPanelState {
         !polar_align && mnt_active && cam_active && (waiting || single_shot || live_view);
 
     let auto_refresh = engine.options.read().unwrap().polar_align.auto_refresh;
+
+    let slew_speed_list = slew_speed_labels(mount.as_deref());
 
     // `exec_mode_command` takes `modes.write()` internally, so the modes guard
     // must be dropped before the call (see the `mode_kind` block above).
@@ -492,6 +652,7 @@ pub fn polar_align_panel_state(engine: &Arc<Engine>) -> PolarAlignPanelState {
             stop_polar_alignment:    polar_align,
             pa_manual_refresh:       allow_refresh && !auto_refresh,
         },
+        slew_speed_list,
     }
 }
 
@@ -516,6 +677,8 @@ pub struct FocuserPanelState {
     pub bx_ctrl_btns_sensitive: bool,
     pub spb_exp_range:          Option<SpinRange>,
     pub actions:                FocuserActionsState,
+    // NOTE: cheap local HAL query; keep it here
+    pub focuser_list:           Vec<IdLabel>,
 }
 
 pub fn focuser_panel_state(engine: &Engine) -> FocuserPanelState {
@@ -544,6 +707,8 @@ pub fn focuser_panel_state(engine: &Engine) -> FocuserPanelState {
 
     let spb_exp_range = aux_exp_spin_range(engine.cur_devices.camera().as_deref());
 
+    let focuser_list = device_id_labels(engine, DeviceType::FOCUSER);
+
     FocuserPanelState {
         module_panel_visible:   device_enabled,
         grd_sensitive:          device_enabled,
@@ -554,6 +719,7 @@ pub fn focuser_panel_state(engine: &Engine) -> FocuserPanelState {
         cb_list_sensitive:      !focusing,
         bx_ctrl_btns_sensitive: !focusing,
         spb_exp_range,
+        focuser_list,
         actions: FocuserActionsState {
             manual_focus:      !focusing && can_change_mode,
             stop_manual_focus: focusing,
@@ -688,20 +854,38 @@ mod tests {
     #[test]
     fn panel_states_without_devices_are_inert() {
         let engine = Engine::new();
-        assert_eq!(camera_panel_state(&engine), CameraPanelState::default());
-        assert_eq!(flt_wheel_panel_state(&engine), FltWheelPanelState::default());
-        assert_eq!(mount_panel_state(&engine), MountPanelState::default());
+
+        let cam = camera_panel_state(&engine);
+        assert_eq!(cam, CameraPanelState::default());
+        assert!(cam.common.cam_list.is_empty());
+        assert!(cam.ctrl.heater_list.is_empty());
+        assert!(cam.ctrl.conv_gain_list.is_empty());
+        assert!(cam.frame.bin_list.is_empty());
+
+        let flt = flt_wheel_panel_state(&engine);
+        assert_eq!(flt, FltWheelPanelState::default());
+        assert!(flt.flt_wheel_list.is_empty());
+        assert!(flt.filters.is_empty());
+        assert_eq!(flt.active_filter, None);
+
+        let mount = mount_panel_state(&engine);
+        assert_eq!(mount, MountPanelState::default());
+        assert!(mount.mount_list.is_empty());
+        assert!(mount.slew_speed_list.is_empty());
+
         assert_eq!(plate_solve_panel_state(&engine), PlateSolvePanelState::default());
 
         let focuser = focuser_panel_state(&engine);
         assert!(!focuser.module_panel_visible);
         assert!(focuser.spb_exp_range.is_none());
+        assert!(focuser.focuser_list.is_empty());
 
         let guiding = guiding_panel_state(&engine);
         assert!(!guiding.module_panel_visible);
         assert!(!guiding.actions.start_dither_calibr);
 
         let polar = polar_align_panel_state(&engine);
+        assert!(polar.slew_speed_list.is_empty());
         assert!(!polar.actions.start_polar_alignment);
         assert!(!polar.actions.restart_polar_alignment);
         assert!(!polar.actions.stop_polar_alignment);

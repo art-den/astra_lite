@@ -483,16 +483,11 @@ impl FocuserUi {
     }
 
     fn update_devices_list(&self) {
-        let options = self.engine.options.read().unwrap();
-        let cur_focuser = options.focuser.device.clone();
-        drop(options);
-
-        let Ok(focusers) = self.engine.hal.devices(DeviceType::FOCUSER) else { return; };
-        let focusers_ids_and_names = focusers
-            .into_iter()
-            .map(|dev| (dev.id, dev.name))
-            .collect::<Vec<_>>();
-
+        let state = crate::api::ui_state::focuser_panel_state(&self.engine);
+        let cur_focuser = self.engine.options.read().unwrap().focuser.device.clone();
+        let focusers_ids_and_names: Vec<_> = state.focuser_list.iter()
+            .map(|i| (i.id.clone(), i.label.clone()))
+            .collect();
         fill_devices_list_into_combobox(
             &focusers_ids_and_names,
             &self.widgets.cb_list,
