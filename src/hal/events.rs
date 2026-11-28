@@ -2,6 +2,36 @@ use std::{collections::HashMap, sync::{Arc, RwLock, atomic::AtomicU64}};
 
 use crate::hal::{CameraShot, DeviceInfo, FocuserState, HalState, TelescopeState};
 
+/// `MaxADU` of an 8-bit output (the whole 8-bit code space)
+const BIT8_MAX_ADU: u32 = 255;
+
+/// Warning text for a shot delivered in 8-bit mode (useless for deep sky),
+/// empty when `max_adu` is fine or unknown (callers pass `u32::MAX` then)
+pub fn bit_depth_warning(max_adu: u32) -> String {
+    if max_adu <= BIT8_MAX_ADU {
+        format!(
+            "8-bit sampling mode detected (MaxADU = {max_adu}).\n\
+             Set 16-bit mode in the camera driver settings"
+        )
+    } else {
+        String::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bit_depth_warning_threshold() {
+        assert!(!bit_depth_warning(BIT8_MAX_ADU).is_empty());
+        assert!(!bit_depth_warning(0).is_empty());
+        assert!(bit_depth_warning(BIT8_MAX_ADU + 1).is_empty());
+        assert!(bit_depth_warning(u16::MAX as u32).is_empty());
+        assert!(bit_depth_warning(u32::MAX).is_empty());
+    }
+}
+
 #[derive(Clone)]
 pub enum HalEvent {
     // Common
@@ -19,6 +49,8 @@ pub enum HalEvent {
     CameraShotResult {
         device_id: Arc<String>,
         shot:      Arc<dyn CameraShot + Send + Sync>,
+        /// Empty string = no warning; see [`bit_depth_warning`]
+        warning: String,
     },
     /// The camera is about to start an exposure
     CameraBeforeShot(Arc<String/*device id*/>),

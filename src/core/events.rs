@@ -32,6 +32,9 @@ pub enum Event {
     OverlayMessage {
         pos:  OverlayMessagePos,
         text: Arc<String>,
+        /// Auto-clear delay in seconds; `None` = shown until replaced.
+        /// Only applied when `text` is non-empty
+        time_out: Option<usize>,
     },
     Guider(ExtGuiderEvent),
     FlatExposureCalculated(f64),

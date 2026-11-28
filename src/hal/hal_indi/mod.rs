@@ -391,6 +391,7 @@ impl IndiHalImpl {
         self.event_handlers.send(HalEvent::CameraShotResult{
             device_id: Arc::new(device_id),
             shot:      Arc::new(camera_shot),
+            warning:   String::new(),
         });
         Ok(())
     }

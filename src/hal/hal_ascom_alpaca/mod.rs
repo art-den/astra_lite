@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use itertools::izip;
 
 use crate::hal::*;
-use crate::hal::events::{HalEvent, HalEventHandlers};
+use crate::hal::events::{bit_depth_warning, HalEvent, HalEventHandlers};
 use crate::hal::poll_budget::PollBudget;
 use crate::image::io::save_raw_image_to_fits_file;
 use crate::image::raw::{CfaType, RawImage, RawImageInfo};
@@ -789,9 +789,15 @@ impl AscomAlpacaCamera {
             wall_start, eq_ra, eq_dec, focal_len,
         );
 
+        // The struct's `max_adu` is a stub (see `AscomAlpacaCamera::new`), so query
+        // the device directly; an unsupported/failed `MaxADU` means no warning
+        let warning = self.async_runtime.block_on(self.device.max_adu())
+            .map_or_else(|_| String::new(), bit_depth_warning);
+
         self.event_handlers.send(HalEvent::CameraShotResult{
             device_id: Arc::clone(&self.device_id),
             shot:      Arc::new(camera_shot),
+            warning,
         });
 
         Ok(())

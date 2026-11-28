@@ -43,7 +43,7 @@ use bitflags::bitflags;
 use chrono::{DateTime, Utc};
 
 use crate::hal::events::HalEventHandlers;
-use crate::hal::events::HalEvent;
+use crate::hal::events::{bit_depth_warning, HalEvent};
 use crate::hal::poll_budget::PollBudget;
 use crate::hal::*;
 use crate::image::io::save_raw_image_to_fits_file;
@@ -1158,9 +1158,14 @@ impl AscomCamera {
 
         *self.exp_data.lock().unwrap() = None;
 
+        // `max_value` comes from `MaxADU` read while connected (activation), so it
+        // is reliable here (unlike a disconnected read, e.g. ToupTek reports 255)
+        let warning = bit_depth_warning(u32::from(st.max_value));
+
         self.ctx.event_handlers.send(HalEvent::CameraShotResult {
             device_id: Arc::clone(&self.device_id),
             shot:      Arc::new(shot),
+            warning,
         });
 
         Ok(())

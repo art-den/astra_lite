@@ -48,6 +48,7 @@ pub fn init_ui(
         size_adj_pair:         Cell::new(None),
         image_size:            Cell::new((0, 0)),
         options_refresh_pending: Cell::new(false),
+        overlay_clear_at:      Cell::new(None),
     });
 
     obj.init_widgets();
@@ -360,6 +361,9 @@ struct PreviewUi {
     image_size:         Cell<(usize, usize)>,
     // Preview display refresh coalesced into the 250 ms timer (slider drags)
     options_refresh_pending: Cell<bool>,
+    // Moment to auto-clear the top overlay message (set by `Event::OverlayMessage`
+    // with `time_out`), checked in the 250 ms timer
+    overlay_clear_at: Cell<Option<std::time::Instant>>,
 }
 
 impl Drop for PreviewUi {
@@ -422,6 +426,13 @@ impl UiModule for PreviewUi {
     }
 
     fn on_250ms_timer(&self) {
+        if let Some(deadline) = self.overlay_clear_at.get()
+            && std::time::Instant::now() >= deadline
+        {
+            self.overlay_clear_at.set(None);
+            self.show_overlay_message(&OverlayMessagePos::Top, "", None);
+        }
+
         if !self.options_refresh_pending.replace(false) { return; }
         self.update_preview(None);
         self.repaint_histogram();
@@ -468,8 +479,8 @@ impl UiModule for PreviewUi {
             Event::ModeContinued => {
                 self.correct_preview_source();
             }
-            Event::OverlayMessage { pos, text } => {
-                self.show_overlay_message(pos, text);
+            Event::OverlayMessage { pos, text, time_out } => {
+                self.show_overlay_message(pos, text, *time_out);
             }
             Event::PreviewOptionsChanged => {
                 // Heavy redraw: coalesced into on_250ms_timer
@@ -834,10 +845,17 @@ impl PreviewUi {
         }
     }
 
-    fn show_overlay_message(&self, pos: &OverlayMessagePos, text: &str) {
+    fn show_overlay_message(&self, pos: &OverlayMessagePos, text: &str, time_out: Option<usize>) {
         match pos {
             OverlayMessagePos::Top => {
                 self.widgets.image.l_overlay_top.set_text(text);
+                self.overlay_clear_at.set(match time_out {
+                    Some(secs) if !text.is_empty() => Some(
+                        std::time::Instant::now()
+                        + std::time::Duration::from_secs(secs as u64)
+                    ),
+                    _ => None,
+                });
             }
         }
     }

@@ -22,6 +22,9 @@ use super::{
     mode_waiting::*
 };
 
+/// How long a camera shot warning stays as an overlay message
+const SHOT_WARNING_TIMEOUT_SECS: usize = 30;
+
 #[derive(PartialEq, Copy, Clone, Debug)]
 pub enum ModeKind {
     Waiting,
@@ -118,6 +121,9 @@ pub struct Engine {
     cmd_thread:         Mutex<Option<JoinHandle<()>>>,
     /// Set on `stop`/`drop`: stops the command worker and rejects new commands
     cmd_closing:        AtomicBool,
+    /// A camera shot warning overlay is currently shown; the next clean shot
+    /// clears it (see `hal_event_handler`)
+    shot_warning_shown: AtomicBool,
 }
 
 impl Drop for Engine {
@@ -176,6 +182,7 @@ impl Engine {
             cmd_tx,
             cmd_thread: Mutex::new(None),
             cmd_closing: AtomicBool::new(false),
+            shot_warning_shown: AtomicBool::new(false),
         });
 
         // The worker needs an engine handle, so it can only start after `Arc` exists
@@ -303,7 +310,24 @@ impl Engine {
             HalEvent::Error(err) => {
                 self.process_error_str(&err.as_str(), "HAL error");
             }
-            HalEvent::CameraShotResult { device_id, shot } => {
+            HalEvent::CameraShotResult { device_id, shot, warning } => {
+                if !warning.is_empty() {
+                    log::warn!("Camera shot warning ({device_id}): {warning}");
+                    self.events.send(Event::OverlayMessage {
+                        pos:      OverlayMessagePos::Top,
+                        text:     Arc::new(warning.clone()),
+                        time_out: Some(SHOT_WARNING_TIMEOUT_SECS),
+                    });
+                    self.shot_warning_shown.store(true, std::sync::atomic::Ordering::SeqCst);
+                } else if self.shot_warning_shown.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                    // The warning was shown, but this shot is clean: remove the
+                    // overlay right away instead of waiting for its time-out
+                    self.events.send(Event::OverlayMessage {
+                        pos:      OverlayMessagePos::Top,
+                        text:     Arc::new(String::new()),
+                        time_out: None,
+                    });
+                }
                 let result = self.process_camera_shot_result(device_id, shot);
                 self.process_error(result, "process_camera_shot_result");
             }
