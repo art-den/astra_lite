@@ -246,8 +246,38 @@ fn compute_calibr_label(engine: &Engine, camera: &Arc<dyn Camera + Send + Sync>)
 }
 
 pub fn camera_panel_state(engine: &Engine) -> CameraPanelState {
+    // Device selection must work without a connected camera, so mode + cam_list
+    // are computed before the camera lookup
+    let modes = engine.modes();
+    let mode_kind = modes.active.kind();
+    let waiting = mode_kind == ModeKind::Waiting;
+    let single_shot = mode_kind == ModeKind::SingleShot;
+    let liveview_active = mode_kind == ModeKind::LiveView;
+    let saving_frames = mode_kind == ModeKind::SavingRawFrames;
+    let saving_frames_paused = modes.aborted
+        .as_ref()
+        .map(|mode| mode.kind() == ModeKind::SavingRawFrames)
+        .unwrap_or(false);
+    let live_active = mode_kind == ModeKind::LiveStacking;
+    let livestacking_paused = modes.aborted
+        .as_ref()
+        .map(|mode| mode.kind() == ModeKind::LiveStacking)
+        .unwrap_or(false);
+    drop(modes);
+
+    let cam_list = device_id_labels(engine, DeviceType::CAMERA);
+
     let Some(camera) = engine.cur_devices.camera() else {
-        return CameraPanelState::default();
+        // Only device selection stays usable; picking a camera starts its connection
+        return CameraPanelState {
+            common: CamCommonState {
+                l_cam_list_sensitive:  waiting,
+                cb_cam_list_sensitive: waiting,
+                cam_list,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
     };
 
     // Exposure
@@ -299,8 +329,6 @@ pub fn camera_panel_state(engine: &Engine) -> CameraPanelState {
         )
     };
 
-    let cam_list = device_id_labels(engine, DeviceType::CAMERA);
-
     // Bin list
     let bin_list = {
         let mut list = Vec::new();
@@ -340,23 +368,6 @@ pub fn camera_panel_state(engine: &Engine) -> CameraPanelState {
     } else {
         Vec::new()
     };
-
-    let modes = engine.modes();
-    let mode_kind = modes.active.kind();
-    let waiting = mode_kind == ModeKind::Waiting;
-    let single_shot = mode_kind == ModeKind::SingleShot;
-    let liveview_active = mode_kind == ModeKind::LiveView;
-    let saving_frames = mode_kind == ModeKind::SavingRawFrames;
-    let saving_frames_paused = modes.aborted
-        .as_ref()
-        .map(|mode| mode.kind() == ModeKind::SavingRawFrames)
-        .unwrap_or(false);
-    let live_active = mode_kind == ModeKind::LiveStacking;
-    let livestacking_paused = modes.aborted
-        .as_ref()
-        .map(|mode| mode.kind() == ModeKind::LiveStacking)
-        .unwrap_or(false);
-    drop(modes);
 
     let frame_mode_is_lights = frame_mode == FrameType::Lights;
     let frame_mode_is_flat = frame_mode == FrameType::Flats;
@@ -882,8 +893,20 @@ mod tests {
         let engine = Engine::new();
 
         let cam = camera_panel_state(&engine);
-        assert_eq!(cam, CameraPanelState::default());
-        assert!(cam.common.cam_list.is_empty());
+        // Device selection stays usable without a connected camera (mode Waiting)
+        assert!(cam.common.cb_cam_list_sensitive);
+        assert!(cam.common.l_cam_list_sensitive);
+        assert!(!cam.common.bx_take_shot_sensitive);
+        assert!(!cam.module_panel_visible);
+        assert_eq!(cam.ctrl, CamCtrlState::default());
+        assert_eq!(cam.frame, CamFrameState::default());
+        assert_eq!(cam.calibr, CamCalibrState::default());
+        assert_eq!(cam.raw, CamRawState::default());
+        assert_eq!(cam.live_st, CamLiveStState::default());
+        assert_eq!(cam.quality, CamQualityState::default());
+        assert_eq!(cam.actions, CamActionsState::default());
+        // NOTE: cam_list is a live HAL query: on Windows it lists registered
+        // ASCOM drivers even without any connection, so no emptiness assert here
         assert!(cam.ctrl.heater_list.is_empty());
         assert!(cam.ctrl.conv_gain_list.is_empty());
         assert!(cam.frame.bin_list.is_empty());
