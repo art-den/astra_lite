@@ -886,7 +886,10 @@ pub fn preview_panel_state(engine: &Engine) -> PreviewPanelState {
 mod tests {
     use super::*;
 
-    // `Engine::new()` needs no hardware (HAL falls back to empty drivers).
+    // `Engine::new()` needs no hardware.
+    // NOTE: device-enumeration lists (cam_list, flt_wheel_list, mount_list,
+    // focuser_list) are environment-dependent: on Windows they list registered
+    // ASCOM drivers even without any connection, so they are excluded below.
 
     #[test]
     fn panel_states_without_devices_are_inert() {
@@ -905,29 +908,27 @@ mod tests {
         assert_eq!(cam.live_st, CamLiveStState::default());
         assert_eq!(cam.quality, CamQualityState::default());
         assert_eq!(cam.actions, CamActionsState::default());
-        // NOTE: cam_list is a live HAL query: on Windows it lists registered
-        // ASCOM drivers even without any connection, so no emptiness assert here
         assert!(cam.ctrl.heater_list.is_empty());
         assert!(cam.ctrl.conv_gain_list.is_empty());
         assert!(cam.frame.bin_list.is_empty());
 
         let flt = flt_wheel_panel_state(&engine);
-        assert_eq!(flt, FltWheelPanelState::default());
-        assert!(flt.flt_wheel_list.is_empty());
-        assert!(flt.filters.is_empty());
-        assert_eq!(flt.active_filter, None);
+        assert_eq!(
+            FltWheelPanelState { flt_wheel_list: Vec::new(), ..flt },
+            FltWheelPanelState::default()
+        );
 
         let mount = mount_panel_state(&engine);
-        assert_eq!(mount, MountPanelState::default());
-        assert!(mount.mount_list.is_empty());
-        assert!(mount.slew_speed_list.is_empty());
+        assert_eq!(
+            MountPanelState { mount_list: Vec::new(), ..mount },
+            MountPanelState::default()
+        );
 
         assert_eq!(plate_solve_panel_state(&engine), PlateSolvePanelState::default());
 
         let focuser = focuser_panel_state(&engine);
         assert!(!focuser.module_panel_visible);
         assert!(focuser.spb_exp_range.is_none());
-        assert!(focuser.focuser_list.is_empty());
 
         let guiding = guiding_panel_state(&engine);
         assert!(!guiding.module_panel_visible);
