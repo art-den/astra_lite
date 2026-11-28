@@ -28,6 +28,7 @@ pub fn init_ui(
         &css_provider,
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
+    init_overlay_shadow_css();
 
     let builder = gtk::Builder::from_string(include_str!(r"resources/main.ui"));
     let widgets = Widgets::from_builder(&builder);
@@ -160,10 +161,35 @@ const CSS: &[u8] = b"
 .bold {
     font-weight: bold;
 }
+
 flowbox flowboxchild {
    padding: 0;
 }
 ";
+
+// Undocumented GTK3 feature: the blur radius in `text-shadow` is actually
+// parsed and painted since 3.6.1 (commit 59eb3ef3). Older builds get the
+// plain offset shadow (the 2-length form is parseable since 3.2).
+// A separate provider is used because on any parse error GTK clears the
+// whole provider, so this must not share one with the main CSS.
+fn init_overlay_shadow_css() {
+    const SHADOW_BLUR: &[u8] = b"#l_overlay_top, #l_overlay_bottom { text-shadow: 0 0 3px rgb(0, 0, 0); }";
+    const SHADOW_OFFSET: &[u8] = b"#l_overlay_top, #l_overlay_bottom { text-shadow: 1px 1px rgb(0, 0, 0); }";
+
+    // `check_version` returns None when the runtime GTK is new enough
+    let css = if gtk::check_version(3, 8, 0).is_none() { SHADOW_BLUR } else { SHADOW_OFFSET };
+
+    let provider = gtk::CssProvider::new();
+    if let Err(e) = provider.load_from_data(css) {
+        log::warn!("Overlay text-shadow CSS rejected by this GTK build: {e}");
+        return;
+    }
+    gtk::StyleContext::add_provider_for_screen(
+        &gtk::gdk::Screen::default().expect("Could not connect to a display."),
+        &provider,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
+}
 
 #[derive(Serialize, Deserialize, Debug, Default, PartialEq)]
 enum Theme {

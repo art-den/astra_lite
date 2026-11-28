@@ -627,6 +627,7 @@ Useful when the object is not large and is in the center of the image.</property
                   <object class="GtkLabel" id="l_overlay_top">
                     <property name="visible">True</property>
                     <property name="can-focus">False</property>
+                    <property name="name">l_overlay_top</property>
                     <property name="halign">center</property>
                     <property name="margin-top">10</property>
                     <property name="label" translatable="yes">label</property>
@@ -645,6 +646,7 @@ Useful when the object is not large and is in the center of the image.</property
                   <object class="GtkLabel" id="l_overlay_bottom">
                     <property name="visible">True</property>
                     <property name="can-focus">False</property>
+                    <property name="name">l_overlay_bottom</property>
                     <property name="halign">center</property>
                     <property name="margin-bottom">10</property>
                     <property name="label" translatable="yes">label</property>
