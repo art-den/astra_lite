@@ -79,6 +79,9 @@ sudo apt install phd2
 ```
 
 ### Plate solving data
+
+#### For Linux
+
 Plate solving needs astrometry.net index files and one of two solvers:
 `solve-field` of a local Astrometry.net install or `starsolver`, a small and fast solver
 built together with AstraLite. Without index files plate solving does not work.
@@ -87,17 +90,23 @@ built together with AstraLite. Without index files plate solving does not work.
 ```
 sudo apt install astrometry.net
 sudo apt install astrometry-data-2mass-08-19 astrometry-data-2mass-07 astrometry-data-2mass-06
-sudo apt install astrometry-data-2mass-05 astrometry-data-2mass-04
 ```
 The `astrometry-data-2mass-*` packages download the 2MASS index files while being installed.
+`astrometry-data-2mass-06` is the narrowest of them: it is needed for fields of view
+from about 0.5 degree. For a narrower field of view (a long telescope) also install
+`astrometry-data-2mass-05` (from about 0.3 degree) or `astrometry-data-2mass-04`
+(from about 0.2 degree).
 
-`starsolver` solves a typical field in well under a second and needs little memory.
-To use it, place the `starsolver` binary next to the AstraLite binary and put the index
-files into the `index_files` directory next to it. When there is no `index_files` directory,
-the indexes of an Astrometry.net installed on the system are used.
+#### For Windows
 
-Index files can also be downloaded from https://data.astrometry.net/4100/
-(the Tycho-2 index set, about 350 MB)
+Download index files from https://data.astrometry.net/4100/ and put them into the
+`index_files` folder inside the AstraLite folder (create the folder if it does not
+exist).
+
+These files are for fields of view wider than about 1 degree. For a narrower field
+of view download the files from https://data.astrometry.net/4200/ instead: the
+larger the number after `index-` in a file name (`index-4207`, `index-4208`, ...),
+the wider the field of view; the second number in the name is just a sky region.
 
 ## Screenshots
 [![Main tab](./docs/screenshot1_small.jpg)](./docs/screenshot1.jpg?raw=true)
@@ -139,14 +148,6 @@ cargo build --release
 ```
 The binaries are placed in `target/release`: `astra_lite` (the app) and `starsolver`
 (the plate solver the app can use, see *Plate solving data* above).
-
-## Tests
-Unit tests do not need any hardware:
-```
-cargo test --lib -p astra_lite
-```
-Integration tests in `tests/` drive the whole device stack through a local `indiserver`
-with simulator drivers (Linux) or ASCOM drivers (Windows). They are slow and serialized.
 
 ## Building and creating deb-packages for arm64, armhf and x86_64 platforms
 ### Prerequisites
